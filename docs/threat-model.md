@@ -69,7 +69,8 @@ A pull request that adds any feature in point 2 will be declined, and this secti
 
 - How loopback targets on the host are reached from inside a container without giving the container general host-network access (M2). Candidate: run the app under test inside a SiegeKit-managed container, or expose only the target port through the egress proxy.
 - Default request-rate cap for deployed mode, set from measurements on test fixtures (M2).
-- Output directory size cap and behavior when exceeded (M1).
+- ~~Output directory size cap and behavior when exceeded (M1).~~ Resolved in M1.3: 512 MiB default per plugin; exceeding it marks the plugin as failed, so the run is reported incomplete.
+- Rootless Podman and rootless Docker map container users to sub-UIDs, so the output directory may not be writable with `--user <host uid>`. Needs `--userns=keep-id` (Podman) or equivalent, tested on each engine (M1.5).
 - GPU pass-through isolation guarantees per engine (M3).
 
 ## Residual risks accepted

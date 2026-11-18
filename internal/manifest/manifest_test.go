@@ -122,6 +122,10 @@ func TestRejections(t *testing.T) {
 			a := m["tool"].(map[string]any)["artifacts"].([]any)[0].(map[string]any)
 			a["sha256"] = strings.Repeat("A", 64)
 		},
+		"image digest differs from sha256": func(m map[string]any) {
+			a := m["tool"].(map[string]any)["artifacts"].([]any)[0].(map[string]any)
+			a["sha256"] = strings.Repeat("1", 64)
+		},
 		"unknown nested field": func(m map[string]any) {
 			m["run"].(map[string]any)["shell"] = "/bin/sh"
 		},
