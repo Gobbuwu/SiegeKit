@@ -17,8 +17,13 @@
 ## Commits
 
 - Small, focused commits with a clear message.
+- Every commit carries a `Signed-off-by:` line (`git commit -s`), certifying the [Developer Certificate of Origin 1.1](https://developercertificate.org/): that you wrote the change or otherwise have the right to submit it under the project's license. A CI check will enforce this from M1.
 - Sign your commits (SSH or GPG) once branch protection requires it.
+
+## Features the project will not accept
+
+Mass scanning, denial-of-service, detection evasion, post-exploitation and online password guessing. See the [acceptable use policy](ACCEPTABLE_USE.md) and the [threat model](docs/threat-model.md).
 
 ## Code of conduct
 
-Be respectful and constructive. A formal code of conduct will be adopted before the first public release.
+Everyone in project spaces follows the [Code of Conduct](CODE_OF_CONDUCT.md).
