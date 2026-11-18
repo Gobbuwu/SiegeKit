@@ -1,6 +1,6 @@
 # 0008. Supply chain of SiegeKit and its tools
 
-- Status: Proposed
+- Status: Accepted
 - Date: 2026-11-18
 
 ## Context

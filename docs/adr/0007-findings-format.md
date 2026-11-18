@@ -1,6 +1,6 @@
 # 0007. Findings format and storage
 
-- Status: Proposed
+- Status: Accepted
 - Date: 2026-11-18
 
 ## Context

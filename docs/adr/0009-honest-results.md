@@ -1,6 +1,6 @@
 # 0009. Honest results: coverage, not a "secure" verdict
 
-- Status: Proposed
+- Status: Accepted
 - Date: 2026-11-18
 
 ## Context

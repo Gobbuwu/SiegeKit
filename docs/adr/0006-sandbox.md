@@ -1,6 +1,6 @@
 # 0006. Sandbox and network egress control
 
-- Status: Proposed
+- Status: Accepted
 - Date: 2026-11-18
 
 ## Context

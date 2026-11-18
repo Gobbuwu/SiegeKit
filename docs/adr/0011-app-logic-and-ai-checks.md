@@ -1,6 +1,6 @@
 # 0011. Access-control, backend-rules and AI-feature checks
 
-- Status: Proposed
+- Status: Accepted
 - Date: 2026-11-18
 
 ## Context

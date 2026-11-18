@@ -1,6 +1,6 @@
 # 0002. Implementation language and platforms
 
-- Status: Proposed
+- Status: Accepted
 - Date: 2026-11-18
 
 ## Context
