@@ -49,6 +49,7 @@
 | T15 | B1/B3 | Elevation (misuse) | Someone removes or bypasses the ownership check to attack hosts they do not own. | See "Misuse by a determined attacker" below: the check stops accidents and casual misuse, not a determined attacker; SiegeKit adds no attack capability beyond the public tools it wraps. | 0005 |
 | T16 | B3 | Elevation | A deployed target's name resolves to an internal or cloud-metadata address, turning SiegeKit into a path into the user's internal network. | Deployed mode refuses names resolving to loopback, private or link-local addresses; egress proxy always blocks link-local and metadata ranges. | 0005, 0006 |
 | T17 | Report | Information (false assurance) | A user reads a clean report as "safe to deploy" and ships an app with flaws scanners cannot detect. | No "secure"/"passed" wording; coverage summary and "not tested" section in every report; separate exit code for incomplete runs; pre-deploy checklist. | 0009 |
+| T18 | B3/B4 | Information disclosure / Tampering | Access-control replays or the live backend-rules check copy real user data into reports, or change data by replaying state-changing requests. | Response bodies truncated and personal data masked in reports; backend check is read-only; state-changing replays are `destructive` and off in deployed mode by default. | 0011, 0005 |
 
 ## Misuse by a determined attacker
 

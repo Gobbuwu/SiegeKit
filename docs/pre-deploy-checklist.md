@@ -17,6 +17,12 @@ For a complete, structured list of requirements, see the [OWASP Application Secu
 - [ ] Changing an ID in a URL or request body cannot reveal or modify another user's data.
 - [ ] Admin functions are unreachable for normal users, not just hidden in the UI.
 
+## 2b. Hosted backends and AI features
+
+- [ ] Supabase tables have row-level security enabled with policies; Firebase/Firestore rules deny access by default.
+- [ ] Only public client keys are in front-end code; service-role and AI provider keys stay on the server.
+- [ ] Model output is treated as untrusted input; the model cannot trigger actions the signed-in user is not allowed to do.
+
 ## 3. Authentication and sessions
 
 - [ ] Passwords are hashed with a slow, salted algorithm (for example Argon2id or bcrypt), never stored or logged in plain text.

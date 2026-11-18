@@ -25,6 +25,7 @@ Only test systems you own or have written permission to test. Testing systems wi
 - [Architecture decision records](docs/adr/)
 - [Threat model](docs/threat-model.md)
 - [What SiegeKit checks](docs/coverage.md)
+- [Standards mapping (OWASP, CWE)](docs/standards-mapping.md)
 - [Pre-deploy checklist](docs/pre-deploy-checklist.md)
 - [Third-party tools and licenses](THIRD_PARTY.md)
 - [Security policy](SECURITY.md)

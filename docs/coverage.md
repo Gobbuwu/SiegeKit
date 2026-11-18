@@ -1,6 +1,6 @@
 # What SiegeKit checks
 
-Each row is a common security concern, the plugins planned to check it, and the milestone that delivers it. "Manual" rows are not automated; see the [pre-deploy checklist](pre-deploy-checklist.md). Tools are listed in [THIRD_PARTY.md](../THIRD_PARTY.md).
+Each row is a common security concern, the plugins planned to check it, and the milestone that delivers it. "Manual" rows are not automated; see the [pre-deploy checklist](pre-deploy-checklist.md). Tools are listed in [THIRD_PARTY.md](../THIRD_PARTY.md). For coverage against the OWASP and CWE lists, see [standards mapping](standards-mapping.md).
 
 | Concern | Checked by | Milestone |
 | --- | --- | --- |
@@ -21,7 +21,15 @@ Each row is a common security concern, the plugins planned to check it, and the 
 | Misconfigured Dockerfiles, Kubernetes, Terraform | Checkov, Trivy, Hadolint (optional) | M1 |
 | Crashes and memory bugs on malformed input | Go fuzzing, Atheris, cargo-fuzz, AFL++ (optional) | M3 |
 | Weak password hashes in data you supply | hashcat (GPU), John the Ripper (CPU), offline only | M3 |
-| One user reading or changing another user's data | Manual | n/a |
+| One user reading or changing another user's data (IDOR/BOLA), admin functions open to normal users | Authorization differential test with two test accounts; partial, heuristic | M2 ([ADR 0011](adr/0011-app-logic-and-ai-checks.md)) |
+| API routes with no login required | Unauthenticated request to every discovered route | M2 (ADR 0011) |
+| Supabase tables without row-level security, open Firebase rules | Static rules (M1); read-only live check with the app's public key (M2) | M1, M2 (ADR 0011) |
+| Missing rate limits on expensive or AI endpoints | Capped rate-limit check | M2 (ADR 0011) |
+| CORS misconfiguration, open redirects, CSRF, file-upload flaws, path traversal, SSRF | ZAP, Nuclei, Semgrep | M1 code, M2 running app |
+| AI provider keys (OpenAI, Anthropic and others) in code or bundles | Gitleaks | M1, M2 |
+| AI model output reaching eval, shell, SQL or HTML unescaped | Static rules | M3 (ADR 0011) |
+| Prompt injection and system-prompt leakage in the app's AI features | garak or promptfoo, optional | M3 (ADR 0011) |
+| Mass assignment, excessive AI agency, logging gaps | Manual | n/a |
 | Business-logic flaws (skipping steps, price tampering) | Manual | n/a |
 | Cloud account settings (buckets, IAM, firewalls) | Manual (not in scope for 1.0) | n/a |
 | Password guessing against live logins | Not provided, by design | n/a |

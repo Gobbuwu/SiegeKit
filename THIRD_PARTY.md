@@ -28,6 +28,8 @@ Versions are the latest published versions checked on 2026-11-18 and are **not y
 | [Atheris](https://github.com/google/atheris) | Python fuzzing | 3.1.0 | Apache-2.0 | Planned (M3) |
 | [cargo-fuzz](https://github.com/rust-fuzz/cargo-fuzz) | Rust fuzzing | 0.13.2 | not checked | Planned (M3) |
 | [AFL++](https://github.com/AFLplusplus/AFLplusplus) | Native fuzzing | not checked | AGPL-3.0-or-later (afl-fuzz) | Optional (M3) |
+| [garak](https://github.com/NVIDIA/garak) | LLM prompt-injection probing | 0.17.1 | Apache-2.0 | Optional (M3) |
+| [promptfoo](https://github.com/promptfoo/promptfoo) | LLM prompt-injection probing | 0.126.0 | MIT | Optional (M3) |
 | [hashcat](https://github.com/hashcat/hashcat) | Hash strength audit, GPU | 8.0.0 | MIT | Optional (M3) |
 | [John the Ripper](https://github.com/openwall/john) | Hash strength audit, CPU | not checked | Mixed, per file | Optional (M3) |
 | [Nmap](https://github.com/nmap/nmap) | Port and service discovery | not checked | Nmap Public Source License (not OSI-approved) | Not bundled; used only if the user installed it |
