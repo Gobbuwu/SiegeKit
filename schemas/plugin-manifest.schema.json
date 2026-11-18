@@ -1,0 +1,339 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/Gobbuwu/SiegeKit/schemas/plugin-manifest.schema.json",
+  "title": "SiegeKit plugin manifest",
+  "description": "Declarative description of one SiegeKit plugin. See docs/adr/0004-plugin-manifest.md.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "id",
+    "name",
+    "version",
+    "family",
+    "mode",
+    "destructive",
+    "targets",
+    "tool",
+    "resources",
+    "network",
+    "run",
+    "output"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "const": 1
+    },
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9-]{1,39}$"
+    },
+    "name": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 80
+    },
+    "version": {
+      "type": "string",
+      "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+    },
+    "description": {
+      "type": "string",
+      "maxLength": 500
+    },
+    "family": {
+      "enum": [
+        "sast",
+        "sca",
+        "secrets",
+        "iac",
+        "dast",
+        "fuzz",
+        "credential-audit"
+      ]
+    },
+    "mode": {
+      "enum": [
+        "passive",
+        "active",
+        "offline"
+      ]
+    },
+    "destructive": {
+      "type": "boolean"
+    },
+    "targets": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "enum": [
+          "repo",
+          "url",
+          "openapi",
+          "image",
+          "binary",
+          "hashfile"
+        ]
+      }
+    },
+    "tool": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "version",
+        "license",
+        "homepage",
+        "artifacts"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "version": {
+          "type": "string",
+          "minLength": 1
+        },
+        "license": {
+          "type": "string",
+          "description": "SPDX license expression, or LicenseRef-* for non-SPDX terms."
+        },
+        "homepage": {
+          "type": "string",
+          "pattern": "^https://"
+        },
+        "artifacts": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "platform",
+              "kind",
+              "ref",
+              "sha256"
+            ],
+            "properties": {
+              "platform": {
+                "enum": [
+                  "linux/amd64",
+                  "linux/arm64",
+                  "darwin/amd64",
+                  "darwin/arm64",
+                  "any"
+                ]
+              },
+              "kind": {
+                "enum": [
+                  "oci-image",
+                  "archive",
+                  "binary"
+                ]
+              },
+              "ref": {
+                "type": "string",
+                "description": "For oci-image: an image reference pinned by digest. For archive and binary: an HTTPS download URL."
+              },
+              "sha256": {
+                "type": "string",
+                "pattern": "^[a-f0-9]{64}$"
+              }
+            },
+            "allOf": [
+              {
+                "if": {
+                  "properties": {
+                    "kind": {
+                      "const": "oci-image"
+                    }
+                  }
+                },
+                "then": {
+                  "properties": {
+                    "ref": {
+                      "pattern": "^[a-z0-9.-]+(:[0-9]+)?/[^@\\s]+@sha256:[a-f0-9]{64}$"
+                    }
+                  }
+                }
+              },
+              {
+                "if": {
+                  "properties": {
+                    "kind": {
+                      "enum": [
+                        "archive",
+                        "binary"
+                      ]
+                    }
+                  }
+                },
+                "then": {
+                  "properties": {
+                    "ref": {
+                      "pattern": "^https://[^\\s]+$"
+                    }
+                  }
+                }
+              }
+            ]
+          }
+        }
+      }
+    },
+    "resources": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "cpus",
+        "memoryMiB",
+        "gpu",
+        "timeoutSeconds",
+        "maxTimeoutSeconds"
+      ],
+      "properties": {
+        "cpus": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 256
+        },
+        "memoryMiB": {
+          "type": "integer",
+          "minimum": 64,
+          "maximum": 262144
+        },
+        "gpu": {
+          "enum": [
+            "none",
+            "optional",
+            "required"
+          ]
+        },
+        "timeoutSeconds": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "maxTimeoutSeconds": {
+          "type": "integer",
+          "minimum": 1
+        }
+      },
+      "description": "timeoutSeconds must not exceed maxTimeoutSeconds; JSON Schema cannot compare two fields, so the manifest loader enforces this (M1)."
+    },
+    "network": {
+      "enum": [
+        "none",
+        "target-only"
+      ]
+    },
+    "run": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "args"
+      ],
+      "properties": {
+        "args": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "pattern": "^([^{}]|\\{(target|outdir|workdir|threads|ratelimit)\\})*$"
+          },
+          "description": "Argument vector passed directly to the tool, never through a shell. Only the listed placeholders are allowed."
+        }
+      }
+    },
+    "output": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "format",
+        "parser"
+      ],
+      "properties": {
+        "format": {
+          "enum": [
+            "sarif",
+            "json",
+            "jsonl",
+            "xml",
+            "text"
+          ]
+        },
+        "parser": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]{1,39}$"
+        }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "mode": {
+            "const": "passive"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "network": {
+            "const": "none"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "mode": {
+            "const": "offline"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "network": {
+            "const": "none"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "network": {
+            "const": "target-only"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "mode": {
+            "const": "active"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "destructive": {
+            "const": true
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "mode": {
+            "const": "active"
+          }
+        }
+      }
+    }
+  ]
+}
