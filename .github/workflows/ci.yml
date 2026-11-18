@@ -41,9 +41,11 @@ jobs:
         run: go vet ./...
       - name: Test
         run: go test -race -count=1 -cover ./...
-      - name: Fuzz manifest parser
+      - name: Fuzz parsers
         if: runner.os == 'Linux'
-        run: go test -run='^$' -fuzz=FuzzParse -fuzztime=60s ./internal/manifest
+        run: |
+          go test -run='^$' -fuzz=FuzzParse -fuzztime=60s ./internal/manifest
+          go test -run='^$' -fuzz=FuzzSARIF -fuzztime=60s ./internal/sarif
       - name: Vulnerability check
         if: runner.os == 'Linux'
         run: go run golang.org/x/vuln/cmd/govulncheck@${GOVULNCHECK_VERSION} ./...
