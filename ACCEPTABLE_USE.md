@@ -18,6 +18,6 @@ This policy states how the SiegeKit project expects its software, documentation 
 
 ## What the project does about misuse
 
-- **Feature scope.** The project will not add mass scanning, denial-of-service, detection-evasion, post-exploitation or online password-guessing features ([threat model](docs/threat-model.md), "Misuse by a determined attacker"). Pull requests adding them will be closed.
+- **Feature scope.** The project will not add mass scanning, denial-of-service, detection-evasion, post-exploitation or live password-guessing features ([threat model](docs/threat-model.md), "Misuse by a determined attacker"). Pull requests adding them will be closed.
 - **Support and community.** The maintainers will not help with, and may remove from project spaces (issues, discussions, pull requests), any request or content that seeks to use SiegeKit against systems without authorization, under the [Code of Conduct](CODE_OF_CONDUCT.md).
 - **Reporting.** If you believe SiegeKit traffic is hitting your system without your permission, its requests carry a `User-Agent` containing `SiegeKit/<version>` that you can block. The project cannot see or control who runs the software.

@@ -13,6 +13,7 @@ Each significant design decision is recorded as a short ADR before code is writt
 | [0007](0007-findings-format.md) | Findings format and storage | Proposed |
 | [0008](0008-supply-chain.md) | Supply chain of SiegeKit and its tools | Proposed |
 | [0009](0009-honest-results.md) | Honest results: coverage, not a "secure" verdict | Proposed |
+| [0010](0010-login-checks.md) | Login protection and secret-exposure checks | Proposed |
 
 "Proposed" ADRs become "Accepted" when the M0 design review is signed off.
 

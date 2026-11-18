@@ -22,7 +22,7 @@
 
 ## Features the project will not accept
 
-Mass scanning, denial-of-service, detection evasion, post-exploitation and online password guessing. See the [acceptable use policy](ACCEPTABLE_USE.md) and the [threat model](docs/threat-model.md).
+Mass scanning, denial-of-service, detection evasion, post-exploitation and live password guessing. See the [acceptable use policy](ACCEPTABLE_USE.md) and the [threat model](docs/threat-model.md).
 
 ## Code of conduct
 

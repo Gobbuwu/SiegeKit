@@ -24,6 +24,7 @@ Only test systems you own or have written permission to test. Testing systems wi
 - [Roadmap](docs/roadmap.md)
 - [Architecture decision records](docs/adr/)
 - [Threat model](docs/threat-model.md)
+- [What SiegeKit checks](docs/coverage.md)
 - [Pre-deploy checklist](docs/pre-deploy-checklist.md)
 - [Third-party tools and licenses](THIRD_PARTY.md)
 - [Security policy](SECURITY.md)
