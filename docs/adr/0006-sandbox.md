@@ -17,7 +17,7 @@ Every plugin runs in its own short-lived container:
 - **Resources:** CPU, memory and process-count limits from the manifest; wall-clock timeout enforced by SiegeKit, which kills the container on expiry.
 - **Network:**
   - `network: none` plugins get no network interface at all.
-  - `network: target-only` plugins are attached to an internal network whose only route out is a SiegeKit egress proxy. The proxy allows only the target addresses approved under ADR 0005 and refuses everything else, including DNS to other names.
+  - `network: target-only` plugins are attached to an internal network whose only route out is a SiegeKit egress proxy. The proxy allows only the target addresses approved under ADR 0005 and refuses everything else, including DNS to other names and the always-blocked ranges in ADR 0005 (for example cloud metadata at `169.254.169.254`).
 - **GPU:** passed through only to plugins whose manifest declares `gpu: optional` or `required`, and only when the user enables GPU use.
 - **Untrusted code never runs on the host.** Building or executing the user's code for fuzzing happens inside the container.
 

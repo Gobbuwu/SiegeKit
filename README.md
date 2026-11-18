@@ -4,6 +4,10 @@ SiegeKit is a free, local, open-source tool that runs security tests against sof
 
 **Status:** design phase (milestone M0). There is no runnable code yet.
 
+## What a clean scan means
+
+A SiegeKit run with no findings means the automated checks that ran found nothing. It does not mean your app is secure: scanners miss access-control, business-logic and design flaws. Every report shows what was and was not tested; use the [pre-deploy checklist](docs/pre-deploy-checklist.md) for the rest.
+
 ## Principles
 
 - **Wrap proven tools, don't rewrite them.** SiegeKit orchestrates established open-source scanners and normalizes their results.
@@ -20,6 +24,7 @@ Only test systems you own or have written permission to test. Testing systems wi
 - [Roadmap](docs/roadmap.md)
 - [Architecture decision records](docs/adr/)
 - [Threat model](docs/threat-model.md)
+- [Pre-deploy checklist](docs/pre-deploy-checklist.md)
 - [Third-party tools and licenses](THIRD_PARTY.md)
 - [Security policy](SECURITY.md)
 - [Contributing](CONTRIBUTING.md)

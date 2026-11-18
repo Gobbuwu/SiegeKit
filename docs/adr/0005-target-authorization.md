@@ -13,6 +13,10 @@ Active tests (DAST, API fuzzing, injection simulation) send attack traffic. Send
 
 Run only on local paths (a repository, an image archive, a hash file) the user passes. No network access (enforced by ADR 0006).
 
+### Always blocked
+
+In every mode, the egress proxy refuses link-local addresses (`169.254.0.0/16`, `fe80::/10`, which include cloud metadata services such as `169.254.169.254`), unspecified and broadcast addresses (`0.0.0.0/8`, `255.255.255.255`, `::`), and multicast (`224.0.0.0/4`, `ff00::/8`).
+
 ### Local mode (default for active plugins)
 
 Allowed targets:
@@ -27,8 +31,8 @@ All plugin intensities are available, including destructive ones, after the run 
 
 For any target that is not covered by local mode:
 
-1. **Proof of control, every run.** SiegeKit generates a random token (128 bits, tied to the exact host name) and the user publishes it either at `https://<host>/.well-known/siegekit-verify.txt` or as a DNS TXT record at `_siegekit-verify.<host>`. SiegeKit checks it at the start of each run. A token for one host never authorizes another host, including subdomains.
-2. **Address pinning.** The host name is resolved once at verification time. The sandbox egress rules (ADR 0006) only allow those addresses for the rest of the run, which blocks DNS rebinding and tools that follow links to other hosts.
+1. **Proof of control, every run.** SiegeKit generates a random token (128 bits, tied to the exact host name) and the user publishes it either at `/.well-known/siegekit-verify.txt` on the target's own origin (same scheme, host and port as the target URL; redirects are not followed) or as a DNS TXT record at `_siegekit-verify.<host>`. SiegeKit checks it at the start of each run. A token for one host never authorizes another host, including subdomains.
+2. **Address pinning.** The host name is resolved once at verification time. If any resolved address is loopback, private or in an always-blocked range, the run is refused, so a public name cannot be used to reach internal systems. The sandbox egress rules (ADR 0006) only allow those addresses for the rest of the run, which blocks DNS rebinding and tools that follow links to other hosts.
 3. **Safe defaults.** Plugins with `destructive: true` are skipped unless the user names them with `--allow-destructive <plugin>` for that run. Request rate is capped (default to be set in M2 after measurement) and the run stops automatically after repeated server errors.
 4. **Typed confirmation** of the host name before the run, plus a reminder to check the hosting provider's penetration-testing policy and to prefer a staging copy.
 5. **No bypass.** There is no flag to skip verification in deployed mode.

@@ -9,7 +9,7 @@
 1. The user's machine: files, credentials, other processes.
 2. Third parties: hosts the user does not own must never receive attack traffic from SiegeKit.
 3. The user's target: in deployed mode, real data and real users.
-4. The integrity of results: a "no findings" report must not be forgeable by the target.
+4. The integrity of results: a "no findings" report must not be forgeable by the target, and must not be read as "secure".
 5. The confidentiality of findings: secrets and vulnerabilities found stay on the machine.
 6. SiegeKit's own release: users must be able to trust the binary they download.
 
@@ -47,6 +47,8 @@
 | T13 | B3 | Denial of service | Deployed-mode tests take down the user's production app. | Destructive plugins off by default, rate cap, automatic stop on repeated server errors, staging recommended. | 0005 |
 | T14 | All | Repudiation | No record of what was tested and when. | Append-only local audit log of active runs. | 0005 |
 | T15 | B1/B3 | Elevation (misuse) | Someone removes or bypasses the ownership check to attack hosts they do not own. | See "Misuse by a determined attacker" below: the check stops accidents and casual misuse, not a determined attacker; SiegeKit adds no attack capability beyond the public tools it wraps. | 0005 |
+| T16 | B3 | Elevation | A deployed target's name resolves to an internal or cloud-metadata address, turning SiegeKit into a path into the user's internal network. | Deployed mode refuses names resolving to loopback, private or link-local addresses; egress proxy always blocks link-local and metadata ranges. | 0005, 0006 |
+| T17 | Report | Information (false assurance) | A user reads a clean report as "safe to deploy" and ships an app with flaws scanners cannot detect. | No "secure"/"passed" wording; coverage summary and "not tested" section in every report; separate exit code for incomplete runs; pre-deploy checklist. | 0009 |
 
 ## Misuse by a determined attacker
 
