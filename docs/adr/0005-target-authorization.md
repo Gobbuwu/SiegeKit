@@ -37,6 +37,12 @@ For any target that is not covered by local mode:
 
 An append-only local audit log records the time, target, resolved addresses, mode, verification method and plugins of every active run.
 
+Every HTTP request sent by a plugin carries a `User-Agent` containing `SiegeKit/<version>` where the wrapped tool allows setting it, with no option to remove it, so target owners and defenders can identify the traffic.
+
+### Limits of this control
+
+SiegeKit is open source, so a fork can remove these checks. They prevent accidents and casual misuse by unmodified copies, not a determined attacker. The defense against a modified copy is that SiegeKit adds no capability beyond the public tools it wraps and deliberately omits mass scanning, denial of service, detection evasion and post-exploitation (see the threat model, "Misuse by a determined attacker").
+
 ## Consequences
 
 - Users testing their own deployed app need a one-time setup step (token file or DNS record) per host.

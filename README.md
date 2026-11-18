@@ -11,6 +11,10 @@ SiegeKit is a free, local, open-source tool that runs security tests against sof
 - **Sandboxed.** Every tool runs in its own container with limited access.
 - **Local and private.** No account, no subscription, no telemetry.
 
+## Authorized use only
+
+Only test systems you own or have written permission to test. Testing systems without permission may be illegal where you live. SiegeKit checks ownership before active tests against deployed hosts, labels its traffic, and leaves out mass-scanning, denial-of-service and evasion features on purpose.
+
 ## Documentation
 
 - [Roadmap](docs/roadmap.md)

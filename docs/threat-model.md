@@ -46,6 +46,21 @@
 | T12 | B6 | Spoofing | A fake "SiegeKit" binary is distributed. | Signed releases with provenance; verification instructions in the README. | 0008 |
 | T13 | B3 | Denial of service | Deployed-mode tests take down the user's production app. | Destructive plugins off by default, rate cap, automatic stop on repeated server errors, staging recommended. | 0005 |
 | T14 | All | Repudiation | No record of what was tested and when. | Append-only local audit log of active runs. | 0005 |
+| T15 | B1/B3 | Elevation (misuse) | Someone removes or bypasses the ownership check to attack hosts they do not own. | See "Misuse by a determined attacker" below: the check stops accidents and casual misuse, not a determined attacker; SiegeKit adds no attack capability beyond the public tools it wraps. | 0005 |
+
+## Misuse by a determined attacker
+
+SiegeKit is open source, so anyone can fork it and delete the ownership check. No design can prevent that, and we do not claim otherwise. The ownership check exists to stop **accidents** (a typo, a wrong URL) and **casual misuse** by unmodified copies.
+
+What limits the harm a modified copy can do:
+
+1. **No new attack capability.** SiegeKit only orchestrates tools that are already public (ZAP, Nuclei, sqlmap and others). Removing the check gives an attacker nothing they could not get by running those tools directly.
+2. **Features we will not build**, in any mode: denial-of-service or load-flooding tests; scanning of address ranges, lists of targets, or the internet at large (one verified host per run); detection or WAF evasion (traffic disguising, IP rotation, proxy chains, payload obfuscation aimed at bypassing defenses); exploitation beyond proving a finding (no shells, persistence, data exfiltration or lateral movement); credential attacks against live login services (hash auditing is offline only).
+3. **Identifiable traffic.** Every HTTP request SiegeKit's plugins send carries a `User-Agent` that includes `SiegeKit/<version>` where the wrapped tool allows setting it, so defenders can recognize and block it. There is no option to remove it.
+4. **Rate caps by default** in deployed mode, and an automatic stop on repeated server errors.
+5. **Clear authorized-use notice** shown on first run and in the README: testing systems without permission may be illegal.
+
+A pull request that adds any feature in point 2 will be declined, and this section may only be changed through a new ADR.
 
 ## Open questions (to resolve before the milestone noted)
 
@@ -57,4 +72,5 @@
 ## Residual risks accepted
 
 - A user who controls a host can test it; SiegeKit cannot verify legal authorization beyond technical control.
+- A fork with the ownership check removed can be pointed at any host. This is mitigated only as described in "Misuse by a determined attacker".
 - Container isolation is not equivalent to a VM; a kernel-level container escape in the engine is outside SiegeKit's control. Rootless mode reduces impact.
