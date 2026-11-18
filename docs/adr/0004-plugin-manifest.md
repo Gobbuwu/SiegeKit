@@ -2,6 +2,7 @@
 
 - Status: Accepted
 - Date: 2026-11-18
+- Amended by: [0012](0012-manifest-file-format.md) (file is `plugin.json`; Go validator is authoritative)
 
 ## Context
 

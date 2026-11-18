@@ -2,7 +2,7 @@
 
 SiegeKit is a free, local, open-source tool that runs security tests against software you own: static code analysis, dependency and secret scanning, infrastructure-as-code checks, dynamic web/API testing, fuzzing and password-hash audits. You choose which tests to run. Everything runs on your machine.
 
-**Status:** design phase (milestone M0). There is no runnable code yet.
+**Status:** milestone M1 in progress. Nothing is ready for use yet.
 
 ## What a clean scan means
 

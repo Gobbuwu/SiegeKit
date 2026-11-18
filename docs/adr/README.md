@@ -15,6 +15,7 @@ Each significant design decision is recorded as a short ADR before code is writt
 | [0009](0009-honest-results.md) | Honest results: coverage, not a "secure" verdict | Accepted |
 | [0010](0010-login-checks.md) | Login protection and secret-exposure checks | Accepted |
 | [0011](0011-app-logic-and-ai-checks.md) | Access-control, backend-rules and AI-feature checks | Accepted |
+| [0012](0012-manifest-file-format.md) | Plugin manifest file format and validator (amends 0004) | Accepted |
 
 ADRs 0002 to 0011 were accepted at the M0 design sign-off on 2026-11-18.
 
