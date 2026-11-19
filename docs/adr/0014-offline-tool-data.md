@@ -3,6 +3,7 @@
 - Status: Accepted
 - Date: 2026-11-19
 - Amends: [0006](0006-sandbox.md) (adds one network mode for data updates)
+- Amended by: [0016](0016-dependency-consent.md) (missing data is offered for download, with consent)
 
 ## Context
 

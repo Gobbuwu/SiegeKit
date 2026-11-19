@@ -2,7 +2,7 @@
 
 - Status: Accepted
 - Date: 2026-11-18
-- Amended by: [0014](0014-offline-tool-data.md) (network for data updates), [0015](0015-built-in-checks.md) (read-only built-in checks in-process)
+- Amended by: [0014](0014-offline-tool-data.md) (network for data updates), [0015](0015-built-in-checks.md) (read-only built-in checks in-process), [0016](0016-dependency-consent.md) (images pulled only after consent)
 
 ## Context
 
