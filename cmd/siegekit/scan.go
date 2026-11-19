@@ -223,12 +223,22 @@ func finish(run *report.Run, reportDir string, noSave bool, name string, thresho
 		return exitInvalid
 	}
 	var st *store.Store
-	if !noSave {
-		dir, err := dataDir()
-		if err != nil {
-			return fail(fmt.Errorf("%w (or use --no-save)", err))
+	dir, dirErr := dataDir()
+	if !noSave && dirErr != nil {
+		return fail(fmt.Errorf("%w (or use --no-save)", dirErr))
+	}
+	if dirErr == nil {
+		// Compare with the last saved run of this target (ADR 0013), also
+		// with --no-save, which only stops this run from being saved.
+		runs := &store.Store{Dir: filepath.Join(dir, "runs")}
+		if id, prev, err := runs.Latest(run.Target); err != nil {
+			fmt.Fprintf(stderr, "siegekit scan: cannot compare with earlier runs: %v\n", err)
+		} else if prev != nil {
+			run.Comparison = store.Comparison(id, prev, run)
 		}
-		st = &store.Store{Dir: filepath.Join(dir, "runs")}
+		if !noSave {
+			st = runs
+		}
 	}
 	paths, err := writeReports(reportDir, run)
 	if err != nil {
@@ -252,6 +262,12 @@ func finish(run *report.Run, reportDir string, noSave bool, name string, thresho
 			line += fmt.Sprintf(" (%d request(s) sent, %d refused by SiegeKit)", p.Requests, p.Refused)
 		}
 		fmt.Fprintln(stdout, line)
+	}
+	if c := run.Comparison; c != nil {
+		fmt.Fprintf(stdout, "\n%s\n", c.Summary())
+		if n := c.VersionNote(run.SiegeKitVersion); n != "" {
+			fmt.Fprintln(stdout, n)
+		}
 	}
 	fmt.Fprintf(stdout, "\nReports: %s\n", strings.Join(paths, ", "))
 	if st != nil {
