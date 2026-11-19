@@ -114,7 +114,7 @@ func TestPinnedImageVersions(t *testing.T) {
 	// -version, so its SARIF output (which names the tool version) is read.
 	versionArgs := map[string][]string{
 		"bandit": {"--version"}, "checkov": {"--version"}, "gitleaks": {"version"},
-		"gosec": {"-fmt", "sarif", "-out", "/out/v.sarif", "-no-fail", "/tmp/..."}, "trivy": {"--version"},
+		"gosec": {"-fmt", "sarif", "-out", "/out/v.sarif", "-no-fail", "/target/..."}, "trivy": {"--version"},
 	}
 	all, err := plugins.Builtin()
 	if err != nil {
@@ -132,8 +132,13 @@ func TestPinnedImageVersions(t *testing.T) {
 			continue
 		}
 		out := t.TempDir()
+		// A minimal Go module, so gosec has a package to report on.
+		src := t.TempDir()
+		os.WriteFile(filepath.Join(src, "go.mod"), []byte("module v.test\n\ngo 1.22\n"), 0o644)
+		os.WriteFile(filepath.Join(src, "main.go"), []byte("package main\n\nfunc main() {}\n"), 0o644)
+		os.Chmod(src, 0o755)
 		r, err := e.Run(context.Background(), sandbox.Spec{
-			Image: image, Args: args, OutDir: out, Network: "none",
+			Image: image, Args: args, OutDir: out, TargetDir: src, Network: "none",
 			CPUs: 1, MemoryMiB: 512, Timeout: 120 * time.Second,
 		})
 		if err != nil {
