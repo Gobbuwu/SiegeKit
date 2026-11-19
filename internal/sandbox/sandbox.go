@@ -17,9 +17,11 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 // Paths inside the container.
@@ -62,6 +64,8 @@ type Spec struct {
 	PidsLimit    int // 0 means 256
 	Timeout      time.Duration
 	OutputLimit  int64 // bytes; 0 means DefaultOutputLimit
+	// Env is extra environment for the tool; see CheckEnv.
+	Env map[string]string
 	// TmpMiB is the size of the in-memory /tmp; 0 means 256. Its pages count
 	// against MemoryMiB, so it cannot exceed the memory limit.
 	TmpMiB int
@@ -137,6 +141,9 @@ func (s *Spec) validate() error {
 	}
 	if s.Network != "target-only" && (s.Relay != "" || s.CAFile != "") {
 		return errors.New("relay and CA file are only for target-only runs")
+	}
+	if err := CheckEnv(s.Env); err != nil {
+		return err
 	}
 	if s.DataWritable && s.TargetDir != "" {
 		return errors.New("data can only be writable when no target is mounted")
@@ -253,6 +260,16 @@ func (s *Spec) EngineArgs(name string, uid, gid int) ([]string, error) {
 		"--cpus", strconv.Itoa(s.CPUs),
 		"--env", "HOME=/tmp",
 		"--workdir", "/tmp",
+	)
+	keys := make([]string, 0, len(s.Env))
+	for k := range s.Env {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		args = append(args, "--env", k+"="+s.Env[k])
+	}
+	args = append(args,
 		"--mount", "type=bind,source="+s.OutDir+",target="+OutMount,
 	)
 	if s.TargetDir != "" {
@@ -571,4 +588,28 @@ func (e *Engine) StopRelay(name string) {
 	if reRelay.MatchString(name) {
 		e.forceRemove(name)
 	}
+}
+
+var reEnvKey = regexp.MustCompile(`^[A-Z][A-Z0-9_]{0,63}$`)
+
+// CheckEnv checks tool environment variables. Names that change how
+// programs load code or reach the network, or that SiegeKit sets itself,
+// are refused.
+func CheckEnv(env map[string]string) error {
+	if len(env) > 16 {
+		return errors.New("more than 16 environment variables")
+	}
+	for k, v := range env {
+		switch {
+		case !reEnvKey.MatchString(k):
+			return fmt.Errorf("environment variable name %q must match %s", k, reEnvKey)
+		case k == "PATH" || k == "HOME" || strings.HasPrefix(k, "LD_") || strings.HasPrefix(k, "DYLD_") ||
+			strings.Contains(k, "PROXY") || strings.HasPrefix(k, "SSL_") || strings.HasPrefix(k, "SIEGEKIT_") ||
+			k == "REQUESTS_CA_BUNDLE" || k == "CURL_CA_BUNDLE" || k == "NODE_EXTRA_CA_CERTS":
+			return fmt.Errorf("environment variable %s is not allowed", k)
+		case len(v) > 16<<10 || strings.ContainsRune(v, 0) || !utf8.ValidString(v):
+			return fmt.Errorf("environment variable %s: value must be UTF-8 text up to 16 KiB", k)
+		}
+	}
+	return nil
 }

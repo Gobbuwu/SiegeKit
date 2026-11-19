@@ -16,11 +16,12 @@ var update = flag.Bool("update", false, "rewrite the golden files in testdata/re
 // golden files. Run with -update after re-recording.
 func TestRecordedToolOutput(t *testing.T) {
 	for id, file := range map[string]string{
-		"bandit":   "bandit.json",
-		"checkov":  "results_sarif.sarif",
-		"gitleaks": "gitleaks.sarif",
-		"gosec":    "gosec.sarif",
-		"trivy":    "trivy.sarif",
+		"bandit":           "bandit.json",
+		"checkov":          "results_sarif.sarif",
+		"gitleaks":         "gitleaks.sarif",
+		"gitleaks-history": "gitleaks-history.sarif",
+		"gosec":            "gosec.sarif",
+		"trivy":            "trivy.sarif",
 	} {
 		t.Run(id, func(t *testing.T) {
 			m := builtin(t, id)

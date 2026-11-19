@@ -197,13 +197,13 @@ func TestSelect(t *testing.T) {
 		}
 		return out
 	}
-	if got, _, _ := Select(all, nil, "repo", nil, nil); !slices.Equal(ids(got), []string{"bandit", "checkov", "gitleaks", "gosec", "trivy"}) {
+	if got, _, _ := Select(all, nil, "repo", nil, nil); !slices.Equal(ids(got), []string{"bandit", "checkov", "gitleaks", "gitleaks-history", "gosec", "trivy"}) {
 		t.Errorf("all: %v", ids(got))
 	}
 	if got, _, _ := Select(all, nil, "repo", []string{"gitleaks"}, nil); !slices.Equal(ids(got), []string{"gitleaks"}) {
 		t.Errorf("only: %v", ids(got))
 	}
-	if got, _, _ := Select(all, nil, "repo", nil, []string{"gitleaks"}); !slices.Equal(ids(got), []string{"bandit", "checkov", "gosec", "trivy"}) {
+	if got, _, _ := Select(all, nil, "repo", nil, []string{"gitleaks"}); !slices.Equal(ids(got), []string{"bandit", "checkov", "gitleaks-history", "gosec", "trivy"}) {
 		t.Errorf("skip: %v", ids(got))
 	}
 	for name, c := range map[string][2][]string{
@@ -256,7 +256,7 @@ func TestSelectAndRunBuiltinChecks(t *testing.T) {
 	if err != nil || len(ms) != 0 || len(cs) != 1 {
 		t.Fatalf("%d %d %v", len(ms), len(cs), err)
 	}
-	if _, cs, _ := Select(all, checks.Builtin(), "repo", nil, []string{"backend-rules"}); len(cs) != 0 {
+	if _, cs, _ := Select(all, checks.Builtin(), "repo", nil, []string{"backend-rules"}); len(cs) != 1 || cs[0].ID != "dotenv-gitignore" {
 		t.Error("skip ignored")
 	}
 	o := opts(t)
@@ -307,5 +307,37 @@ func TestRunSkipsPluginWithoutMatchingFiles(t *testing.T) {
 	}
 	if r.Plugins[0].Status != report.Ran || len(f.specs) != 1 {
 		t.Fatalf("plugin %+v, %d runs", r.Plugins[0], len(f.specs))
+	}
+}
+
+func TestRunSkipsGitPluginOutsideRepository(t *testing.T) {
+	f := &fake{act: func(s sandbox.Spec) (*sandbox.Result, error) {
+		write(t, s.OutDir, "gitleaks-history.sarif", `{"version":"2.1.0","runs":[{"tool":{"driver":{"name":"gitleaks"}},"results":[]}]}`)
+		return &sandbox.Result{Status: sandbox.Completed}, nil
+	}}
+	m := []*manifest.Manifest{builtin(t, "gitleaks-history")}
+	o := opts(t)
+	r, err := Run(context.Background(), f, m, o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p := r.Plugins[0]; p.Status != report.Skipped || !strings.Contains(p.Reason, "not a git repository") || len(f.specs) != 0 {
+		t.Fatalf("plugin %+v, %d runs", p, len(f.specs))
+	}
+	// A .git file (worktree) is not enough: it points outside the target.
+	write(t, o.TargetDir, ".git", "gitdir: /elsewhere")
+	if r, _ = Run(context.Background(), f, m, o); r.Plugins[0].Status != report.Skipped {
+		t.Fatalf(".git file: %+v", r.Plugins[0])
+	}
+	o = opts(t)
+	if err := os.Mkdir(filepath.Join(o.TargetDir, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	r, err = Run(context.Background(), f, m, o)
+	if err != nil || r.Plugins[0].Status != report.Ran || len(f.specs) != 1 {
+		t.Fatalf("in a repository: %+v %v", r.Plugins, err)
+	}
+	if env := f.specs[0].Env; env["GITLEAKS_CONFIG_TOML"] == "" || env["GIT_CONFIG_VALUE_0"] != sandbox.TargetMount {
+		t.Errorf("environment not passed: %v", env)
 	}
 }

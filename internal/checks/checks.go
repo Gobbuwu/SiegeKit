@@ -32,7 +32,7 @@ type Check struct {
 
 // Builtin returns every built-in check.
 func Builtin() []Check {
-	return []Check{backendRules}
+	return []Check{backendRules, dotenv}
 }
 
 // Limits on what a check reads, so a hostile repository cannot exhaust memory

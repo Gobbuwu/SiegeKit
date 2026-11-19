@@ -1,0 +1,62 @@
+{
+  "schemaVersion": 1,
+  "id": "gitleaks-history",
+  "name": "Gitleaks git history scan",
+  "version": "1.0.0",
+  "description": "Finds secrets anywhere in the git history, including ones deleted later, and any committed environment file (.env, .env.local and similar; templates such as .env.example are allowed). Secret values are redacted by the tool and masked again by SiegeKit.",
+  "family": "secrets",
+  "mode": "passive",
+  "destructive": false,
+  "targets": [
+    "repo"
+  ],
+  "requiresGit": true,
+  "tool": {
+    "name": "gitleaks",
+    "version": "8.30.1",
+    "license": "MIT",
+    "homepage": "https://github.com/gitleaks/gitleaks",
+    "artifacts": [
+      {
+        "platform": "any",
+        "kind": "oci-image",
+        "ref": "docker.io/zricethezav/gitleaks@sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f",
+        "sha256": "c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f"
+      }
+    ]
+  },
+  "resources": {
+    "cpus": 2,
+    "memoryMiB": 1024,
+    "gpu": "none",
+    "timeoutSeconds": 600,
+    "maxTimeoutSeconds": 3600
+  },
+  "network": "none",
+  "run": {
+    "args": [
+      "git",
+      "{target}",
+      "--log-opts=--all",
+      "--redact",
+      "--no-banner",
+      "--exit-code",
+      "0",
+      "--report-format",
+      "sarif",
+      "--report-path",
+      "{outdir}/gitleaks-history.sarif"
+    ],
+    "env": {
+      "GITLEAKS_CONFIG_TOML": "[extend]\nuseDefault = true\n\n[[rules]]\nid = \"env-file-committed\"\ndescription = \"Environment file (.env) committed to git\"\npath = '''(^|/)\\.env(\\.[^/]*)?$'''\n[[rules.allowlists]]\npaths = ['''(^|/)\\.env\\.(example|sample|template|dist)$''']\n",
+      "GIT_CONFIG_COUNT": "1",
+      "GIT_CONFIG_KEY_0": "safe.directory",
+      "GIT_CONFIG_VALUE_0": "/target"
+    }
+  },
+  "output": {
+    "format": "sarif",
+    "parser": "sarif-gitleaks",
+    "file": "gitleaks-history.sarif"
+  }
+}

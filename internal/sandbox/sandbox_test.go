@@ -2,6 +2,7 @@ package sandbox
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -305,5 +306,126 @@ func TestContainerToolExitCodeIsNotEngineFailure(t *testing.T) {
 	r = run(t, e, spec(t, "/no/such/binary"))
 	if r.Status != Failed {
 		t.Fatalf("missing binary should be an engine failure, got %s %d", r.Status, r.ExitCode)
+	}
+}
+
+func TestEngineArgsEnv(t *testing.T) {
+	s := spec(t, "scan")
+	s.Env = map[string]string{"B_VAR": "two words", "A_VAR": "line1\nline2"}
+	args, err := s.EngineArgs("n", 1000, 1000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	joined := strings.Join(args, "|")
+	if !strings.Contains(joined, "--env|A_VAR=line1\nline2|--env|B_VAR=two words") {
+		t.Errorf("env not passed in sorted order as separate arguments: %q", joined)
+	}
+	if args[len(args)-2] != testImage {
+		t.Errorf("image must come after the environment: %v", args)
+	}
+	for _, bad := range []map[string]string{
+		{"LD_PRELOAD": "/x.so"}, {"DYLD_INSERT_LIBRARIES": "x"}, {"HTTPS_PROXY": "http://x"}, {"no_proxy": "*"},
+		{"PATH": "/x"}, {"HOME": "/"}, {"SSL_CERT_FILE": "/x"}, {"SIEGEKIT_X": "1"}, {"A=B": "c"}, {"": "x"},
+		{"OK": "nul\x00"}, {"OK": strings.Repeat("x", 16<<10+1)},
+		{"REQUESTS_CA_BUNDLE": "/x"}, {"CURL_CA_BUNDLE": "/x"}, {"NODE_EXTRA_CA_CERTS": "/x"},
+	} {
+		s.Env = bad
+		if _, err := s.EngineArgs("n", 1000, 1000); err == nil {
+			t.Errorf("accepted env %.40q", bad)
+		}
+	}
+	many := map[string]string{}
+	for i := range 17 {
+		many[fmt.Sprintf("V%d", i)] = "x"
+	}
+	if CheckEnv(many) == nil {
+		t.Error("accepted 17 variables")
+	}
+}
+
+// target-only runs (ADR 0018, ADR 0019): only through a SiegeKit relay, on
+// Linux, with the proxy and CA settings set by SiegeKit.
+func TestTargetOnlySpec(t *testing.T) {
+	old := goos
+	t.Cleanup(func() { goos = old })
+	goos = "linux"
+	const relay = "siegekit-relay-0123456789abcdef"
+	good := func(t *testing.T) Spec {
+		s := spec(t, "true")
+		s.Network, s.Relay = "target-only", relay
+		s.CAFile = filepath.Join(t.TempDir(), "ca.pem")
+		if err := os.WriteFile(s.CAFile, []byte("cert"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		return s
+	}
+	s := good(t)
+	args, err := s.EngineArgs("n", 1000, 1000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	joined := strings.Join(args, "|")
+	for _, want := range []string{
+		"--network|container:" + relay,
+		"--env|HTTP_PROXY=http://127.0.0.1:8080", "--env|HTTPS_PROXY=http://127.0.0.1:8080",
+		"--env|http_proxy=http://127.0.0.1:8080", "--env|https_proxy=http://127.0.0.1:8080",
+		"--env|NO_PROXY=", "--env|no_proxy=",
+		"type=bind,source=" + s.CAFile + ",target=/siegekit/ca.pem,readonly",
+		"--env|SSL_CERT_FILE=/siegekit/ca.pem", "--env|NODE_EXTRA_CA_CERTS=/siegekit/ca.pem",
+		"--cap-drop|ALL", "--read-only",
+	} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("missing %q in %v", want, args)
+		}
+	}
+	if strings.Contains(joined, "--network|none") || strings.Count(joined, "--network|") != 1 {
+		t.Errorf("exactly one network flag expected: %v", args)
+	}
+
+	link := filepath.Join(t.TempDir(), "link.pem")
+	if err := os.Symlink(s.CAFile, link); err != nil {
+		t.Fatal(err)
+	}
+	for name, mutate := range map[string]func(s *Spec){
+		"not linux":          func(*Spec) { goos = "darwin" },
+		"no relay":           func(s *Spec) { s.Relay = "" },
+		"foreign container":  func(s *Spec) { s.Relay = "my-database" },
+		"relay injection":    func(s *Spec) { s.Relay = relay + " --privileged" },
+		"writable data":      func(s *Spec) { s.DataDir, s.DataMount, s.DataWritable = s.OutDir, "/tmp/db", true },
+		"relative CA":        func(s *Spec) { s.CAFile = "ca.pem" },
+		"CA comma":           func(s *Spec) { s.CAFile += ",readonly=false" },
+		"CA symlink":         func(s *Spec) { s.CAFile = link },
+		"CA missing":         func(s *Spec) { s.CAFile += ".missing" },
+		"relay without mode": func(s *Spec) { s.Network = "none" },
+		"CA without mode":    func(s *Spec) { s.Network, s.Relay = "none", "" },
+	} {
+		t.Run(name, func(t *testing.T) {
+			goos = "linux"
+			s := good(t)
+			mutate(&s)
+			if _, err := s.EngineArgs("n", 1000, 1000); err == nil {
+				t.Error("accepted")
+			}
+		})
+	}
+	goos = "linux"
+	s = good(t)
+	s.CAFile = "" // an http target needs no CA
+	if args, err := s.EngineArgs("n", 1000, 1000); err != nil || strings.Contains(strings.Join(args, " "), "ca.pem") {
+		t.Errorf("http target: %v %v", args, err)
+	}
+}
+
+func TestStartRelayRefusals(t *testing.T) {
+	old := goos
+	t.Cleanup(func() { goos = old })
+	e := &Engine{Bin: "/nonexistent/docker"}
+	goos = "darwin"
+	if _, err := e.StartRelay(context.Background(), t.TempDir()); err == nil || !strings.Contains(err.Error(), "only on Linux") {
+		t.Errorf("macOS: %v", err)
+	}
+	goos = "linux"
+	if _, err := e.StartRelay(context.Background(), t.TempDir()+",readonly=false"); err == nil {
+		t.Error("accepted an injected mount path")
 	}
 }

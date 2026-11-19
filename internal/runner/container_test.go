@@ -49,6 +49,24 @@ func TestBuiltinPluginsFindPlantedIssues(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	// History: a .env committed and then removed from the tree. The history
+	// plugin must still find it, and .gitignore does not exclude .env.
+	git := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", append([]string{"-c", "user.name=test", "-c", "user.email=test@example.invalid", "-c", "commit.gpgsign=false"}, args...)...)
+		cmd.Dir = target
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	git("init", "-q")
+	if err := os.WriteFile(filepath.Join(target, ".env"), []byte("DATABASE_URL=postgres://app@db/app\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	git("add", ".")
+	git("commit", "-q", "-m", "initial")
+	git("rm", "-q", ".env")
+	git("commit", "-q", "-m", "remove .env")
 	// When the tests run as root the container user is 65532, which needs to
 	// read the target.
 	if err := os.Chmod(target, 0o755); err != nil {
@@ -84,7 +102,7 @@ func TestBuiltinPluginsFindPlantedIssues(t *testing.T) {
 			t.Fatalf("%s: %s %s", p.ID, p.Status, p.Reason)
 		}
 	}
-	var secret, root, vuln, py, gocode, firebase, supabase bool
+	var secret, root, vuln, py, gocode, firebase, supabase, envHistory, envIgnore bool
 	for _, f := range r.Findings {
 		t.Logf("%s %s %s:%d", f.Severity, f.RuleID, f.Location.URI, f.Location.StartLine)
 		if strings.Contains(f.Snippet+f.Message, token[4:12]) {
@@ -103,12 +121,16 @@ func TestBuiltinPluginsFindPlantedIssues(t *testing.T) {
 			firebase = true
 		case f.RuleID == "supabase-table-without-rls" && f.Location.URI == "supabase/migrations/0001_init.sql" && f.Location.StartLine == 1:
 			supabase = true
+		case f.RuleID == "env-file-committed" && f.Location.URI == ".env" && f.Sources[0].Plugin == "gitleaks-history":
+			envHistory = true
+		case f.RuleID == "gitignore-missing-env" && f.Sources[0].Plugin == "dotenv-gitignore":
+			envIgnore = true
 		case f.RuleID == "CKV_DOCKER_8" && f.Location.URI == "Dockerfile" && f.Location.StartLine == 3 && f.Severity == findings.Medium:
 			root = true
 		}
 	}
-	if !secret || !root || !vuln || !py || !gocode || !firebase || !supabase {
-		t.Errorf("planted issues not found: secret=%v root-user=%v vulnerable-dependency=%v python=%v go=%v firebase=%v supabase=%v", secret, root, vuln, py, gocode, firebase, supabase)
+	if !secret || !root || !vuln || !py || !gocode || !firebase || !supabase || !envHistory || !envIgnore {
+		t.Errorf("planted issues not found: secret=%v root-user=%v vulnerable-dependency=%v python=%v go=%v firebase=%v supabase=%v env-in-history=%v env-not-ignored=%v", secret, root, vuln, py, gocode, firebase, supabase, envHistory, envIgnore)
 	}
 }
 
@@ -130,7 +152,7 @@ func TestPinnedImageVersions(t *testing.T) {
 	unversioned := map[string]bool{"gosec": true}
 	versionArgs := map[string][]string{
 		"bandit": {"--version"}, "checkov": {"--version"}, "gitleaks": {"version"},
-		"gosec": {"-fmt", "sarif", "-out", "/out/v.sarif", "-no-fail", "/target/..."}, "trivy": {"--version"},
+		"gosec": {"-fmt", "sarif", "-out", "/out/v.sarif", "-no-fail", "/target/..."}, "trivy": {"--version"}, "gitleaks-history": {"version"},
 	}
 	all, err := plugins.Builtin()
 	if err != nil {

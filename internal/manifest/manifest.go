@@ -13,6 +13,8 @@ import (
 	"os"
 	"regexp"
 	"strings"
+
+	"github.com/Gobbuwu/SiegeKit/internal/sandbox"
 )
 
 // MaxFileSize is the largest manifest accepted, in bytes.
@@ -68,6 +70,9 @@ type Manifest struct {
 	// base names). If set, the plugin is skipped when the target has no
 	// matching file, so "0 findings" never stands for "nothing was scanned".
 	AppliesTo []string `json:"appliesTo,omitempty"`
+	// RequiresGit skips the plugin, saying so, when the target is not a git
+	// repository (no .git at its top level).
+	RequiresGit bool `json:"requiresGit,omitempty"`
 }
 
 // Data is downloadable data the tool needs, such as a vulnerability
@@ -107,6 +112,9 @@ type Resources struct {
 // Run is how the tool is invoked. Args are passed as a vector, never to a shell.
 type Run struct {
 	Args []string `json:"args"`
+	// Env is extra environment for the tool (sandbox.CheckEnv rules).
+	// Values are passed as written; placeholders are not substituted.
+	Env map[string]string `json:"env,omitempty"`
 }
 
 // Output is what the tool produces and which parser reads it.
@@ -230,6 +238,11 @@ func (m *Manifest) Validate() error {
 			if strings.Contains(a, "{data}") {
 				add("run.args[%d] uses {data} but the manifest has no data section", i)
 			}
+		}
+	}
+	if m.Run != nil {
+		if err := sandbox.CheckEnv(m.Run.Env); err != nil {
+			add("run.env: %v", err)
 		}
 	}
 	if m.AppliesTo != nil && len(m.AppliesTo) == 0 {

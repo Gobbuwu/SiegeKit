@@ -11,6 +11,7 @@ Real reports from the pinned tool versions, used by `TestRecordedToolOutput`. Th
 | File | Tool and version | How |
 | --- | --- | --- |
 | `gitleaks.sarif` | gitleaks 8.30.1, pinned image | the manifest's arguments |
+| `gitleaks-history.sarif` | gitleaks 8.30.1, pinned image | the manifest's arguments and environment, on a separate git repository with three commits: a committed `.env` (later untracked and added to `.gitignore`), an `.env.example` (allowed), and a `conf.py` with a fake AWS key that a later commit deletes. Values are redacted by gitleaks. |
 | `results_sarif.sarif` | checkov 3.4.5, pinned image | the manifest's arguments |
 | `trivy.sarif` | trivy 0.76.2, pinned image (`sha256:8f6bb947…`) | the manifest's scan arguments with the vulnerability database of 2026-11-19 |
 | `gosec.sarif` | gosec v2.30.0, built with `go install` (the pinned ghcr image could not be pulled from the recording machine) | the manifest's arguments, target at `/target` |

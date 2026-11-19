@@ -43,12 +43,12 @@ func RunTargetOnly(ctx context.Context, e *sandbox.Engine, s sandbox.Spec, cfg e
 		return nil, err
 	}
 	if err := os.Chmod(sock, 0o666); err != nil { // #nosec G302 -- the relay runs as another user; the directory admits no listing
-		l.Close()
+		_ = l.Close()
 		return nil, err
 	}
 	p, err := egress.New(cfg)
 	if err != nil {
-		l.Close()
+		_ = l.Close()
 		return nil, err
 	}
 	served := make(chan struct{})
