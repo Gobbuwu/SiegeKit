@@ -43,6 +43,16 @@ const DefaultOutputLimit = 512 << 20
 // run as root inside the container.
 const nonRootUID, nonRootGID = 65532, 65532
 
+// ToolIdentity returns the user and group a tool runs as when SiegeKit runs
+// as uid:gid: the same user, or a fixed non-root user when SiegeKit runs as
+// root.
+func ToolIdentity(uid, gid int) (int, int) {
+	if uid == 0 {
+		return nonRootUID, nonRootGID
+	}
+	return uid, gid
+}
+
 var reDataMount = regexp.MustCompile(`^/(tmp|data)(/[a-z0-9_-][a-z0-9._-]*)+$`)
 
 var reImage = regexp.MustCompile(`^[a-z0-9.-]+(:[0-9]+)?/[^@\s]+@sha256:[a-f0-9]{64}$`)
@@ -217,9 +227,7 @@ func (s *Spec) EngineArgs(name string, uid, gid int) ([]string, error) {
 	if err := s.validate(); err != nil {
 		return nil, err
 	}
-	if uid == 0 {
-		uid, gid = nonRootUID, nonRootGID
-	}
+	uid, gid = ToolIdentity(uid, gid)
 	pids := s.PidsLimit
 	if pids == 0 {
 		pids = 256
