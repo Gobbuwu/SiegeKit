@@ -15,8 +15,8 @@ Each row is a common security concern, the plugins planned to check it, and the 
 | Exposed admin pages and dashboards | Nuclei panel templates, ffuf, ZAP spider | M2 |
 | Default vendor logins left enabled | Nuclei default-login templates, local mode only | M2 ([ADR 0010](adr/0010-login-checks.md)) |
 | No limit on failed login attempts | Login throttling check on your own test account | M2 ([ADR 0010](adr/0010-login-checks.md)) |
-| Session cookie flags, security headers, TLS settings | ZAP, Nuclei | M2 |
-| Injection (SQL, command, template), XSS, SSRF patterns | Bandit (Python) and gosec (Go) code, M1; Opengrep for other languages, M2; ZAP, Nuclei, sqlmap on the running app, M2 | M1, M2 |
+| Session cookie flags, security headers, TLS settings | ZAP crawl and passive checks on every URL target (delivered in M2.4, [ADR 0023](adr/0023-active-web-scans.md)); Nuclei (M2) | M2 |
+| Injection (SQL, command, template), XSS, SSRF patterns | Bandit (Python) and gosec (Go) code, M1; Opengrep for other languages, M2; ZAP attack scan on the running app, local targets only (delivered in M2.4; deployed targets wait for M2.10); Nuclei, sqlmap, M2 | M1, M2 |
 | Known CVEs in deployed software | Nuclei CVE templates | M2 |
 | API endpoints that crash or leak errors on bad input | Schemathesis | M2 |
 | Misconfigured Dockerfiles, Kubernetes, Terraform | Checkov (M1); Hadolint (optional, not scheduled). Trivy runs only its dependency scanner. | M1 |
@@ -26,7 +26,7 @@ Each row is a common security concern, the plugins planned to check it, and the 
 | API routes with no login required | Unauthenticated request to every discovered route | M2 (ADR 0011) |
 | Supabase tables without row-level security, open Firebase rules | Static rules (M1); read-only live check with the app's public key (M2) | M1, M2 (ADR 0011) |
 | Missing rate limits on expensive or AI endpoints | Capped rate-limit check | M2 (ADR 0011) |
-| CORS misconfiguration, open redirects, CSRF, file-upload flaws, path traversal, SSRF | Bandit and gosec where they have rules (M1); Opengrep (M2); ZAP, Nuclei on the running app (M2) | M1, M2 |
+| CORS misconfiguration, open redirects, CSRF, file-upload flaws, path traversal, SSRF | Bandit and gosec where they have rules (M1); Opengrep (M2); ZAP attack scan on local targets (path traversal tested in M2.4); Nuclei on the running app (M2) | M1, M2 |
 | AI provider keys (OpenAI, Anthropic and others) in code or bundles | Gitleaks | M1, M2 |
 | AI model output reaching eval, shell, SQL or HTML unescaped | Static rules | M3 (ADR 0011) |
 | Prompt injection and system-prompt leakage in the app's AI features | garak or promptfoo, optional | M3 (ADR 0011) |

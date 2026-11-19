@@ -2,7 +2,7 @@
 
 SiegeKit is a free, local, open-source tool that runs security tests against software you own: static code analysis, dependency and secret scanning, infrastructure-as-code checks, dynamic web/API testing, fuzzing and password-hash audits. You choose which tests to run. Everything runs on your machine.
 
-**Status:** milestone M1 (alpha) is complete; M2 (active web and API testing) is in progress. The alpha can scan a source directory for committed secrets, including in git history and committed `.env` files (gitleaks), `.env` files that `.gitignore` does not exclude, insecure Dockerfile, Kubernetes, Terraform and CI settings (checkov), dependencies with known vulnerabilities (trivy) and common mistakes in Python and Go code (bandit, gosec). Do not rely on it yet.
+**Status:** milestone M1 (alpha) is complete; M2 (active web and API testing) is in progress. The alpha can scan a source directory for committed secrets, including in git history and committed `.env` files (gitleaks), `.env` files that `.gitignore` does not exclude, insecure Dockerfile, Kubernetes, Terraform and CI settings (checkov), dependencies with known vulnerabilities (trivy) and common mistakes in Python and Go code (bandit, gosec). On Linux it can also test a running web app by URL with ZAP: a crawl and passive checks on every target, and ZAP's attack scan only on your own local copy (ADR 0023). Do not rely on it yet.
 
 ## Try the preview
 
@@ -19,7 +19,7 @@ Nothing is downloaded without asking. Before a scan or update installs a missing
 
 When you scan a directory, downloads are the only steps that use the network, and they run without access to your files. A URL target is resolved with DNS, and `--deployed` also fetches the proof-of-control file or DNS record. Run `siegekit update` at least weekly; reports say when the data is old.
 
-The scan writes `report.html`, `report.json` and `report.sarif` to `./siegekit-report` and saves a copy of the run under `~/.local/share/siegekit/runs`. Each tool runs in a container with no network and read-only access to your directory. Exit codes: 0 no findings at or above `--fail-on` (default high), 3 findings, 4 a check failed or timed out, 1 an error, 2 a usage error.
+The scan writes `report.html`, `report.json` and `report.sarif` to `./siegekit-report` and saves a copy of the run under `~/.local/share/siegekit/runs`. The next scan of the same target says what is new and what was fixed since then. Each tool runs in a container with no network and read-only access to your directory. Exit codes: 0 no findings at or above `--fail-on` (default high), 3 findings, 4 a check failed or timed out, 1 an error, 2 a usage error.
 
 ## Using SiegeKit with an AI coding assistant
 

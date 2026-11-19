@@ -45,6 +45,11 @@ type PluginResult struct {
 	Suppressed    int      `json:"suppressed,omitempty"`
 	RepoSettings  []string `json:"repoSettings,omitempty"`
 	IgnoreMarkers int      `json:"ignoreMarkers,omitempty"`
+	// Requests counts requests the egress proxy forwarded to the target in an
+	// active run; Refused counts requests and connections it refused because
+	// they went somewhere else (ADR 0018, ADR 0023).
+	Requests int `json:"requests,omitempty"`
+	Refused  int `json:"refused,omitempty"`
 }
 
 // IgnoreNote says in one line what the repository told the tool to ignore,
@@ -72,15 +77,55 @@ type Run struct {
 	Finished        time.Time          `json:"finished"`
 	Plugins         []PluginResult     `json:"plugins"`
 	Findings        []findings.Finding `json:"findings"`
+	// Comparison is set when a saved run of the same target exists.
+	Comparison *Comparison `json:"comparison,omitempty"`
+}
+
+// Comparison says what changed since the last saved run of the same target
+// (ADR 0013). A finding that disappeared counts as fixed only if a plugin
+// that reported it ran to completion in this run; otherwise it is listed as
+// not checked again, so a failed check cannot make problems look fixed.
+type Comparison struct {
+	PreviousRun     string             `json:"previousRun"`
+	PreviousStarted time.Time          `json:"previousStarted"`
+	PreviousVersion string             `json:"previousVersion"`
+	New             []string           `json:"new"` // fingerprints of findings the previous run did not report
+	Fixed           []findings.Finding `json:"fixed"`
+	NotRechecked    []findings.Finding `json:"notRechecked"` // gone from this run, but no plugin that reported them completed
+	StillPresent    int                `json:"stillPresent"` // reported by both runs
+}
+
+// Summary is one line for the terminal and the HTML report.
+func (c *Comparison) Summary() string {
+	s := fmt.Sprintf("Since the last scan of this target (%s): %d new, %d fixed, %d still present",
+		c.PreviousStarted.UTC().Format("2006-01-02 15:04 UTC"), len(c.New), len(c.Fixed), c.StillPresent)
+	if n := len(c.NotRechecked); n > 0 {
+		s += fmt.Sprintf(", %d not checked again because their check did not run to completion", n)
+	}
+	return s + "."
+}
+
+// VersionNote warns when the previous run used another SiegeKit version:
+// tool and parser changes can make findings look new or fixed.
+func (c *Comparison) VersionNote(current string) string {
+	if c.PreviousVersion == current {
+		return ""
+	}
+	prev := c.PreviousVersion
+	if prev == "" {
+		prev = "an unknown version"
+	}
+	return fmt.Sprintf("The previous run used SiegeKit %s, this one %s: some changes may come from the upgrade, not from the target.", prev, current)
 }
 
 // NotTested lists what automated checks cannot cover (ADR 0009 item 3).
 // Every report shows it.
 var NotTested = []string{
-	// Keep this list true for the current version. Update the language and
-	// access-control lines when Opengrep (M2.9) and the two-account test
-	// (M2.7) land.
-	"The running application, unless you scanned its URL: a directory scan only reads files. Active web and API tests are not available yet (planned for M2).",
+	// Keep this list true for the current version. Update the web, language
+	// and access-control lines when more web tools (M2.5), Opengrep (M2.9)
+	// and the two-account test (M2.7) land.
+	"The running application, unless you scanned its URL: a directory scan only reads files. A URL scan crawls the app with ZAP and runs ZAP's passive checks; ZAP's attack scan runs only on local targets, and deployed targets get passive checks until request limits are measured. ZAP's crawler follows HTML links, so pages that a single-page app builds in JavaScript are mostly not reached. API specifications, other web tools (Nuclei, ffuf, sqlmap, Nikto) and login checks are planned for M2.",
+	"The source code, unless you scanned its directory: a URL scan only sends requests to the running app.",
 	"Code in languages without an analyzer: Python (bandit) and Go (gosec) code is analyzed; JavaScript, TypeScript and other languages are not yet (planned for M2). Secrets, dependencies and configuration files are checked in any language.",
 	"Access control: whether every request checks that this user may access this record. SiegeKit has no access-control test yet; a partial two-account test is planned for M2.",
 	"Business logic: skipping steps, replaying actions, tampering with prices or limits.",
@@ -257,12 +302,22 @@ func WriteHTML(w io.Writer, r *Run) error {
 	plugins := append([]PluginResult(nil), r.Plugins...)
 	sort.SliceStable(plugins, func(i, j int) bool { return plugins[i].Family < plugins[j].Family })
 	counts := r.Counts()
+	isNew := map[string]bool{}
+	versionNote := ""
+	if r.Comparison != nil {
+		for _, fp := range r.Comparison.New {
+			isNew[fp] = true
+		}
+		versionNote = r.Comparison.VersionNote(r.SiegeKitVersion)
+	}
 	return page.Execute(w, map[string]any{
-		"Run":       r,
-		"Headline":  r.Headline(),
-		"Complete":  r.Complete(),
-		"Plugins":   plugins,
-		"NotTested": NotTested,
+		"Run":         r,
+		"New":         isNew,
+		"VersionNote": versionNote,
+		"Headline":    r.Headline(),
+		"Complete":    r.Complete(),
+		"Plugins":     plugins,
+		"NotTested":   NotTested,
 		"Counts": []struct {
 			Name string
 			N    int
@@ -299,6 +354,14 @@ code,pre{font:13px ui-monospace,monospace;white-space:pre-wrap;word-break:break-
 {{if not .Complete}}<p class="warn">This run is incomplete: at least one check failed or timed out. Missing checks may hide issues.</p>{{end}}
 <p>Target: <code>{{.Run.Target}}</code> · Mode: {{.Run.Mode}} · SiegeKit {{.Run.SiegeKitVersion}} · {{.Run.Started.Format "2006-01-02 15:04 MST"}}</p>
 
+{{with .Run.Comparison}}<h2>Since the last scan</h2>
+<p>{{.Summary}} Previous run: <code>{{.PreviousRun}}</code>.</p>
+{{with $.VersionNote}}<p class="warn">{{.}}</p>{{end}}
+{{if .Fixed}}<p>Fixed: the check that reported each one ran to completion and did not report it again. An ignore setting added to the repository also hides a finding; each check's ignore counts are under "What was tested".</p>
+<ul>{{range .Fixed}}<li>[{{.Severity}}] {{.Title}} · <code>{{.Location.URI}}{{if .Location.StartLine}}:{{.Location.StartLine}}{{end}}</code></li>{{end}}</ul>{{end}}
+{{if .NotRechecked}}<p class="warn">Not checked again, because their check did not complete in this run:</p>
+<ul>{{range .NotRechecked}}<li>[{{.Severity}}] {{.Title}} · <code>{{.Location.URI}}{{if .Location.StartLine}}:{{.Location.StartLine}}{{end}}</code></li>{{end}}</ul>{{end}}
+{{end}}
 <h2>What was tested</h2>
 <table>
 <tr><th>Check</th><th>Family</th><th>Tool</th><th>Status</th><th>Findings</th></tr>
@@ -313,7 +376,7 @@ code,pre{font:13px ui-monospace,monospace;white-space:pre-wrap;word-break:break-
 <h2>Findings</h2>
 <p>{{range $i, $c := .Counts}}{{if $i}} · {{end}}{{$c.Name}}: {{$c.N}}{{end}}</p>
 {{range .Run.Findings}}
-<h3 class="sev-{{.Severity}}">[{{.Severity}}] {{.Title}}</h3>
+<h3 class="sev-{{.Severity}}">{{if index $.New .Fingerprint}}New: {{end}}[{{.Severity}}] {{.Title}}</h3>
 <p>{{.Message}}</p>
 <p><code>{{.Location.URI}}{{if .Location.StartLine}}:{{.Location.StartLine}}{{end}}</code>{{if .CWEs}} · {{range $i, $c := .CWEs}}{{if $i}}, {{end}}{{$c}}{{end}}{{end}}</p>
 {{if .Snippet}}<pre>{{.Snippet}}</pre>{{end}}

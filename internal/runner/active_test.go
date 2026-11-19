@@ -18,6 +18,8 @@ import (
 	"time"
 
 	"github.com/Gobbuwu/SiegeKit/internal/egress"
+	"github.com/Gobbuwu/SiegeKit/internal/manifest"
+	"github.com/Gobbuwu/SiegeKit/internal/report"
 	"github.com/Gobbuwu/SiegeKit/internal/sandbox"
 	"github.com/Gobbuwu/SiegeKit/internal/target"
 )
@@ -173,6 +175,67 @@ func TestActiveRunStopsOnServerErrors(t *testing.T) {
 	}
 	if hits.Load() != 3 {
 		t.Errorf("target received %d requests, want 3", hits.Load())
+	}
+	noRelaysLeft(t, e)
+}
+
+// TestZAPFindsPlantedIssues runs the zap and zap-active plugins with the
+// pinned ZAP image against SiegeKit's vulnerable test app, behind the relay
+// and the egress proxy, and checks that every planted issue is found (M2.4).
+func TestZAPFindsPlantedIssues(t *testing.T) {
+	e, cfg, _, _ := activeSetup(t, http.StatusOK)
+	srv := httptest.NewServer(vulnApp())
+	t.Cleanup(srv.Close)
+	su, _ := url.Parse(srv.URL)
+	tu, err := target.Parse("http://app.test:" + su.Port() + "/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ms := []*manifest.Manifest{builtin(t, "zap"), builtin(t, "zap-active")}
+	for _, m := range ms {
+		img, _ := ImageFor(m)
+		if has, err := e.HasImage(context.Background(), img); err != nil {
+			t.Fatal(err)
+		} else if !has {
+			if err := e.Pull(context.Background(), img); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	bin := relayBin(t)
+	run := func(ctx context.Context, s sandbox.Spec, c egress.Config) (*ActiveResult, error) {
+		return RunTargetOnly(ctx, e, s, c, t.TempDir(), bin)
+	}
+	r, err := RunURL(context.Background(), run, ms, URLOptions{
+		Version: "test", Target: tu, Addrs: cfg.Addrs, Limits: LocalLimits,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := map[string]map[string]bool{}
+	for _, f := range r.Findings {
+		for _, s := range f.Sources {
+			if found[s.Plugin] == nil {
+				found[s.Plugin] = map[string]bool{}
+			}
+			found[s.Plugin][s.RuleID] = true
+		}
+	}
+	for _, p := range r.Plugins {
+		t.Logf("%s: %s %q, %d findings, %d requests, %d refused, rules %v", p.ID, p.Status, p.Reason, p.Findings, p.Requests, p.Refused, found[p.ID])
+		if p.Status != report.Ran || p.Requests == 0 {
+			t.Errorf("%s did not run: %+v", p.ID, p)
+		}
+		for rule, issue := range vulnAppIssues[p.ID] {
+			if !found[p.ID][rule] {
+				t.Errorf("%s missed %s (rule %s)", p.ID, issue, rule)
+			}
+		}
+	}
+	for _, f := range r.Findings {
+		if !strings.HasPrefix(f.Location.URI, "http://app.test:"+su.Port()+"/") {
+			t.Errorf("finding outside the target: %+v", f.Location)
+		}
 	}
 	noRelaysLeft(t, e)
 }

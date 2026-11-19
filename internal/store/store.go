@@ -21,7 +21,9 @@ type Store struct {
 	Dir string
 }
 
-var reRunID = regexp.MustCompile(`^[0-9]{8}T[0-9]{6}Z-[a-z0-9-]{1,40}$`)
+// A run ID is the start time, the target slug (at most 40 characters) and,
+// for a second run of the same target in the same second, "-2" to "-9".
+var reRunID = regexp.MustCompile(`^[0-9]{8}T[0-9]{6}Z-[a-z0-9-]{1,42}$`)
 
 // Save writes the run and returns its ID. The file is written to a temporary
 // name and renamed, so a crash never leaves a half-written run.
@@ -54,14 +56,30 @@ func (s *Store) Save(r *report.Run, targetSlug string) (string, error) {
 	if err := tmp.Close(); err != nil {
 		return "", err
 	}
-	final := filepath.Join(s.Dir, id+".json")
-	if _, err := os.Stat(final); err == nil {
-		return "", fmt.Errorf("run %s already exists", id)
+	// Existing runs are never overwritten (ADR 0013). A second run of the
+	// same target in the same second gets a suffix.
+	base := id
+	for n := 2; ; n++ {
+		// Claim the name with O_EXCL, so two runs finishing at once never
+		// take the same file, then move the finished run over the claim.
+		final := filepath.Join(s.Dir, id+".json")
+		claim, err := os.OpenFile(final, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600) // #nosec G304 -- id is checked against reRunID
+		if err == nil {
+			claim.Close() // #nosec G104 -- empty file; the rename below replaces it
+			if err := os.Rename(tmp.Name(), final); err != nil {
+				os.Remove(final) // #nosec G104 -- best effort; the rename error is returned
+				return "", err
+			}
+			return id, nil
+		}
+		if !errors.Is(err, os.ErrExist) {
+			return "", err
+		}
+		if n > 9 {
+			return "", fmt.Errorf("run %s already exists", id)
+		}
+		id = fmt.Sprintf("%s-%d", base, n)
 	}
-	if err := os.Rename(tmp.Name(), final); err != nil {
-		return "", err
-	}
-	return id, nil
 }
 
 // Load reads a saved run by ID.
@@ -99,6 +117,56 @@ func (s *Store) List() ([]string, error) {
 	}
 	sort.Strings(ids)
 	return ids, nil
+}
+
+// Latest returns the most recent saved run of target, or "" and nil if
+// there is none. Runs that cannot be read are passed over.
+func (s *Store) Latest(target string) (string, *report.Run, error) {
+	ids, err := s.List()
+	if err != nil {
+		return "", nil, err
+	}
+	for i := len(ids) - 1; i >= 0; i-- {
+		r, err := s.Load(ids[i])
+		if err == nil && r.Target == target {
+			return ids[i], r, nil
+		}
+	}
+	return "", nil, nil
+}
+
+// Comparison compares cur with the saved run prev, whose ID is id.
+// Findings that prev itself could not check again are still open, so they
+// stay in the baseline: a later run reports them as fixed or still present,
+// never as new.
+func Comparison(id string, prev, cur *report.Run) *report.Comparison {
+	base := *prev
+	if prev.Comparison != nil && len(prev.Comparison.NotRechecked) > 0 {
+		base.Findings = append(append([]findings.Finding(nil), prev.Findings...), prev.Comparison.NotRechecked...)
+	}
+	d := Compare(&base, cur)
+	c := &report.Comparison{
+		PreviousRun: id, PreviousStarted: prev.Started, PreviousVersion: prev.SiegeKitVersion,
+		New: []string{}, Fixed: d.Fixed, NotRechecked: []findings.Finding{},
+	}
+	if c.Fixed == nil {
+		c.Fixed = []findings.Finding{}
+	}
+	for _, f := range d.New {
+		c.New = append(c.New, f.Fingerprint)
+	}
+	inCur := map[string]bool{}
+	for _, f := range cur.Findings {
+		inCur[f.Fingerprint] = true
+	}
+	for _, f := range d.Still {
+		if inCur[f.Fingerprint] {
+			c.StillPresent++
+		} else {
+			c.NotRechecked = append(c.NotRechecked, f)
+		}
+	}
+	return c
 }
 
 // Diff compares two runs by finding fingerprint.

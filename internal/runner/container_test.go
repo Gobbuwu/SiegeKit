@@ -97,7 +97,11 @@ func TestBuiltinPluginsFindPlantedIssues(t *testing.T) {
 			}
 		}
 	}
-	r, err := Run(context.Background(), e, all, Options{Version: "test", TargetDir: target, DataRoot: dataRoot, Checks: checks.Builtin()})
+	repo, _, err := Select(all, nil, "repo", nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r, err := Run(context.Background(), e, repo, Options{Version: "test", TargetDir: target, DataRoot: dataRoot, Checks: checks.Builtin()})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -173,6 +177,7 @@ func TestPinnedImageVersions(t *testing.T) {
 	versionArgs := map[string][]string{
 		"bandit": {"--version"}, "checkov": {"--version"}, "gitleaks": {"version"},
 		"gosec": {"-fmt", "sarif", "-out", "/out/v.sarif", "-no-fail", "/target/..."}, "trivy": {"--version"}, "gitleaks-history": {"version"},
+		"zap": {"zap.sh", "-Xmx512m", "-cmd", "-silent", "-dir", "/tmp/zap", "-version"}, "zap-active": {"zap.sh", "-Xmx512m", "-cmd", "-silent", "-dir", "/tmp/zap", "-version"},
 	}
 	all, err := plugins.Builtin()
 	if err != nil {
@@ -198,7 +203,9 @@ func TestPinnedImageVersions(t *testing.T) {
 		os.Chmod(src, 0o755)
 		r, err := e.Run(context.Background(), sandbox.Spec{
 			Image: image, Args: args, OutDir: out, TargetDir: src, Network: "none",
-			CPUs: 1, MemoryMiB: 512, Timeout: 120 * time.Second,
+			// ZAP needs more than 512 MiB just to start (OOM-killed at 512
+			// MiB even with a 256 MiB heap, measured 2026-11-19).
+			CPUs: 1, MemoryMiB: max(512, m.Resources.MemoryMiB), Timeout: 120 * time.Second,
 		})
 		if err != nil {
 			t.Fatalf("%s: %v", m.ID, err)

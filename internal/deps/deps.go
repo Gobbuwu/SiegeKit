@@ -20,6 +20,7 @@ import (
 	"github.com/Gobbuwu/SiegeKit/internal/manifest"
 	"github.com/Gobbuwu/SiegeKit/internal/report"
 	"github.com/Gobbuwu/SiegeKit/internal/runner"
+	"github.com/Gobbuwu/SiegeKit/internal/sandbox"
 )
 
 // Engine checks for and downloads pinned images. *sandbox.Engine implements it.
@@ -68,8 +69,15 @@ func (d Dep) NeededBy() string {
 	return strings.Join(ids, ", ")
 }
 
+// RelayID is the Plugin ID of the relay image dependency, which every
+// active plugin needs (ADR 0019, ADR 0021).
+const RelayID = "siegekit-relay"
+
 // Name is how the dependency is shown to the user.
 func (d Dep) Name() string {
+	if d.Plugin.ID == RelayID {
+		return fmt.Sprintf("%s %s container image (runs SiegeKit's relay for web tests)", d.Plugin.Tool.Name, d.Plugin.Tool.Version)
+	}
 	if d.Kind == Data {
 		return d.Plugin.Tool.Name + " data"
 	}
@@ -110,6 +118,22 @@ func Plan(ctx context.Context, eng Engine, ms []*manifest.Manifest, dataRoot str
 		if m.Data != nil {
 			out = append(out, Dep{Kind: Data, Plugin: m, Image: image, Installed: dataInstalled(dataRoot, m.ID), Size: -1})
 		}
+	}
+	// Active plugins reach the target through the relay container, which
+	// runs in a pinned image of its own.
+	var active []*manifest.Manifest
+	for _, m := range ms {
+		if _, ok := runner.ImageFor(m); ok && m.Network == "target-only" {
+			active = append(active, m)
+		}
+	}
+	if len(active) > 0 {
+		has, err := eng.HasImage(ctx, sandbox.RelayImage)
+		if err != nil {
+			return nil, err
+		}
+		relay := &manifest.Manifest{ID: RelayID, Tool: &manifest.Tool{Name: "alpine", Version: sandbox.RelayImageVersion}}
+		out = append(out, Dep{Kind: Image, Plugin: relay, Image: sandbox.RelayImage, Installed: has, Size: -1, Users: active})
 	}
 	return out, nil
 }

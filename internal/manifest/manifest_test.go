@@ -135,6 +135,29 @@ func TestRejections(t *testing.T) {
 		"data without section": func(m map[string]any) {
 			m["run"].(map[string]any)["args"] = []string{"--db", "{data}"}
 		},
+		"config placeholder without config": func(m map[string]any) {
+			m["run"].(map[string]any)["args"] = []string{"-autorun", "{config}"}
+		},
+		"config without placeholder": func(m map[string]any) {
+			m["run"].(map[string]any)["config"] = map[string]any{"a": "b"}
+		},
+		"config not an object": func(m map[string]any) {
+			m["run"].(map[string]any)["args"] = []string{"{config}"}
+			m["run"].(map[string]any)["config"] = []any{"x"}
+		},
+		"config unknown placeholder": func(m map[string]any) {
+			m["run"].(map[string]any)["args"] = []string{"{config}"}
+			m["run"].(map[string]any)["config"] = map[string]any{"a": []any{map[string]any{"b": "{outdir}"}}}
+		},
+		"config too deep": func(m map[string]any) {
+			var v any = "x"
+			for range 18 {
+				v = map[string]any{"a": v}
+			}
+			m["run"].(map[string]any)["args"] = []string{"{config}"}
+			m["run"].(map[string]any)["config"] = v
+		},
+		"localOnly passive":     func(m map[string]any) { m["localOnly"] = true },
 		"data mount traversal":  func(m map[string]any) { m["data"] = dataSection("/tmp/../etc") },
 		"data mount on target":  func(m map[string]any) { m["data"] = dataSection("/target/db") },
 		"data mount in workdir": func(m map[string]any) { m["data"] = dataSection("/tmp/work/db") },
