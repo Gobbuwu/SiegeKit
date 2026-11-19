@@ -353,3 +353,29 @@ func TestCloseEndsTunnels(t *testing.T) {
 		t.Error("request succeeded after Close")
 	}
 }
+
+func TestReadOnly(t *testing.T) {
+	for _, scheme := range []string{"http", "https"} {
+		u := newUpstream(t, scheme == "https", nil)
+		host := "app.test"
+		if scheme == "https" {
+			host = "example.com" // httptest's certificate name
+		}
+		p, c, origin := start(t, u, scheme, host, func(c *Config) { c.ReadOnly = true })
+		for _, m := range []string{http.MethodGet, http.MethodHead} {
+			if code, _, err := get(t, c, origin+"/", func(r *http.Request) { r.Method = m }); err != nil || code != 200 {
+				t.Errorf("%s %s: %d %v", scheme, m, code, err)
+			}
+		}
+		for _, m := range []string{http.MethodPost, http.MethodPut, http.MethodDelete, http.MethodPatch, http.MethodOptions, "PROPFIND"} {
+			before := u.hits.Load()
+			code, _, err := get(t, c, origin+"/", func(r *http.Request) { r.Method = m })
+			if err != nil || code != http.StatusForbidden || u.hits.Load() != before {
+				t.Errorf("%s %s: answered %d (%v), target hit %v", scheme, m, code, err, u.hits.Load() != before)
+			}
+		}
+		if s := p.Stats(); s.Requests != 2 || s.Refused != 6 {
+			t.Errorf("%s stats %+v", scheme, s)
+		}
+	}
+}

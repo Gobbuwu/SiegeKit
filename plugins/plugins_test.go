@@ -1,10 +1,12 @@
 package plugins
 
 import (
+	"io/fs"
 	"slices"
 	"strconv"
 	"strings"
 	"testing"
+	"testing/fstest"
 
 	"github.com/Gobbuwu/SiegeKit/internal/sandbox"
 )
@@ -53,11 +55,51 @@ func TestBuiltin(t *testing.T) {
 					heap, _ = strconv.Atoi(strings.TrimSuffix(v, "m"))
 				}
 			}
+			// ZAP's spider fills in and submits forms, POST forms included,
+			// unless told not to (found by the security review of M2.4a,
+			// reproduced 2026-11-19). A plugin that runs on deployed targets
+			// must not submit forms.
+			if !*m.Destructive {
+				jobs, _ := m.Run.Config["jobs"].([]any)
+				for _, j := range jobs {
+					job, _ := j.(map[string]any)
+					if job["type"] != "spider" {
+						continue
+					}
+					p, _ := job["parameters"].(map[string]any)
+					if p["processForm"] != false || p["postForm"] != false {
+						t.Errorf("%s: a non-destructive spider must set processForm and postForm to false", m.ID)
+					}
+				}
+			}
 			if heap <= 0 || heap > m.Resources.MemoryMiB/2 {
 				t.Errorf("%s: Java heap %d MiB must be set and at most half of %d MiB", m.ID, heap, m.Resources.MemoryMiB)
 			}
 		default:
 			t.Errorf("%s: mode %s", m.ID, m.Mode)
 		}
+	}
+}
+
+func TestLoadRefusesBrokenManifests(t *testing.T) {
+	good, err := files.ReadFile("gitleaks/plugin.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, tc := range map[string]struct {
+		fsys fstest.MapFS
+		want string
+	}{
+		"invalid":         {fstest.MapFS{"x/plugin.json": {Data: []byte(`{}`)}}, "x/plugin.json"},
+		"wrong directory": {fstest.MapFS{"other/plugin.json": {Data: good}}, `does not match directory "other"`},
+		"unreadable":      {fstest.MapFS{"gitleaks/plugin.json": {Mode: fs.ModeDir}}, "gitleaks/plugin.json"},
+	} {
+		if _, err := load(tc.fsys); err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("%s: got %v, want %q", name, err, tc.want)
+		}
+	}
+	ms, err := load(fstest.MapFS{"gitleaks/plugin.json": {Data: good}})
+	if err != nil || len(ms) != 1 || ms[0].ID != "gitleaks" {
+		t.Errorf("good manifest: %v %v", ms, err)
 	}
 }

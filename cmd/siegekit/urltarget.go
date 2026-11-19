@@ -214,6 +214,9 @@ func runURL(ctx context.Context, u *target.URL, addrs []netip.Addr, mode target.
 	}
 	fmt.Fprintf(stdout, "Limits: at most %.0f requests per second, stop after %d server errors in a row; only %s is reachable, and every request is labeled \"SiegeKit/%s\".\n",
 		limits.Rate, limits.MaxServerErrors, strings.TrimSuffix(u.String(), u.Path), version)
+	if mode == "deployed" {
+		fmt.Fprintln(stdout, "Only GET and HEAD requests are allowed: no check may change data on a deployed target.")
+	}
 	if len(planned) > 0 {
 		if err := audit.Append(filepath.Join(dir, "audit.log"), audit.Entry{
 			Time: time.Now().UTC(), Version: version, Target: u.String(), Addresses: addrStrings(addrs),

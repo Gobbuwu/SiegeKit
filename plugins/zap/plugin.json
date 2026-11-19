@@ -3,7 +3,7 @@
   "id": "zap",
   "name": "ZAP crawl and passive checks",
   "version": "1.0.0",
-  "description": "Crawls the target with ZAP's spider and reports what ZAP's passive rules see in the responses: missing security headers, cookie flags, information leaks. Sends only ordinary page requests, so it also runs on deployed targets.",
+  "description": "Crawls the target with ZAP's spider and reports what ZAP's passive rules see in the responses: missing security headers, cookie flags, information leaks. Follows links with GET requests and does not submit forms, so it also runs on deployed targets.",
   "family": "dast",
   "mode": "active",
   "destructive": false,
@@ -82,7 +82,9 @@
           "type": "spider",
           "parameters": {
             "context": "target",
-            "maxDuration": 5
+            "maxDuration": 5,
+            "processForm": false,
+            "postForm": false
           }
         },
         {
