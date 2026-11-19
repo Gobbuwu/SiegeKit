@@ -3,6 +3,7 @@
 - Status: Accepted
 - Date: 2026-11-19
 - Amends: [0018](0018-egress-proxy.md) (items 2 and 7)
+- Amended by: [0021](0021-built-in-relay.md) (the relay is SiegeKit's own binary in the official Alpine image, not `alpine/socat`)
 
 ## Context
 

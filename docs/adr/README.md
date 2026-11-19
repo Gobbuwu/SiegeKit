@@ -23,6 +23,7 @@ Each significant design decision is recorded as a short ADR before code is writt
 | [0017](0017-target-rule-details.md) | Target rule details (amends 0005) | Accepted |
 | [0018](0018-egress-proxy.md) | Egress proxy design (amends 0006) | Accepted |
 | [0019](0019-egress-relay.md) | Egress through a relay with no network (amends 0018) | Accepted |
+| [0021](0021-built-in-relay.md) | The relay runs SiegeKit's own binary (amends 0019) | Accepted |
 
 ADRs 0002 to 0011 were accepted at the M0 design sign-off on 2026-11-18.
 

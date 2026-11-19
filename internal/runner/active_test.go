@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -23,6 +24,35 @@ import (
 
 // activeTestImage is a pinned Alpine with busybox wget and nslookup.
 const activeTestImage = "docker.io/library/alpine@sha256:d9e853e87e55526f6b2917df91a2115c36dd7c696a35be12163d44e6e2a4b6bc"
+
+var (
+	relayBinOnce sync.Once
+	relayBinPath string
+	relayBinErr  error
+)
+
+// relayBin builds a static SiegeKit binary for the relay (ADR 0021): the
+// test binary itself has no relay command and may be dynamically linked.
+func relayBin(t *testing.T) string {
+	t.Helper()
+	relayBinOnce.Do(func() {
+		dir, err := os.MkdirTemp("", "siegekit-relay-bin-")
+		if err != nil {
+			relayBinErr = err
+			return
+		}
+		relayBinPath = filepath.Join(dir, "siegekit")
+		cmd := exec.Command("go", "build", "-o", relayBinPath, "../../cmd/siegekit")
+		cmd.Env = append(os.Environ(), "CGO_ENABLED=0")
+		if out, err := cmd.CombinedOutput(); err != nil {
+			relayBinErr = fmt.Errorf("build relay binary: %v\n%s", err, out)
+		}
+	})
+	if relayBinErr != nil {
+		t.Fatal(relayBinErr)
+	}
+	return relayBinPath
+}
 
 func activeSetup(t *testing.T, status int) (*sandbox.Engine, egress.Config, *atomic.Int32, int) {
 	t.Helper()
@@ -97,7 +127,7 @@ echo "dns=$(nslookup example.com 2>&1 | tr '\n' ' ')"
 echo "routes=$(ip route | wc -l)"
 echo "interfaces=$(ip -o addr | grep -v ' lo ' | wc -l)"
 `, port)
-	res, err := RunTargetOnly(context.Background(), e, activeSpec(t, script), cfg, t.TempDir())
+	res, err := RunTargetOnly(context.Background(), e, activeSpec(t, script), cfg, t.TempDir(), relayBin(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -131,7 +161,7 @@ func TestActiveRunStopsOnServerErrors(t *testing.T) {
 	e, cfg, hits, port := activeSetup(t, http.StatusInternalServerError)
 	script := fmt.Sprintf(`for i in 1 2 3 4 5 6 7 8 9 10; do wget -qO- http://app.test:%d/ >/dev/null 2>&1; done; sleep 80`, port)
 	start := time.Now()
-	res, err := RunTargetOnly(context.Background(), e, activeSpec(t, script), cfg, t.TempDir())
+	res, err := RunTargetOnly(context.Background(), e, activeSpec(t, script), cfg, t.TempDir(), relayBin(t))
 	if err != nil {
 		t.Fatal(err)
 	}
