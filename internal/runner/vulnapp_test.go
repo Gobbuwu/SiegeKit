@@ -2,13 +2,15 @@ package runner
 
 import (
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
+	"sync"
 )
 
 // vulnApp is SiegeKit's own deliberately vulnerable web app for the active
 // tests (owner decision 2026-11-19: our own fixture for tests, so each issue
-// is known). Every issue is listed in vulnAppIssues with the ZAP rule that
+// is known). Every issue is listed in vulnAppIssues with the rule that
 // must find it. It runs in the test process; nothing here is shipped.
 func vulnApp() http.Handler {
 	mux := http.NewServeMux()
@@ -57,11 +59,45 @@ func vulnApp() http.Handler {
 		}
 		page(w, "<pre>Terms of use.</pre>")
 	})
+	// An exposed git config and an exposed .env file, served as plain text
+	// (no secrets: the values are placeholders).
+	mux.HandleFunc("/.git/config", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/plain")
+		fmt.Fprint(w, "[core]\n\trepositoryformatversion = 0\n\tbare = false\n")
+	})
+	mux.HandleFunc("/.env", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/plain")
+		fmt.Fprint(w, "APP_NAME=shop\nAPP_ENV=local\n")
+	})
+	// PUT stores the file and GET serves it back, as a misconfigured WebDAV
+	// server would.
+	var mu sync.Mutex
+	stored := map[string][]byte{}
+	mux.HandleFunc("/testing-put.txt", func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		defer mu.Unlock()
+		switch r.Method {
+		case http.MethodPut:
+			b, _ := io.ReadAll(io.LimitReader(r.Body, 1<<16))
+			stored[r.URL.Path] = b
+			w.WriteHeader(http.StatusCreated)
+		case http.MethodGet:
+			b, ok := stored[r.URL.Path]
+			if !ok {
+				http.NotFound(w, r)
+				return
+			}
+			w.Header().Set("Content-Type", "text/plain")
+			w.Write(b)
+		default:
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		}
+	})
 	return mux
 }
 
-// vulnAppIssues maps each planted issue to the ZAP rule ID that must report
-// it, per plugin.
+// vulnAppIssues maps each planted issue to the rule (ZAP rule ID or Nuclei
+// template ID) that must report it, per plugin.
 var vulnAppIssues = map[string]map[string]string{
 	"zap": {
 		"10020": "missing anti-clickjacking header",
@@ -75,5 +111,13 @@ var vulnAppIssues = map[string]map[string]string{
 		"40012": "reflected cross-site scripting in /search",
 		"40018": "SQL injection in /item",
 		"6":     "path traversal in /file",
+	},
+	"nuclei": {
+		"http-missing-security-headers": "missing security headers",
+		"git-config":                    "exposed /.git/config",
+		"laravel-env":                   "exposed /.env",
+	},
+	"nuclei-intrusive": {
+		"put-method-enabled": "PUT uploads a file that the server then serves",
 	},
 }

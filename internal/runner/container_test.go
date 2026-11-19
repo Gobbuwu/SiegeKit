@@ -178,6 +178,7 @@ func TestPinnedImageVersions(t *testing.T) {
 		"bandit": {"--version"}, "checkov": {"--version"}, "gitleaks": {"version"},
 		"gosec": {"-fmt", "sarif", "-out", "/out/v.sarif", "-no-fail", "/target/..."}, "trivy": {"--version"}, "gitleaks-history": {"version"},
 		"zap": {"zap.sh", "-Xmx512m", "-cmd", "-silent", "-dir", "/tmp/zap", "-version"}, "zap-active": {"zap.sh", "-Xmx512m", "-cmd", "-silent", "-dir", "/tmp/zap", "-version"},
+		"nuclei": {"-version", "-duc"}, "nuclei-intrusive": {"-version", "-duc"},
 	}
 	all, err := plugins.Builtin()
 	if err != nil {

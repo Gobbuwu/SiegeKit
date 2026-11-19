@@ -36,9 +36,11 @@ Useful scan flags:
 
 `siegekit scan -h` lists them all.
 
-A URL scan sends real requests to the app. It first prints the plan (target, mode, addresses, checks and limits), records the run in SiegeKit's audit log, and sends one GET to check that the app answers. If it does not, nothing else is sent and the exit code is 1. Two checks run:
+A URL scan sends real requests to the app. It first prints the plan (target, mode, addresses, checks and limits), records the run in SiegeKit's audit log, and sends one GET to check that the app answers. If it does not, nothing else is sent and the exit code is 1. These checks run:
 - `zap` crawls the app and reports what ZAP's passive rules see, such as missing security headers and cookie flags.
+- `nuclei` runs Nuclei's templates for known vulnerabilities, exposed files (such as `/.git/config` and `/.env`), admin panels and misconfigurations: about 10,000 requests, on every target.
 - `zap-active` sends attack payloads (SQL injection, cross-site scripting, path traversal) that can change data. It runs only on local targets: this machine, or a private address the person confirmed. On `--deployed` targets it is skipped. On this machine it runs only after the person types `yes` in a terminal, or with `--authorized-host HOST` (the target's host); `--yes` does not count. Without either, it is reported as skipped. Pass `--authorized-host` only when the person told you, in this conversation, to run the attack scan on that app.
+- `nuclei-intrusive` runs Nuclei's intrusive templates, such as uploading a file with PUT. It follows the same rules as `zap-active`.
 
 Every request goes through SiegeKit's egress proxy, which allows only the target's own address and labels the traffic `SiegeKit/<version>`. On `--deployed` targets it also allows only GET and HEAD requests, so no check can change data there. Web tests run only on Linux for now; elsewhere the run is reported as incomplete. Scan a URL only when the person asked for that app to be tested, and prefer a local or staging copy.
 

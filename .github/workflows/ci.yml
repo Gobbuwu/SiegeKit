@@ -43,7 +43,8 @@ jobs:
         env:
           # Container sandbox tests need Docker, which GitHub provides on Linux runners only.
           SIEGEKIT_CONTAINER_TESTS: ${{ runner.os == 'Linux' && '1' || '0' }}
-        run: go test -race -count=1 -cover ./...
+        # The container tests run full scans (ZAP, Nuclei): more than the default 10 minutes.
+        run: go test -race -count=1 -cover -timeout 30m ./...
       - name: Scan SiegeKit itself
         if: runner.os == 'Linux'
         # Any finding fails CI (owner decision, 2026-11-19): --fail-on info
@@ -67,6 +68,7 @@ jobs:
           go test -run='^$' -fuzz=FuzzParse -fuzztime=60s ./internal/manifest
           go test -run='^$' -fuzz=FuzzSARIF -fuzztime=60s ./internal/sarif
           go test -run='^$' -fuzz=FuzzBandit -fuzztime=30s ./internal/bandit
+          go test -run='^$' -fuzz=FuzzNuclei -fuzztime=30s ./internal/nuclei
           go test -run='^$' -fuzz=FuzzBackendRules -fuzztime=30s ./internal/checks
           go test -run='^$' -fuzz=FuzzDotenv -fuzztime=30s ./internal/checks
           go test -run='^$' -fuzz=FuzzParse -fuzztime=60s ./internal/target

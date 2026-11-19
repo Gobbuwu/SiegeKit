@@ -286,7 +286,7 @@
           "minItems": 1,
           "items": {
             "type": "string",
-            "pattern": "^([^{}]|\\{(target|outdir|workdir|threads|ratelimit|data|config)\\})*$"
+            "pattern": "^([^{}]|\\{(target|target-base|outdir|workdir|threads|ratelimit|data|config)\\})*$"
           },
           "description": "Argument vector passed directly to the tool, never through a shell. Only the listed placeholders are allowed; {data} needs a data section and {config} needs run.config."
         },
@@ -380,7 +380,8 @@
             "sarif-gitleaks",
             "sarif-checkov",
             "sarif-zap",
-            "bandit-json"
+            "bandit-json",
+            "nuclei-jsonl"
           ]
         },
         "file": {

@@ -201,6 +201,10 @@ func runActive(ctx context.Context, run ActiveRunner, m *manifest.Manifest, opt 
 func substituteURL(args []string, u string, cpus int, rate float64) []string {
 	r := strings.NewReplacer(
 		"{target}", u,
+		// The target without a trailing slash, for tools that append paths
+		// to it: Nuclei turns "http://host/" into "http://host//.env", which
+		// servers that redirect double slashes never answer (ADR 0026).
+		"{target-base}", strings.TrimSuffix(u, "/"),
 		"{outdir}", sandbox.OutMount,
 		"{workdir}", sandbox.WorkDir,
 		"{threads}", strconv.Itoa(cpus),

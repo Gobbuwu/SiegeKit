@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/Gobbuwu/SiegeKit/internal/egress"
+	"github.com/Gobbuwu/SiegeKit/internal/files"
 	"github.com/Gobbuwu/SiegeKit/internal/manifest"
 	"github.com/Gobbuwu/SiegeKit/internal/report"
 	"github.com/Gobbuwu/SiegeKit/internal/sandbox"
@@ -183,6 +184,40 @@ func TestActiveRunStopsOnServerErrors(t *testing.T) {
 // pinned ZAP image against SiegeKit's vulnerable test app, behind the relay
 // and the egress proxy, and checks that every planted issue is found (M2.4).
 func TestZAPFindsPlantedIssues(t *testing.T) {
+	findsPlanted(t, "", "zap", "zap-active")
+}
+
+// TestNucleiFindsPlantedIssues runs nuclei and nuclei-intrusive with the
+// pinned image and templates (downloaded and checked as in ADR 0024) against
+// the vulnerable test app (M2.5b). SIEGEKIT_TEST_FILES_ROOT names a
+// directory that already holds the pinned files, for machines that cannot
+// download them.
+func TestNucleiFindsPlantedIssues(t *testing.T) {
+	if os.Getenv("SIEGEKIT_CONTAINER_TESTS") != "1" {
+		t.Skip("set SIEGEKIT_CONTAINER_TESTS=1 to run container tests")
+	}
+	ms := []*manifest.Manifest{builtin(t, "nuclei"), builtin(t, "nuclei-intrusive")}
+	root := os.Getenv("SIEGEKIT_TEST_FILES_ROOT")
+	if root == "" {
+		root = t.TempDir()
+	}
+	for _, m := range ms {
+		for _, a := range FilesFor(m) {
+			if !files.Installed(root, a) {
+				if err := files.Fetch(context.Background(), files.Client(), root, a); err != nil {
+					t.Fatal(err)
+				}
+			}
+		}
+	}
+	findsPlanted(t, root, "nuclei", "nuclei-intrusive")
+}
+
+// findsPlanted runs the plugins ids against the vulnerable test app behind
+// the relay and the egress proxy, and checks that each planted issue listed
+// for them in vulnAppIssues is found.
+func findsPlanted(t *testing.T, filesRoot string, ids ...string) {
+	t.Helper()
 	e, cfg, _, _ := activeSetup(t, http.StatusOK)
 	srv := httptest.NewServer(vulnApp())
 	t.Cleanup(srv.Close)
@@ -191,7 +226,10 @@ func TestZAPFindsPlantedIssues(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ms := []*manifest.Manifest{builtin(t, "zap"), builtin(t, "zap-active")}
+	var ms []*manifest.Manifest
+	for _, id := range ids {
+		ms = append(ms, builtin(t, id))
+	}
 	for _, m := range ms {
 		img, _ := ImageFor(m)
 		if has, err := e.HasImage(context.Background(), img); err != nil {
@@ -207,7 +245,7 @@ func TestZAPFindsPlantedIssues(t *testing.T) {
 		return RunTargetOnly(ctx, e, s, c, t.TempDir(), bin)
 	}
 	r, err := RunURL(context.Background(), run, ms, URLOptions{
-		Version: "test", Target: tu, Addrs: cfg.Addrs, Limits: LocalLimits,
+		Version: "test", Target: tu, Addrs: cfg.Addrs, Limits: LocalLimits, FilesRoot: filesRoot,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -233,8 +271,11 @@ func TestZAPFindsPlantedIssues(t *testing.T) {
 		}
 	}
 	for _, f := range r.Findings {
-		if !strings.HasPrefix(f.Location.URI, "http://app.test:"+su.Port()+"/") {
-			t.Errorf("finding outside the target: %+v", f.Location)
+		// The target, with or without the trailing slash (Nuclei is given
+		// it without, ADR 0026).
+		base := "http://app.test:" + su.Port()
+		if f.Location.URI != base && !strings.HasPrefix(f.Location.URI, base+"/") {
+			t.Errorf("finding outside the target: %s %+v: %s", f.RuleID, f.Location, f.Message)
 		}
 	}
 	noRelaysLeft(t, e)

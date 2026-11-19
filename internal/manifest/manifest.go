@@ -37,10 +37,10 @@ var (
 	GPUModes   = []string{"none", "optional", "required"}
 	Networks   = []string{"none", "target-only"}
 	Formats    = []string{"sarif", "json", "jsonl", "xml", "text"}
-	Placeholds = []string{"target", "outdir", "workdir", "threads", "ratelimit", "data", "config"}
+	Placeholds = []string{"target", "target-base", "outdir", "workdir", "threads", "ratelimit", "data", "config"}
 	// ConfigPlaceholds are the placeholders allowed in run.config strings.
 	ConfigPlaceholds = []string{"target", "target-regex"}
-	Parsers          = []string{"sarif", "sarif-gitleaks", "sarif-checkov", "sarif-zap", "bandit-json"}
+	Parsers          = []string{"sarif", "sarif-gitleaks", "sarif-checkov", "sarif-zap", "bandit-json", "nuclei-jsonl"}
 )
 
 var (
@@ -341,6 +341,9 @@ func (m *Manifest) Validate() error {
 		}
 		if m.Output.Parser == "bandit-json" && m.Output.Format != "json" {
 			add("output.parser \"bandit-json\" needs output.format \"json\"")
+		}
+		if m.Output.Parser == "nuclei-jsonl" && m.Output.Format != "jsonl" {
+			add("output.parser \"nuclei-jsonl\" needs output.format \"jsonl\"")
 		}
 	}
 
