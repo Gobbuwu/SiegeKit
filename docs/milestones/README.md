@@ -16,6 +16,11 @@ One file per milestone records what was built, how it was checked and what is st
 - **Remove a gap or an unverified item only with the PR that closes it,** and say which PR.
 - **A CI job that GitHub never started is "not run", not "failed"** (owner, 2026-11-19). A pull request merges when every check that ran is green. "Never started" means the job ran no step and GitHub's annotation says it was not acquired by a runner; any other cancelled or failed job still blocks. The PR's row says which job did not run.
 - **Each milestone ends with a milestone check** (owner, 2026-11-19): that milestone only, against its plan rows in `docs/m2-plan.md` (or the milestone's plan) and this record, not a full project check. The next milestone starts only when everything in the check works. Findings go into one report and one fix plan, not one small patch each.
+- **Every milestone check includes a hand triage of results** (owner, 2026-11-19), because the planted-issue tests only show that known issues are found. It starts with M2. The defaults below are a first version; change them only with the owner.
+  1. Sample: from the latest run of the gate on `main`, up to 20 findings per check, picked at random across the scanned repositories (note the run and how they were picked), plus every critical and high finding up to 20 more per check. From the Juice Shop scan, every finding of medium severity or above.
+  2. Label each finding as a true positive, a false positive or unclear, with one line of reason and its evidence (file and line, or URL and request).
+  3. Misses: list the known issues in the gate's fixtures and in Juice Shop that fall in a category a check that ran claims to test, and say which no check reported.
+  4. Record the counts per check (sampled, true, false, unclear, missed) under "Result quality" in the milestone record, with the labelled list in a file next to it. Each false positive or miss becomes a known gap or an item in the check's fix plan. No pass mark is set; the owner decides what blocks the milestone.
 - When a milestone's gate passes and the owner signs off, its record gets the date and the evidence for each gate item.
 
 ## How to cross-check a record
