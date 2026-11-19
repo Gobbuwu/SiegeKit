@@ -189,16 +189,21 @@ func (e *Engine) Run(ctx context.Context, s Spec) (*Result, error) {
 		return nil, err
 	}
 	uid, gid := os.Getuid(), os.Getgid()
-	if uid == 0 {
-		// Let the non-root container user write the output directory.
-		if err := os.Chown(s.OutDir, nonRootUID, nonRootGID); err != nil {
-			return nil, err
-		}
-	}
 	args, err := s.EngineArgs(name, uid, gid)
 	if err != nil {
 		return nil, err
 	}
+	// The container user may not map to the caller's UID (SiegeKit running as
+	// root, user-namespace remapping, rootless engines), so the output
+	// directory is opened up for the run. This is only safe because its
+	// parent must be private to the caller, which is checked first.
+	if err := requirePrivateParent(s.OutDir); err != nil {
+		return nil, err
+	}
+	if err := os.Chmod(s.OutDir, 0o777); err != nil {
+		return nil, err
+	}
+	defer os.Chmod(s.OutDir, 0o700)
 	runCtx, cancel := context.WithTimeout(ctx, s.Timeout)
 	defer cancel()
 	cmd := exec.CommandContext(runCtx, e.Bin, args...)
@@ -251,6 +256,19 @@ func (e *Engine) Run(ctx context.Context, s Spec) (*Result, error) {
 		res.Stderr = fmt.Sprintf("output exceeded %d bytes (%d written)\n", limit, size) + res.Stderr
 	}
 	return res, nil
+}
+
+// requirePrivateParent fails unless dir's parent grants no access to group or
+// others, so nobody else can reach the output directory while it is open.
+func requirePrivateParent(dir string) error {
+	st, err := os.Stat(filepath.Dir(dir))
+	if err != nil {
+		return err
+	}
+	if st.Mode().Perm()&0o077 != 0 {
+		return fmt.Errorf("parent of output directory %q must be accessible only by its owner (mode 0700), has %v", dir, st.Mode().Perm())
+	}
+	return nil
 }
 
 func (e *Engine) forceRemove(name string) {

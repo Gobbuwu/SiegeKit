@@ -94,6 +94,23 @@ func TestSpecRejections(t *testing.T) {
 	})
 }
 
+func TestRunRefusesSharedParent(t *testing.T) {
+	shared := t.TempDir()
+	if err := os.Chmod(shared, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	out := filepath.Join(shared, "out")
+	if err := os.Mkdir(out, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	s := spec(t, "true")
+	s.OutDir = out
+	e := &Engine{Bin: "/bin/false"}
+	if _, err := e.Run(context.Background(), s); err == nil || !strings.Contains(err.Error(), "accessible only by its owner") {
+		t.Fatalf("expected refusal, got %v", err)
+	}
+}
+
 func TestTailBuffer(t *testing.T) {
 	var b tailBuffer
 	b.Write([]byte(strings.Repeat("a", tailMax)))
