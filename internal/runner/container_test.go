@@ -112,7 +112,10 @@ func TestPinnedImageVersions(t *testing.T) {
 		t.Fatal(err)
 	}
 	// gosec's image wraps it in an entrypoint script that prints nothing for
-	// -version, so its SARIF output (which names the tool version) is read.
+	// -version, and its binary reports version "dev" (seen in CI, 2026-11-19),
+	// so for gosec only the tool name is checked; its version rests on the
+	// 2.30.0 tag that the digest was resolved from (THIRD_PARTY.md).
+	unversioned := map[string]bool{"gosec": true}
 	versionArgs := map[string][]string{
 		"bandit": {"--version"}, "checkov": {"--version"}, "gitleaks": {"version"},
 		"gosec": {"-fmt", "sarif", "-out", "/out/v.sarif", "-no-fail", "/target/..."}, "trivy": {"--version"},
@@ -161,6 +164,12 @@ func TestPinnedImageVersions(t *testing.T) {
 			if len(got) > 1000 {
 				got = got[:1000]
 			}
+		}
+		if unversioned[m.ID] {
+			if !strings.Contains(got, `"name": "`+m.Tool.Name+`"`) {
+				t.Errorf("%s: image is not %s:\n%s", m.ID, m.Tool.Name, got)
+			}
+			continue
 		}
 		if !strings.Contains(got, `"version": "`+m.Tool.Version+`"`) && !strings.Contains(got, m.Tool.Version+"\n") && !strings.Contains(got, " "+m.Tool.Version) && !strings.Contains(got, "v"+m.Tool.Version) {
 			cfg, _ := exec.Command(e.Bin, "image", "inspect", "--format", "{{json .Config.Entrypoint}} {{json .Config.Cmd}}", image).CombinedOutput()
