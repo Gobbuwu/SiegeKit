@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/Gobbuwu/SiegeKit/internal/audit"
+	"github.com/Gobbuwu/SiegeKit/internal/deps"
 	"github.com/Gobbuwu/SiegeKit/internal/egress"
 	"github.com/Gobbuwu/SiegeKit/internal/findings"
 	"github.com/Gobbuwu/SiegeKit/internal/manifest"
@@ -213,7 +214,8 @@ func runURL(ctx context.Context, u *target.URL, addrs []netip.Addr, mode target.
 			runnable = append(runnable, m)
 		}
 	}
-	ex, un, _, err := prepare(ctx, runnable, "", o.consent, stdout)
+	// Active plugins need no tool data, but some need pinned files.
+	ex, un, _, err := prepare(ctx, runnable, deps.Roots{Files: rootsIn(dir).Files}, o.consent, stdout)
 	if err != nil {
 		return fail(err)
 	}
@@ -298,6 +300,7 @@ func runURL(ctx context.Context, u *target.URL, addrs []netip.Addr, mode target.
 	}
 	run, err := runner.RunURL(ctx, active, selected, runner.URLOptions{
 		Version: version, Target: u, Addrs: addrs, Deployed: o.deployed, Limits: limits, Unavailable: unavailable,
+		FilesRoot: rootsIn(dir).Files,
 	})
 	if errors.Is(err, context.Canceled) {
 		return fail(errors.New("interrupted; no report written"))

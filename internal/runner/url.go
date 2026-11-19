@@ -49,6 +49,8 @@ type URLOptions struct {
 	Deployed bool
 	Limits   Limits
 	WorkDir  string // parent for the private temporary directory; "" means the OS default
+	// FilesRoot is where pinned files are kept (ADR 0024).
+	FilesRoot string
 	// Unavailable records plugins that cannot run because a dependency is
 	// missing (ADR 0016), keyed by plugin ID.
 	Unavailable map[string]Unavailable
@@ -107,7 +109,7 @@ func SkipReason(m *manifest.Manifest, deployed bool) string {
 	case deployed && m.LocalOnly:
 		return "runs only on local targets: deployed targets get passive checks until request limits are measured (M2.10)"
 	case deployed && *m.Destructive:
-		return "can change data on the target, so it does not run on deployed targets (opting in comes with --allow-destructive in M2.5)"
+		return "can change data on the target, so it does not run on deployed targets (no opt-in before request limits are measured in M2.10)"
 	}
 	return ""
 }
@@ -125,6 +127,10 @@ func runActive(ctx context.Context, run ActiveRunner, m *manifest.Manifest, opt 
 	image, ok := ImageFor(m)
 	if !ok {
 		return fail(report.Skipped, "no container image for linux/%s", runtime.GOARCH)
+	}
+	fileMounts, err := FileMounts(m, opt.FilesRoot)
+	if err != nil {
+		return fail(report.Failed, "%v", err)
 	}
 	cpus := min(m.Resources.CPUs, runtime.NumCPU())
 	u := opt.Target.String()
@@ -155,7 +161,7 @@ func runActive(ctx context.Context, run ActiveRunner, m *manifest.Manifest, opt 
 		ReadOnly: opt.Deployed && !*m.Destructive,
 	}
 	res, err := run(ctx, sandbox.Spec{
-		Image: image, Args: args, Env: m.Run.Env, OutDir: outDir, ConfigFile: configFile,
+		Image: image, Args: args, Env: m.Run.Env, OutDir: outDir, ConfigFile: configFile, Files: fileMounts,
 		CPUs: cpus, MemoryMiB: m.Resources.MemoryMiB,
 		Timeout: time.Duration(m.Resources.TimeoutSeconds) * time.Second,
 		// Java tools keep their working files in /tmp.

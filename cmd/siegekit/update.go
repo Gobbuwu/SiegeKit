@@ -8,7 +8,6 @@ import (
 	"io"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"slices"
 	"syscall"
 
@@ -74,7 +73,7 @@ func update(args []string, stdout, stderr io.Writer) int {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	fmt.Fprintf(stdout, "Updating data for %d plugin(s). This downloads from each tool's publisher.\n", len(selected))
-	_, un, fetched, err := prepare(ctx, selected, filepath.Join(dir, "data"), consent{yes: *yes, none: *noInstall, data: true}, stdout)
+	_, un, fetched, err := prepare(ctx, selected, rootsIn(dir), consent{yes: *yes, none: *noInstall, data: true}, stdout)
 	if err != nil {
 		return fail(err)
 	}

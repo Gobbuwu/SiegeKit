@@ -27,6 +27,8 @@ Each significant design decision is recorded as a short ADR before code is writt
 | [0021](0021-built-in-relay.md) | The relay runs SiegeKit's own binary (amends 0019) | Accepted |
 | [0022](0022-plan-confirmation.md) | Ask before running only for URL targets (amends 0004) | Accepted |
 | [0023](0023-active-web-scans.md) | Running active web scans: ZAP as the first active plugin (amends 0004) | Accepted |
+| [0024](0024-pinned-file-downloads.md) | Pinned file downloads (amends 0004, 0008, 0016) | Accepted |
+| [0025](0025-m2-5-web-tools.md) | Nuclei, ffuf and Schemathesis (M2.5) (amends 0023) | Accepted |
 
 ADRs 0002 to 0011 were accepted at the M0 design sign-off on 2026-11-18.
 

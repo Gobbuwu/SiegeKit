@@ -2,6 +2,7 @@
 
 - Status: Accepted
 - Date: 2026-11-18
+- Amended by: [0024](0024-pinned-file-downloads.md) (pinned files come only from the publisher's GitHub releases)
 
 ## Context
 

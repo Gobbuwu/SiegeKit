@@ -19,6 +19,7 @@ import (
 
 	"github.com/Gobbuwu/SiegeKit/internal/bandit"
 	"github.com/Gobbuwu/SiegeKit/internal/checks"
+	"github.com/Gobbuwu/SiegeKit/internal/files"
 	"github.com/Gobbuwu/SiegeKit/internal/findings"
 	"github.com/Gobbuwu/SiegeKit/internal/manifest"
 	"github.com/Gobbuwu/SiegeKit/internal/report"
@@ -79,6 +80,7 @@ type Options struct {
 	TargetDir string         // absolute path of the source directory to scan
 	WorkDir   string         // parent for the private temporary directory; "" means the OS default
 	DataRoot  string         // where 'siegekit update' keeps tool data (ADR 0014)
+	FilesRoot string         // where pinned files are kept (ADR 0024)
 	Checks    []checks.Check // built-in checks to run (ADR 0015)
 	// Unavailable records plugins that cannot run because a dependency is
 	// missing (ADR 0016), keyed by plugin ID. They are reported, not run.
@@ -281,6 +283,10 @@ func runPlugin(ctx context.Context, ex Executor, m *manifest.Manifest, opt Optio
 		}
 		dataMount = m.Data.Mount
 	}
+	fileMounts, err := FileMounts(m, opt.FilesRoot)
+	if err != nil {
+		return fail(report.Failed, "%v", err)
+	}
 	cpus := min(m.Resources.CPUs, runtime.NumCPU())
 	args, err := substitute(m.Run.Args, cpus, dataMount)
 	if err != nil {
@@ -292,7 +298,7 @@ func runPlugin(ctx context.Context, ex Executor, m *manifest.Manifest, opt Optio
 	}
 	res, err := ex.Run(ctx, sandbox.Spec{
 		Image: image, Args: args, Env: m.Run.Env, TargetDir: opt.TargetDir, OutDir: out, Network: m.Network,
-		DataDir: dataDir, DataMount: dataMount,
+		DataDir: dataDir, DataMount: dataMount, Files: fileMounts,
 		CPUs: cpus, MemoryMiB: m.Resources.MemoryMiB,
 		Timeout: time.Duration(m.Resources.TimeoutSeconds) * time.Second,
 	})
@@ -356,6 +362,32 @@ func ImageFor(m *manifest.Manifest) (string, bool) {
 		}
 	}
 	return "", false
+}
+
+// FilesFor returns the pinned archives and binaries m needs on this machine
+// (ADR 0024). Containers run Linux, so the platform is linux/GOARCH.
+func FilesFor(m *manifest.Manifest) []manifest.Artifact {
+	var out []manifest.Artifact
+	for _, a := range m.Tool.Artifacts {
+		if (a.Kind == "archive" || a.Kind == "binary") && (a.Platform == "any" || a.Platform == "linux/"+runtime.GOARCH) {
+			out = append(out, a)
+		}
+	}
+	return out
+}
+
+// FileMounts returns the read-only mounts of m's pinned files under root.
+// A file that is not installed is an error: the dependency step reports
+// plugins whose files are missing, so this is only a safety net.
+func FileMounts(m *manifest.Manifest, root string) ([]sandbox.FileMount, error) {
+	var out []sandbox.FileMount
+	for _, a := range FilesFor(m) {
+		if root == "" || !files.Installed(root, a) {
+			return nil, fmt.Errorf("pinned file %s is not installed", path.Base(a.Ref))
+		}
+		out = append(out, sandbox.FileMount{Host: files.Dir(root, a), Mount: a.Mount})
+	}
+	return out, nil
 }
 
 // substitute replaces placeholders with their in-container values. The

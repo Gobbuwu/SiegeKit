@@ -1,0 +1,65 @@
+{
+  "schemaVersion": 1,
+  "id": "example-file-not-archive",
+  "name": "Example passive scanner (test fixture)",
+  "version": "0.1.0",
+  "description": "Test fixture only. The digest and checksum are placeholders, not a real artifact.",
+  "family": "secrets",
+  "mode": "passive",
+  "destructive": false,
+  "targets": [
+    "repo"
+  ],
+  "tool": {
+    "name": "example",
+    "version": "1.0.0",
+    "license": "MIT",
+    "homepage": "https://example.invalid/",
+    "artifacts": [
+      {
+        "platform": "linux/arm64",
+        "kind": "oci-image",
+        "ref": "registry.example.invalid/runtime@sha256:0000000000000000000000000000000000000000000000000000000000000000",
+        "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+      },
+      {
+        "platform": "linux/arm64",
+        "kind": "archive",
+        "ref": "https://github.com/example/tool/releases/download/v1.0.0/tool.exe",
+        "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+        "size": 4367536,
+        "mount": "/siegekit/files/tool"
+      },
+      {
+        "platform": "linux/arm64",
+        "kind": "binary",
+        "ref": "https://github.com/example/tool/releases/download/v1.0.0/tool-helper",
+        "sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+        "size": 1000,
+        "mount": "/siegekit/files/helper"
+      }
+    ]
+  },
+  "resources": {
+    "cpus": 2,
+    "memoryMiB": 1024,
+    "gpu": "none",
+    "timeoutSeconds": 600,
+    "maxTimeoutSeconds": 3600
+  },
+  "network": "none",
+  "run": {
+    "args": [
+      "scan",
+      "--source",
+      "{target}",
+      "--report",
+      "{outdir}/report.sarif"
+    ]
+  },
+  "output": {
+    "format": "sarif",
+    "parser": "sarif",
+    "file": "report.sarif"
+  }
+}

@@ -148,7 +148,7 @@ func TestSkipReason(t *testing.T) {
 	destructive := *zap
 	d := true
 	destructive.Destructive = &d
-	if !strings.Contains(SkipReason(&destructive, true), "--allow-destructive") {
+	if !strings.Contains(SkipReason(&destructive, true), "does not run on deployed targets") {
 		t.Error("destructive plugin not skipped on a deployed target")
 	}
 }
