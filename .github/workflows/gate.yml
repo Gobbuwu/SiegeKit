@@ -2,6 +2,7 @@ name: Real-repo gate
 
 # M1 gate: scanning real repositories must never crash, fail or time out.
 # Each repository is pinned to a commit so results are reproducible.
+# M2.4b (ADR 0023): a URL scan of OWASP Juice Shop, a known vulnerable app.
 on:
   workflow_dispatch:
   schedule:
@@ -14,6 +15,8 @@ on:
       - internal/runner/**
       - internal/sandbox/**
       - internal/checks/**
+      - internal/egress/**
+      - internal/relay/**
 
 # Read-only (ADR 0008).
 permissions:
@@ -91,3 +94,54 @@ jobs:
           # Belt and braces: every plugin ran, or was skipped because the
           # repository has no files of its language.
           jq -e '[.plugins[] | select(.status != "ran" and (.status != "skipped" or (.reason | startswith("no files matching") | not)))] | length == 0' "$RUNNER_TEMP/report/report.json"
+
+  web:
+    # M2.4b (ADR 0023): URL scan of OWASP Juice Shop v20.4.0, a deliberately
+    # vulnerable app, running on this runner's loopback (local mode). The
+    # image is pinned to the multi-architecture index digest of tag v20.4.0,
+    # resolved with `docker buildx imagetools inspect` on 2026-11-19.
+    name: Scan OWASP Juice Shop by URL
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: false
+      - name: Build
+        # Static, because the relay runs this binary in Alpine (ADR 0021).
+        run: CGO_ENABLED=0 go build -o "$RUNNER_TEMP/siegekit" ./cmd/siegekit
+      - name: Start Juice Shop
+        run: |
+          docker run -d --name juice-shop -p 127.0.0.1:3000:3000 \
+            docker.io/bkimminich/juice-shop@sha256:9bbaecc41791f00b002bc65931cc5ff355fbdb941fa72b06558c18dace43197b
+          for i in $(seq 1 60); do
+            curl -sf -o /dev/null http://127.0.0.1:3000/ && exit 0
+            sleep 2
+          done
+          docker logs juice-shop
+          exit 1
+      - name: Scan
+        # Exit 0 or 3 as above. Both ZAP plugins must run and reach the app,
+        # and the passive checks must report the issues seen in every local
+        # run on 2026-11-19: no Content-Security-Policy (ZAP rule 10038) and
+        # a permissive CORS header (10098).
+        run: |
+          set +e
+          "$RUNNER_TEMP/siegekit" scan --yes --no-save --report-dir "$RUNNER_TEMP/report" http://127.0.0.1:3000/
+          code=$?
+          set -e
+          echo "exit code $code"
+          if [ "$code" -ne 0 ] && [ "$code" -ne 3 ]; then exit 1; fi
+          r="$RUNNER_TEMP/report/report.json"
+          jq '.plugins[] | {id, status, reason, requests, refused, findings}' "$r"
+          jq -e '[.plugins[] | select(.status == "ran" and .requests > 0) | .id] | sort == ["zap", "zap-active"]' "$r"
+          for rule in 10038 10098; do
+            jq -e --arg rule "$rule" '[.findings[] | select(.ruleId == $rule)] | length > 0' "$r" > /dev/null || { echo "ZAP rule $rule not reported"; exit 1; }
+          done
+      - name: Juice Shop log
+        if: failure()
+        run: docker logs juice-shop 2>&1 | tail -50

@@ -85,7 +85,7 @@ var NotTested = []string{
 	// Keep this list true for the current version. Update the web, language
 	// and access-control lines when more web tools (M2.5), Opengrep (M2.9)
 	// and the two-account test (M2.7) land.
-	"The running application, unless you scanned its URL: a directory scan only reads files. A URL scan crawls the app with ZAP and runs ZAP's passive checks; ZAP's attack scan runs only on local targets, and deployed targets get passive checks until request limits are measured. API specifications, other web tools (Nuclei, ffuf, sqlmap, Nikto) and login checks are planned for M2.",
+	"The running application, unless you scanned its URL: a directory scan only reads files. A URL scan crawls the app with ZAP and runs ZAP's passive checks; ZAP's attack scan runs only on local targets, and deployed targets get passive checks until request limits are measured. ZAP's crawler follows HTML links, so pages that a single-page app builds in JavaScript are mostly not reached. API specifications, other web tools (Nuclei, ffuf, sqlmap, Nikto) and login checks are planned for M2.",
 	"The source code, unless you scanned its directory: a URL scan only sends requests to the running app.",
 	"Code in languages without an analyzer: Python (bandit) and Go (gosec) code is analyzed; JavaScript, TypeScript and other languages are not yet (planned for M2). Secrets, dependencies and configuration files are checked in any language.",
 	"Access control: whether every request checks that this user may access this record. SiegeKit has no access-control test yet; a partial two-account test is planned for M2.",
