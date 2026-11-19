@@ -4,13 +4,17 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"os"
+	"os/signal"
+	"syscall"
 
 	"github.com/Gobbuwu/SiegeKit/docs"
 	"github.com/Gobbuwu/SiegeKit/internal/checks"
 	"github.com/Gobbuwu/SiegeKit/internal/manifest"
+	"github.com/Gobbuwu/SiegeKit/internal/relay"
 	"github.com/Gobbuwu/SiegeKit/plugins"
 )
 
@@ -56,6 +60,12 @@ func run(args []string, stdout, stderr io.Writer) int {
 	case "agents":
 		fmt.Fprint(stdout, docs.Agents)
 		return exitOK
+	case relay.Command:
+		// Runs inside the relay container of an active test (ADR 0021);
+		// not listed in the help.
+		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+		defer stop()
+		return relay.Main(ctx, args[1:], stdout, stderr)
 	case "scan":
 		return scan(args[1:], stdout, stderr)
 	case "update":

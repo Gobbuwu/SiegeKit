@@ -22,8 +22,10 @@ type ActiveResult struct {
 
 // RunTargetOnly runs s with no network except the egress proxy for cfg's
 // target (ADR 0018, ADR 0019). parent is a private directory for the
-// proxy's socket; it must be short enough for a Unix socket path.
-func RunTargetOnly(ctx context.Context, e *sandbox.Engine, s sandbox.Spec, cfg egress.Config, parent string) (*ActiveResult, error) {
+// proxy's socket; it must be short enough for a Unix socket path. relayBin
+// is a static SiegeKit binary that runs the relay (ADR 0021), normally the
+// running one (os.Executable).
+func RunTargetOnly(ctx context.Context, e *sandbox.Engine, s sandbox.Spec, cfg egress.Config, parent, relayBin string) (*ActiveResult, error) {
 	dir, err := os.MkdirTemp(parent, "egress-")
 	if err != nil {
 		return nil, err
@@ -67,7 +69,7 @@ func RunTargetOnly(ctx context.Context, e *sandbox.Engine, s sandbox.Spec, cfg e
 			return nil, err
 		}
 	}
-	relay, err := e.StartRelay(ctx, dir)
+	relay, err := e.StartRelay(ctx, dir, relayBin)
 	if err != nil {
 		return nil, err
 	}

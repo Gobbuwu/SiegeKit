@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"debug/elf"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -20,8 +21,11 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 	"unicode/utf8"
+
+	"github.com/Gobbuwu/SiegeKit/internal/relay"
 )
 
 // Paths inside the container.
@@ -518,12 +522,15 @@ func (t *tailBuffer) Write(p []byte) (int, error) {
 
 func (t *tailBuffer) String() string { return t.b.String() }
 
-// Relay settings (ADR 0019).
+// Relay settings (ADR 0019, ADR 0021).
 const (
-	// RelayImage is alpine/socat 1.8.1.1 (Alpine 3.24.1), published
-	// 2026-06-20, pinned by index digest.
-	RelayImage = "docker.io/alpine/socat@sha256:7f9a06753033f2b7de18edc2353f2c15153413d95a039163c6db270fc7a6c3b0"
+	// RelayImage is the Docker Official Image alpine:3.24.4, published
+	// 2026-11-08, pinned by index digest. It only provides a root file
+	// system: the relay itself is SiegeKit's own static binary.
+	RelayImage = "docker.io/library/alpine@sha256:f59abe656b692d901e184be3445e084786602108599d2a51d229c0f5a48c71bf"
 	RelayPort  = 8080
+	// relayBinary is the copy of SiegeKit's binary in the relay directory.
+	relayBinary = "siegekit-relay"
 	// RelaySocket is the proxy's socket file name in the relay directory.
 	RelaySocket = "proxy.sock"
 	relayMount  = "/run/siegekit"
@@ -537,13 +544,21 @@ var (
 
 // StartRelay starts the relay container for one active run: no network,
 // forwarding 127.0.0.1:RelayPort in its namespace to the Unix socket
-// RelaySocket in dir. It returns once the relay listens.
-func (e *Engine) StartRelay(ctx context.Context, dir string) (string, error) {
+// RelaySocket in dir. The relay is bin, a statically linked SiegeKit binary
+// for this machine (normally the running one), copied into dir and run with
+// its hidden relay command (ADR 0021). It returns once the relay listens.
+func (e *Engine) StartRelay(ctx context.Context, dir, bin string) (string, error) {
 	if goos != "linux" {
 		return "", errors.New("active tests run only on Linux for now (ADR 0018)")
 	}
 	if err := checkMountPath(dir); err != nil {
 		return "", fmt.Errorf("relay directory: %w", err)
+	}
+	if err := CheckStatic(bin); err != nil {
+		return "", err
+	}
+	if err := copyExecutable(bin, filepath.Join(dir, relayBinary)); err != nil {
+		return "", fmt.Errorf("copy relay binary: %w", err)
 	}
 	b := make([]byte, 8)
 	if _, err := rand.Read(b); err != nil {
@@ -561,10 +576,9 @@ func (e *Engine) StartRelay(ctx context.Context, dir string) (string, error) {
 		"--cap-drop", "ALL", "--security-opt", "no-new-privileges", "--read-only",
 		"--pids-limit", "64", "--memory", "64m", "--memory-swap", "64m", "--cpus", "1",
 		"--mount", "type=bind,source=" + dir + ",target=" + relayMount + ",readonly",
+		"--entrypoint", relayMount + "/" + relayBinary,
 		RelayImage,
-		"-d", "-d",
-		fmt.Sprintf("TCP-LISTEN:%d,bind=127.0.0.1,fork,reuseaddr", RelayPort),
-		"UNIX-CONNECT:" + relayMount + "/" + RelaySocket,
+		relay.Command, fmt.Sprintf("127.0.0.1:%d", RelayPort), relayMount + "/" + RelaySocket,
 	}
 	cmd := exec.CommandContext(ctx, e.Bin, args...) // #nosec G204 -- fixed arguments; dir is checked above
 	cmd.Env = minimalEnv()
@@ -620,4 +634,56 @@ func CheckEnv(env map[string]string) error {
 		}
 	}
 	return nil
+}
+
+// CheckStatic checks that bin is a statically linked Linux executable for
+// this machine's architecture, so it runs in any Linux container image.
+// SiegeKit's release binaries are static; a local build must use
+// CGO_ENABLED=0 (README).
+func CheckStatic(bin string) error {
+	f, err := elf.Open(bin)
+	if err != nil {
+		return fmt.Errorf("relay binary %s is not a Linux executable: %w", bin, err)
+	}
+	defer f.Close()
+	want := map[string]elf.Machine{"amd64": elf.EM_X86_64, "arm64": elf.EM_AARCH64}[runtime.GOARCH]
+	if f.Machine != want || f.Type != elf.ET_EXEC {
+		return fmt.Errorf("relay binary %s is not a Linux %s executable", bin, runtime.GOARCH)
+	}
+	for _, p := range f.Progs {
+		if p.Type == elf.PT_INTERP || p.Type == elf.PT_DYNAMIC {
+			return fmt.Errorf("SiegeKit was built with dynamic linking, so it cannot run its relay inside a container; build it with CGO_ENABLED=0 (see the README)")
+		}
+	}
+	return nil
+}
+
+// copyExecutable copies a regular file to dst with mode 0755, refusing
+// symlinks at either end.
+func copyExecutable(src, dst string) error {
+	in, err := os.OpenFile(src, os.O_RDONLY|syscall.O_NOFOLLOW, 0) // #nosec G304 -- SiegeKit's own binary, checked by CheckStatic
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+	st, err := in.Stat()
+	if err != nil {
+		return err
+	}
+	if !st.Mode().IsRegular() {
+		return fmt.Errorf("%s is not a regular file", src)
+	}
+	out, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_EXCL|syscall.O_NOFOLLOW, 0o755) // #nosec G302 G304 -- the relay's user (another UID) must run it; dst is in SiegeKit's private run directory
+	if err != nil {
+		return err
+	}
+	if _, err := io.Copy(out, in); err != nil {
+		_ = out.Close()
+		return err
+	}
+	if err := out.Chmod(0o755); err != nil { // umask aside
+		_ = out.Close()
+		return err
+	}
+	return out.Close()
 }

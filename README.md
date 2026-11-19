@@ -9,7 +9,7 @@ SiegeKit is a free, local, open-source tool that runs security tests against sof
 You need Go 1.26 or later and Docker or Podman.
 
 ```sh
-go build -o siegekit ./cmd/siegekit
+CGO_ENABLED=0 go build -o siegekit ./cmd/siegekit   # a static binary (needed for active tests)
 ./siegekit plugins list
 ./siegekit update                  # download vulnerability data (about 1.7 GB)
 ./siegekit scan path/to/your/repo

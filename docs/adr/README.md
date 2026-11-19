@@ -24,6 +24,7 @@ Each significant design decision is recorded as a short ADR before code is writt
 | [0018](0018-egress-proxy.md) | Egress proxy design (amends 0006) | Accepted |
 | [0019](0019-egress-relay.md) | Egress through a relay with no network (amends 0018) | Accepted |
 | [0020](0020-repository-suppressions.md) | Suppressions in the scanned repository (amends 0009) | Accepted |
+| [0021](0021-built-in-relay.md) | The relay runs SiegeKit's own binary (amends 0019) | Accepted |
 | [0022](0022-plan-confirmation.md) | Ask before running only for URL targets (amends 0004) | Accepted |
 
 ADRs 0002 to 0011 were accepted at the M0 design sign-off on 2026-11-18.

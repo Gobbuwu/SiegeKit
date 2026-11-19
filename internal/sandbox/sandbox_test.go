@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -266,7 +267,9 @@ env | grep -q SIEGEKIT_TEST_SECRET && echo "ENV-LEAKED" || echo "env-clean"
 
 func TestContainerTimeoutKillsContainer(t *testing.T) {
 	e := engine(t)
-	s := spec(t, "sleep", "300")
+	// 299 marks this test's container: other packages' tests run containers
+	// of the same image, with the same name prefix, at the same time.
+	s := spec(t, "sleep", "299")
 	s.Timeout = 3 * time.Second
 	start := time.Now()
 	r := run(t, e, s)
@@ -276,14 +279,12 @@ func TestContainerTimeoutKillsContainer(t *testing.T) {
 	if time.Since(start) > 45*time.Second {
 		t.Fatalf("timeout took %v", time.Since(start))
 	}
-	// Only containers of the test image: other packages' tests run tool
-	// containers named siegekit-* at the same time.
-	out, err := exec.Command(e.Bin, "ps", "--all", "--filter", "name=siegekit-", "--filter", "ancestor="+testImage, "--format", "{{.Names}}").Output()
+	out, err := exec.Command(e.Bin, "ps", "--all", "--no-trunc", "--filter", "name=siegekit-", "--filter", "ancestor="+testImage, "--format", "{{.Names}} {{.Command}}").Output()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.TrimSpace(string(out)) != "" {
-		t.Fatalf("containers left behind: %s", out)
+	if strings.Contains(string(out), "sleep 299") {
+		t.Fatalf("container left behind: %s", out)
 	}
 }
 
@@ -420,12 +421,51 @@ func TestStartRelayRefusals(t *testing.T) {
 	old := goos
 	t.Cleanup(func() { goos = old })
 	e := &Engine{Bin: "/nonexistent/docker"}
+	bin, _ := os.Executable()
 	goos = "darwin"
-	if _, err := e.StartRelay(context.Background(), t.TempDir()); err == nil || !strings.Contains(err.Error(), "only on Linux") {
+	if _, err := e.StartRelay(context.Background(), t.TempDir(), bin); err == nil || !strings.Contains(err.Error(), "only on Linux") {
 		t.Errorf("macOS: %v", err)
 	}
 	goos = "linux"
-	if _, err := e.StartRelay(context.Background(), t.TempDir()+",readonly=false"); err == nil {
+	if _, err := e.StartRelay(context.Background(), t.TempDir()+",readonly=false", bin); err == nil {
 		t.Error("accepted an injected mount path")
+	}
+	// Not an executable: refused before any container starts.
+	notExe := filepath.Join(t.TempDir(), "x")
+	if err := os.WriteFile(notExe, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.StartRelay(context.Background(), t.TempDir(), notExe); err == nil || !strings.Contains(err.Error(), "not a Linux executable") {
+		t.Errorf("script accepted as relay: %v", err)
+	}
+}
+
+// The relay runs SiegeKit's own binary in a minimal image, so the binary must
+// be statically linked (ADR 0021).
+func TestCheckStatic(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("ELF checks need a Linux build")
+	}
+	dir := t.TempDir()
+	build := func(name, cgo string) string {
+		t.Helper()
+		out := filepath.Join(dir, name)
+		cmd := exec.Command("go", "build", "-o", out, "../../cmd/siegekit")
+		cmd.Env = append(os.Environ(), "CGO_ENABLED="+cgo)
+		if b, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("go build (CGO_ENABLED=%s): %v\n%s", cgo, err, b)
+		}
+		return out
+	}
+	if err := CheckStatic(build("static", "0")); err != nil {
+		t.Errorf("static build refused: %v", err)
+	}
+	if _, err := exec.LookPath("gcc"); err == nil {
+		if err := CheckStatic(build("dynamic", "1")); err == nil || !strings.Contains(err.Error(), "CGO_ENABLED=0") {
+			t.Errorf("dynamic build accepted: %v", err)
+		}
+	}
+	if err := CheckStatic(filepath.Join(dir, "missing")); err == nil {
+		t.Error("missing file accepted")
 	}
 }
