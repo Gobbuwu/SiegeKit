@@ -237,7 +237,7 @@ func TestLastLine(t *testing.T) {
 		"":                       "no error output",
 		"a\nb\n\n":               "b",
 		"x\x07y\u0085z":          "xyz",
-		strings.Repeat("é", 400): strings.Repeat("é", 300) + "…",
+		strings.Repeat("é", 400): "…" + strings.Repeat("é", 300),
 		"bad\xffutf8":            "badutf8",
 	} {
 		if got := lastLine(in); got != want {

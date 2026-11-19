@@ -75,7 +75,10 @@ func TestEngineArgsData(t *testing.T) {
 	if strings.Contains(joined, "--network") || strings.Contains(joined, "/tmp/tool/db,readonly") || strings.Contains(joined, "target=/target") {
 		t.Errorf("update run: %s", joined)
 	}
-	for _, want := range []string{"--cap-drop ALL", "--read-only", "--user 1000:1000", "target=/tmp/tool/db"} {
+	u.TmpMiB = 64
+	args, _ = u.EngineArgs("n", 1000, 1000)
+	joined = strings.Join(args, " ")
+	for _, want := range []string{"--cap-drop ALL", "--read-only", "--user 1000:1000", "target=/tmp/tool/db", "/tmp:rw,nosuid,nodev,size=64m"} {
 		if !strings.Contains(joined, want) {
 			t.Errorf("update run missing %q: %s", want, joined)
 		}
@@ -104,6 +107,8 @@ func TestSpecRejections(t *testing.T) {
 		"comma injection":  func(s *Spec) { s.TargetDir = s.TargetDir + ",readonly=false" },
 		"missing out dir":  func(s *Spec) { s.OutDir = "" },
 		"zero timeout":     func(s *Spec) { s.Timeout = 0 },
+		"tmp above memory": func(s *Spec) { s.TmpMiB = s.MemoryMiB + 1 },
+		"negative tmp":     func(s *Spec) { s.TmpMiB = -1 },
 		"target not a dir": func(s *Spec) { s.TargetDir = filepath.Join(s.TargetDir, "app.txt") },
 		"egress with target": func(s *Spec) {
 			s.Network, s.DataDir, s.DataMount, s.DataWritable = "egress", s.OutDir, "/tmp/db", true

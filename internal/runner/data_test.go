@@ -17,7 +17,7 @@ func TestUpdateReplacesDataOnlyOnSuccess(t *testing.T) {
 	m := builtin(t, "trivy")
 	root := filepath.Join(t.TempDir(), "data")
 	write1 := &fake{act: func(s sandbox.Spec) (*sandbox.Result, error) {
-		if s.Network != "egress" || s.TargetDir != "" || !s.DataWritable || s.DataMount != "/tmp/trivy/db" {
+		if s.Network != "egress" || s.TargetDir != "" || !s.DataWritable || s.DataMount != "/tmp/trivy/db" || s.TmpMiB != 1024 {
 			t.Errorf("unsafe update spec %+v", s)
 		}
 		if strings.Join(s.Args, " ") != "image --cache-dir /tmp/trivy --download-db-only --no-progress" {

@@ -237,7 +237,7 @@ func readReport(path string) (*sarif.Log, error) {
 // lastLine returns the last non-empty line of a tool's output for the
 // one-line reason shown in reports. Tool output is untrusted, so control
 // characters (including terminal escape sequences) are removed and the line
-// is cut to 300 characters.
+// is cut to its last 300 characters.
 func lastLine(s string) string {
 	s = strings.Map(func(r rune) rune {
 		if r == '\n' {
@@ -253,8 +253,9 @@ func lastLine(s string) string {
 	if len(l) == 0 {
 		return "no error output"
 	}
+	// Keep the end: tools put the root cause last ("...: no space left").
 	if len(l) > 300 {
-		l = append(l[:300], '…')
+		l = append([]rune{'…'}, l[len(l)-300:]...)
 	}
 	return string(l)
 }

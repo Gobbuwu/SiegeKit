@@ -57,6 +57,9 @@ type Spec struct {
 	PidsLimit    int // 0 means 256
 	Timeout      time.Duration
 	OutputLimit  int64 // bytes; 0 means DefaultOutputLimit
+	// TmpMiB is the size of the in-memory /tmp; 0 means 256. Its pages count
+	// against MemoryMiB, so it cannot exceed the memory limit.
+	TmpMiB int
 }
 
 // Status of a finished run.
@@ -123,6 +126,9 @@ func (s *Spec) validate() error {
 	if s.CPUs < 1 || s.MemoryMiB < 64 || s.Timeout <= 0 {
 		return errors.New("cpus, memory and timeout must be set")
 	}
+	if s.TmpMiB < 0 || s.TmpMiB > s.MemoryMiB {
+		return errors.New("tmp size must be between 0 and the memory limit")
+	}
 	for _, d := range []struct {
 		name, path string
 		required   bool
@@ -181,6 +187,10 @@ func (s *Spec) EngineArgs(name string, uid, gid int) ([]string, error) {
 	if pids == 0 {
 		pids = 256
 	}
+	tmp := s.TmpMiB
+	if tmp == 0 {
+		tmp = 256
+	}
 	args := []string{
 		"run", "--rm",
 		"--name", name,
@@ -195,7 +205,7 @@ func (s *Spec) EngineArgs(name string, uid, gid int) ([]string, error) {
 		"--cap-drop", "ALL",
 		"--security-opt", "no-new-privileges",
 		"--read-only",
-		"--tmpfs", "/tmp:rw,nosuid,nodev,size=256m",
+		"--tmpfs", fmt.Sprintf("/tmp:rw,nosuid,nodev,size=%dm", tmp),
 		"--pids-limit", strconv.Itoa(pids),
 		"--memory", fmt.Sprintf("%dm", s.MemoryMiB),
 		"--memory-swap", fmt.Sprintf("%dm", s.MemoryMiB),

@@ -123,6 +123,9 @@ func updateOne(ctx context.Context, ex Executor, m *manifest.Manifest, root, wor
 		Image: image, Args: args, OutDir: out, Network: "egress",
 		DataDir: fresh, DataMount: m.Data.Mount, DataWritable: true,
 		CPUs: cpus, MemoryMiB: m.Resources.MemoryMiB,
+		// Downloads are staged in /tmp (Trivy keeps two copies of its
+		// 134 MiB archive), so updates get half the memory limit there.
+		TmpMiB:  m.Resources.MemoryMiB / 2,
 		Timeout: time.Duration(m.Resources.TimeoutSeconds) * time.Second,
 	})
 	switch {
