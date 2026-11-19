@@ -2,6 +2,7 @@ package checks
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -133,4 +134,34 @@ func FuzzBackendRules(f *testing.F) {
 		realtimeRules("database.rules.json", rules)
 		supabaseRLS(map[string][]byte{"supabase/m.sql": sql})
 	})
+}
+
+func TestHasFile(t *testing.T) {
+	root := t.TempDir()
+	for _, p := range []string{"vendor/x.go", "node_modules/y.py", "docs/a.md"} {
+		if err := os.MkdirAll(filepath.Join(root, filepath.Dir(p)), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(root, p), nil, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Files in skipped directories do not count.
+	if ok, err := HasFile(context.Background(), root, []string{"*.go", "*.py"}); ok || err != nil {
+		t.Errorf("skipped directories: %v %v", ok, err)
+	}
+	if err := os.Symlink(filepath.Join(root, "vendor/x.go"), filepath.Join(root, "link.go")); err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := HasFile(context.Background(), root, []string{"*.go"}); ok || err != nil {
+		t.Errorf("symlink counted: %v %v", ok, err)
+	}
+	if ok, err := HasFile(context.Background(), root, []string{"*.go", "*.md"}); !ok || err != nil {
+		t.Errorf("docs/a.md not found: %v %v", ok, err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := HasFile(ctx, root, []string{"*.go"}); !errors.Is(err, context.Canceled) {
+		t.Errorf("cancelled: %v", err)
+	}
 }

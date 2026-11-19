@@ -41,6 +41,7 @@ var (
 	reArg     = regexp.MustCompile(`^([^{}]|\{(` + strings.Join(Placeholds, "|") + `)\})*$`)
 	reHomeURL = regexp.MustCompile(`^https://`)
 	reOutFile = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$`)
+	reApplies = regexp.MustCompile(`^[A-Za-z0-9*?._-]{1,64}$`)
 	reMount   = regexp.MustCompile(`^/(tmp|data)(/[a-z0-9_-][a-z0-9._-]*)+$`)
 	reUpdArg  = regexp.MustCompile(`^([^{}]|\{(data|threads)\})*$`)
 )
@@ -63,6 +64,10 @@ type Manifest struct {
 	Run           *Run       `json:"run"`
 	Output        *Output    `json:"output"`
 	Data          *Data      `json:"data,omitempty"`
+	// AppliesTo lists file name patterns (path.Match syntax, matched against
+	// base names). If set, the plugin is skipped when the target has no
+	// matching file, so "0 findings" never stands for "nothing was scanned".
+	AppliesTo []string `json:"appliesTo,omitempty"`
 }
 
 // Data is downloadable data the tool needs, such as a vulnerability
@@ -225,6 +230,14 @@ func (m *Manifest) Validate() error {
 			if strings.Contains(a, "{data}") {
 				add("run.args[%d] uses {data} but the manifest has no data section", i)
 			}
+		}
+	}
+	if m.AppliesTo != nil && len(m.AppliesTo) == 0 {
+		add("appliesTo must not be empty when present")
+	}
+	for i, pat := range m.AppliesTo {
+		if !reApplies.MatchString(pat) {
+			add("appliesTo[%d] %q must be a file name pattern matching %s", i, pat, reApplies)
 		}
 	}
 	if m.Output == nil {

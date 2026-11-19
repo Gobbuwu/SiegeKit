@@ -10,6 +10,10 @@
   "targets": [
     "repo"
   ],
+  "appliesTo": [
+    "*.py",
+    "*.pyw"
+  ],
   "tool": {
     "name": "bandit",
     "version": "1.9.4",

@@ -1,0 +1,53 @@
+{
+  "schemaVersion": 1,
+  "id": "example-applies",
+  "name": "Example passive scanner (test fixture)",
+  "version": "0.1.0",
+  "description": "Test fixture only. The digest and checksum are placeholders, not a real artifact.",
+  "family": "secrets",
+  "mode": "passive",
+  "destructive": false,
+  "targets": [
+    "repo"
+  ],
+  "appliesTo": [
+    "*.go",
+    "go.mod"
+  ],
+  "tool": {
+    "name": "example",
+    "version": "1.0.0",
+    "license": "MIT",
+    "homepage": "https://example.invalid/",
+    "artifacts": [
+      {
+        "platform": "linux/amd64",
+        "kind": "oci-image",
+        "ref": "registry.example.invalid/example@sha256:0000000000000000000000000000000000000000000000000000000000000000",
+        "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+      }
+    ]
+  },
+  "resources": {
+    "cpus": 2,
+    "memoryMiB": 1024,
+    "gpu": "none",
+    "timeoutSeconds": 600,
+    "maxTimeoutSeconds": 3600
+  },
+  "network": "none",
+  "run": {
+    "args": [
+      "scan",
+      "--source",
+      "{target}",
+      "--report",
+      "{outdir}/report.sarif"
+    ]
+  },
+  "output": {
+    "format": "sarif",
+    "parser": "sarif",
+    "file": "report.sarif"
+  }
+}
