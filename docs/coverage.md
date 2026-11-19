@@ -4,7 +4,8 @@ Each row is a common security concern, the plugins planned to check it, and the 
 
 | Concern | Checked by | Milestone |
 | --- | --- | --- |
-| API keys, tokens, private keys in source code and **git history** | Gitleaks; TruffleHog (optional) | M1 |
+| API keys, tokens, private keys in source code and **git history** | Gitleaks (files, M1); gitleaks-history (every commit on every branch, including secrets deleted later; added in M2 on 2026-11-19, because M1 scanned only the files); TruffleHog (optional) | M1, M2 |
+| Environment files (`.env`, `.env.local` and similar) committed to git, or not excluded by `.gitignore` | gitleaks-history (committed in any commit); built-in `dotenv-gitignore` (not excluded, so `git add .` would commit it). Templates such as `.env.example` are allowed. Added at the owner's request on 2026-11-19. | M2 |
 | Secrets inside container images | Trivy | M1 |
 | Secrets exposed by a running site (JS bundles, public `.env`, `.git/`, backups) | Gitleaks on crawled content; Nuclei exposure templates; ffuf | M2 ([ADR 0010](adr/0010-login-checks.md)) |
 | Outdated libraries with known vulnerabilities | OSV-Scanner, Grype, Trivy | M1 |

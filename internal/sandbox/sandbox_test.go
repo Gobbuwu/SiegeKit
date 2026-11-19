@@ -2,6 +2,7 @@ package sandbox
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -305,5 +306,38 @@ func TestContainerToolExitCodeIsNotEngineFailure(t *testing.T) {
 	r = run(t, e, spec(t, "/no/such/binary"))
 	if r.Status != Failed {
 		t.Fatalf("missing binary should be an engine failure, got %s %d", r.Status, r.ExitCode)
+	}
+}
+
+func TestEngineArgsEnv(t *testing.T) {
+	s := spec(t, "scan")
+	s.Env = map[string]string{"B_VAR": "two words", "A_VAR": "line1\nline2"}
+	args, err := s.EngineArgs("n", 1000, 1000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	joined := strings.Join(args, "|")
+	if !strings.Contains(joined, "--env|A_VAR=line1\nline2|--env|B_VAR=two words") {
+		t.Errorf("env not passed in sorted order as separate arguments: %q", joined)
+	}
+	if args[len(args)-2] != testImage {
+		t.Errorf("image must come after the environment: %v", args)
+	}
+	for _, bad := range []map[string]string{
+		{"LD_PRELOAD": "/x.so"}, {"DYLD_INSERT_LIBRARIES": "x"}, {"HTTPS_PROXY": "http://x"}, {"no_proxy": "*"},
+		{"PATH": "/x"}, {"HOME": "/"}, {"SSL_CERT_FILE": "/x"}, {"SIEGEKIT_X": "1"}, {"A=B": "c"}, {"": "x"},
+		{"OK": "nul\x00"}, {"OK": strings.Repeat("x", 16<<10+1)},
+	} {
+		s.Env = bad
+		if _, err := s.EngineArgs("n", 1000, 1000); err == nil {
+			t.Errorf("accepted env %.40q", bad)
+		}
+	}
+	many := map[string]string{}
+	for i := range 17 {
+		many[fmt.Sprintf("V%d", i)] = "x"
+	}
+	if CheckEnv(many) == nil {
+		t.Error("accepted 17 variables")
 	}
 }

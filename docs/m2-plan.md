@@ -16,6 +16,8 @@ Status: in progress (started 2026-11-19, after the M1 sign-off). This splits the
 | M2.9 | Opengrep as the first pinned-binary plugin, with SiegeKit's own Apache-2.0 rules for JavaScript and TypeScript; opengrep-rules only downloaded after license acceptance. | ADR 0003, 0016 | Planted issues found on Linux and macOS, amd64 and arm64. |
 | M2.10 | Optional sqlmap and Nikto; measure and set the default request rate; full M2 gate run. | ADR 0005 | M2 gate: all target-authorization negative tests pass and all known issues in the vulnerable web fixture are detected. Then the owner signs off. |
 
+Added at the owner's request on 2026-11-19, outside the numbered PRs: a check for environment files. The `gitleaks-history` plugin scans every commit for secrets and committed `.env` files, and the built-in `dotenv-gitignore` check warns when `.gitignore` does not exclude them. Manifests gain `run.env` and `requiresGit` for this.
+
 Every PR that adds a command, flag or report field also updates `docs/agents.md`.
 
 Every new dependency (tool image, binary, fixture image) goes through the ADR 0016 consent prompt and ADR 0008 pinning (digest, at least 7 days old).
