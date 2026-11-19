@@ -26,7 +26,7 @@ The [re-check](recheck-2026-11-19.md) found items that earlier ADRs decided but 
 | --- | --- |
 | Pick checks by family (`--only secrets`) and `--profile` (ADR 0004) | M2, with M2.5. ADR 0022 changes ADR 0004 so that only URL scans ask before running; directory scans print the plan without asking. |
 | Compare runs: "new" and "fixed" since the last scan (ADR 0007, 0013) | M2, a small PR. |
-| OSV-Scanner and OpenSSF Scorecard in CI; image signature checks (ADR 0008) | On hold: the owner asked whether they are necessary. |
+| OSV-Scanner and OpenSSF Scorecard in CI; image signature checks (ADR 0008) | M2: OSV-Scanner and Scorecard in CI with M2.8; image signature checks as their own PR, after checking which publishers sign their images. |
 | Warning when the container engine is not rootless (ADR 0006) | No change until rootless engines are tested. |
 | Restrict update containers to the publisher's hosts through the egress proxy (ADR 0014, threat model T19) | M2. |
 | Container-image targets (secrets in images, base-image packages) | M3. |
