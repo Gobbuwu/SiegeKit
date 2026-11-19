@@ -1,6 +1,9 @@
 package findings
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestSeverityRoundTrip(t *testing.T) {
 	for s := Info; s <= Critical; s++ {
@@ -75,5 +78,22 @@ func TestDedupeKeepsDistinctAdvisories(t *testing.T) {
 	c := Finding{RuleID: "CVE-2019-14234", Family: "sca", Location: loc, Sources: []Source{{Plugin: "osv", RuleID: "CVE-2019-14234"}}}
 	if out := Dedupe([]Finding{a, b, c}); len(out) != 2 {
 		t.Fatalf("got %d findings, want 2: %+v", len(out), out)
+	}
+}
+
+func TestRedactCredentials(t *testing.T) {
+	f := Finding{RuleID: "B105", Family: "sast", CWEs: []string{"CWE-259"},
+		Message: "Possible hardcoded password: 'ghp_abcdefghijklmnop' and \"hunter22\"", Snippet: `TOKEN = "ghp_abcdefghijklmnop"`}
+	f.RedactCredentials()
+	if strings.Contains(f.Message+f.Snippet, "efghij") || strings.Contains(f.Message, "hunter22") {
+		t.Fatalf("credential kept: %+v", f)
+	}
+	if f.Message != "Possible hardcoded password: 'ghp_****************' and \"hunt****\"" {
+		t.Errorf("message %q", f.Message)
+	}
+	other := Finding{RuleID: "B602", Family: "sast", CWEs: []string{"CWE-78"}, Message: "call 'sh'", Snippet: "x"}
+	other.RedactCredentials()
+	if other.Message != "call 'sh'" || other.Snippet != "x" {
+		t.Errorf("unrelated finding changed: %+v", other)
 	}
 }

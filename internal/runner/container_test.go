@@ -110,9 +110,11 @@ func TestPinnedImageVersions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// gosec's image wraps it in an entrypoint script that prints nothing for
+	// -version, so its SARIF output (which names the tool version) is read.
 	versionArgs := map[string][]string{
 		"bandit": {"--version"}, "checkov": {"--version"}, "gitleaks": {"version"},
-		"gosec": {"-version"}, "trivy": {"--version"},
+		"gosec": {"-fmt", "sarif", "-out", "/out/v.sarif", "-no-fail", "/tmp/..."}, "trivy": {"--version"},
 	}
 	all, err := plugins.Builtin()
 	if err != nil {
@@ -129,16 +131,24 @@ func TestPinnedImageVersions(t *testing.T) {
 			t.Logf("%s: no image for this platform", m.ID)
 			continue
 		}
+		out := t.TempDir()
 		r, err := e.Run(context.Background(), sandbox.Spec{
-			Image: image, Args: args, OutDir: t.TempDir(), Network: "none",
+			Image: image, Args: args, OutDir: out, Network: "none",
 			CPUs: 1, MemoryMiB: 512, Timeout: 120 * time.Second,
 		})
 		if err != nil {
 			t.Fatalf("%s: %v", m.ID, err)
 		}
-		if !strings.Contains(r.Stderr, m.Tool.Version) {
+		got := r.Stderr
+		if b, err := os.ReadFile(filepath.Join(out, "v.sarif")); err == nil {
+			got = string(b)
+			if len(got) > 2000 {
+				got = got[:2000]
+			}
+		}
+		if !strings.Contains(got, `"version": "`+m.Tool.Version+`"`) && !strings.Contains(got, m.Tool.Version+"\n") && !strings.Contains(got, " "+m.Tool.Version) && !strings.Contains(got, "v"+m.Tool.Version) {
 			cfg, _ := exec.Command(e.Bin, "image", "inspect", "--format", "{{json .Config.Entrypoint}} {{json .Config.Cmd}}", image).CombinedOutput()
-			t.Errorf("%s: image does not report version %s (exit %d, entrypoint/cmd %s):\n%s", m.ID, m.Tool.Version, r.ExitCode, cfg, r.Stderr)
+			t.Errorf("%s: image does not report version %s (exit %d, entrypoint/cmd %s):\n%s", m.ID, m.Tool.Version, r.ExitCode, cfg, got)
 		}
 	}
 }

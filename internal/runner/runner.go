@@ -168,6 +168,9 @@ func runPlugin(ctx context.Context, ex Executor, m *manifest.Manifest, opt Optio
 	if err != nil {
 		return fail(report.Failed, "%v", err)
 	}
+	for i := range fs {
+		fs[i].RedactCredentials()
+	}
 	pr.Status = report.Ran
 	pr.Reason = warning
 	pr.Findings = len(fs)
