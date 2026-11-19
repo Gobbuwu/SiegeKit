@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Gobbuwu/SiegeKit/internal/checks"
 	"github.com/Gobbuwu/SiegeKit/internal/findings"
 	"github.com/Gobbuwu/SiegeKit/internal/manifest"
 	"github.com/Gobbuwu/SiegeKit/internal/report"
@@ -196,13 +197,13 @@ func TestSelect(t *testing.T) {
 		}
 		return out
 	}
-	if got, _ := Select(all, "repo", nil, nil); !slices.Equal(ids(got), []string{"bandit", "checkov", "gitleaks", "gosec", "trivy"}) {
+	if got, _, _ := Select(all, nil, "repo", nil, nil); !slices.Equal(ids(got), []string{"bandit", "checkov", "gitleaks", "gosec", "trivy"}) {
 		t.Errorf("all: %v", ids(got))
 	}
-	if got, _ := Select(all, "repo", []string{"gitleaks"}, nil); !slices.Equal(ids(got), []string{"gitleaks"}) {
+	if got, _, _ := Select(all, nil, "repo", []string{"gitleaks"}, nil); !slices.Equal(ids(got), []string{"gitleaks"}) {
 		t.Errorf("only: %v", ids(got))
 	}
-	if got, _ := Select(all, "repo", nil, []string{"gitleaks"}); !slices.Equal(ids(got), []string{"bandit", "checkov", "gosec", "trivy"}) {
+	if got, _, _ := Select(all, nil, "repo", nil, []string{"gitleaks"}); !slices.Equal(ids(got), []string{"bandit", "checkov", "gosec", "trivy"}) {
 		t.Errorf("skip: %v", ids(got))
 	}
 	for name, c := range map[string][2][]string{
@@ -210,11 +211,11 @@ func TestSelect(t *testing.T) {
 		"unknown skip": {nil, {"nope"}},
 		"nothing left": {{"gitleaks"}, {"gitleaks"}},
 	} {
-		if _, err := Select(all, "repo", c[0], c[1]); err == nil {
+		if _, _, err := Select(all, nil, "repo", c[0], c[1]); err == nil {
 			t.Errorf("%s: expected error", name)
 		}
 	}
-	if _, err := Select(all, "url", []string{"gitleaks"}, nil); err == nil {
+	if _, _, err := Select(all, nil, "url", []string{"gitleaks"}, nil); err == nil {
 		t.Error("wrong target kind: expected error")
 	}
 }
@@ -243,5 +244,36 @@ func TestLastLine(t *testing.T) {
 		if got := lastLine(in); got != want {
 			t.Errorf("lastLine(%q) = %q, want %q", in, got, want)
 		}
+	}
+}
+
+func TestSelectAndRunBuiltinChecks(t *testing.T) {
+	all, err := plugins.Builtin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ms, cs, err := Select(all, checks.Builtin(), "repo", []string{"backend-rules"}, nil)
+	if err != nil || len(ms) != 0 || len(cs) != 1 {
+		t.Fatalf("%d %d %v", len(ms), len(cs), err)
+	}
+	if _, cs, _ := Select(all, checks.Builtin(), "repo", nil, []string{"backend-rules"}); len(cs) != 0 {
+		t.Error("skip ignored")
+	}
+	o := opts(t)
+	os.WriteFile(filepath.Join(o.TargetDir, "database.rules.json"), []byte(`{"rules":{".read":true}}`), 0o644)
+	o.Checks = cs
+	failing := checks.Check{ID: "broken", Family: "iac", Run: func(context.Context, string) ([]findings.Finding, error) {
+		return nil, errors.New("boom")
+	}}
+	o.Checks = append(o.Checks, failing)
+	r, err := Run(context.Background(), &fake{}, nil, o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.Plugins[0].Status != report.Ran || r.Plugins[0].Findings != 1 || r.Plugins[0].Tool != "siegekit" {
+		t.Errorf("%+v", r.Plugins[0])
+	}
+	if r.Plugins[1].Status != report.Failed || r.Plugins[1].Reason != "boom" || r.Complete() {
+		t.Errorf("%+v", r.Plugins[1])
 	}
 }
