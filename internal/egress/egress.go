@@ -29,7 +29,9 @@ import (
 type Config struct {
 	Target *target.URL
 	Addrs  []netip.Addr // pinned under ADR 0005
-	Client netip.Prefix // only connections from this prefix are accepted
+	// Client is the only network TCP connections are accepted from. Unix
+	// socket connections (the relay, ADR 0019) are accepted without it.
+	Client netip.Prefix
 	// VerifyTLS checks the target's certificate (deployed mode). Local mode
 	// accepts self-signed development certificates.
 	VerifyTLS       bool
@@ -79,8 +81,6 @@ func New(cfg Config) (*Proxy, error) {
 		return nil, errors.New("no target")
 	case len(cfg.Addrs) == 0:
 		return nil, errors.New("no pinned addresses")
-	case !cfg.Client.IsValid():
-		return nil, errors.New("no client network")
 	case cfg.Rate <= 0 || cfg.Burst < 1 || cfg.MaxConns < 1 || cfg.MaxServerErrors < 1:
 		return nil, errors.New("rate, burst, connection and server-error limits must be positive")
 	}
@@ -409,8 +409,12 @@ func (l *filterListener) Accept() (net.Conn, error) {
 		if err != nil {
 			return nil, err
 		}
-		ap, err := netip.ParseAddrPort(c.RemoteAddr().String())
-		if err != nil || !l.p.cfg.Client.Contains(ap.Addr().Unmap()) {
+		allowed := l.Listener.Addr().Network() == "unix"
+		if !allowed {
+			ap, err := netip.ParseAddrPort(c.RemoteAddr().String())
+			allowed = err == nil && l.p.cfg.Client.IsValid() && l.p.cfg.Client.Contains(ap.Addr().Unmap())
+		}
+		if !allowed {
 			l.p.mu.Lock()
 			l.p.stats.Refused++
 			l.p.mu.Unlock()

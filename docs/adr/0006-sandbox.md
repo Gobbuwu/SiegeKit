@@ -2,7 +2,7 @@
 
 - Status: Accepted
 - Date: 2026-11-18
-- Amended by: [0014](0014-offline-tool-data.md) (network for data updates), [0015](0015-built-in-checks.md) (read-only built-in checks in-process), [0016](0016-dependency-consent.md) (images pulled only after consent), [0018](0018-egress-proxy.md) (egress proxy design)
+- Amended by: [0014](0014-offline-tool-data.md) (network for data updates), [0015](0015-built-in-checks.md) (read-only built-in checks in-process), [0016](0016-dependency-consent.md) (images pulled only after consent), [0018](0018-egress-proxy.md) (egress proxy design), [0019](0019-egress-relay.md) (relay with no network instead of an internal network)
 
 ## Context
 
