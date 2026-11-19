@@ -19,6 +19,7 @@ const usage = `SiegeKit - local security testing for software you own.
 
 Usage:
   siegekit scan [flags] DIR       scan a source directory (see: siegekit scan -h)
+  siegekit update [--only a,b]    download vulnerability databases for offline scans
   siegekit plugins list           show the built-in checks and pinned tool versions
   siegekit plugins validate FILE...
   siegekit version
@@ -51,6 +52,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return exitOK
 	case "scan":
 		return scan(args[1:], stdout, stderr)
+	case "update":
+		return update(args[1:], stdout, stderr)
 	case "plugins":
 		if len(args) >= 3 && args[1] == "validate" {
 			return validate(args[2:], stdout, stderr)

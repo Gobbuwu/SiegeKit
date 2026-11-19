@@ -10,7 +10,7 @@ func TestBuiltin(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"checkov", "gitleaks"}
+	want := []string{"checkov", "gitleaks", "trivy"}
 	if len(ms) != len(want) {
 		t.Fatalf("got %d plugins, want %v", len(ms), want)
 	}

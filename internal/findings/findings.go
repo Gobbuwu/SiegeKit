@@ -84,10 +84,14 @@ type Finding struct {
 
 // key is what makes two findings "the same issue": the location plus the
 // weakness. When CWEs are known, different tools agree on them even though
-// their rule IDs differ, so they deduplicate across tools.
+// their rule IDs differ, so they deduplicate across tools. Dependency
+// findings are keyed by advisory ID instead: one manifest line can carry many
+// different vulnerabilities that share a CWE.
 func (f *Finding) key() string {
 	what := "rule:" + f.RuleID
-	if len(f.CWEs) > 0 {
+	if f.Family == "sca" {
+		what = "advisory:" + f.RuleID
+	} else if len(f.CWEs) > 0 {
 		c := append([]string(nil), f.CWEs...)
 		sort.Strings(c)
 		what = "cwe:" + strings.Join(c, ",")

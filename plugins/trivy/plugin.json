@@ -1,0 +1,70 @@
+{
+  "schemaVersion": 1,
+  "id": "trivy",
+  "name": "Trivy dependency vulnerability scan",
+  "version": "1.0.0",
+  "description": "Finds known vulnerabilities (CVE, GHSA) in dependency lock and manifest files. Uses a vulnerability database downloaded by 'siegekit update'; the scan itself runs offline. Java archives are not checked yet.",
+  "family": "sca",
+  "mode": "passive",
+  "destructive": false,
+  "targets": [
+    "repo"
+  ],
+  "tool": {
+    "name": "trivy",
+    "version": "0.76.2",
+    "license": "Apache-2.0",
+    "homepage": "https://github.com/aquasecurity/trivy",
+    "artifacts": [
+      {
+        "platform": "any",
+        "kind": "oci-image",
+        "ref": "docker.io/aquasec/trivy@sha256:8f6bb947dbc528902e11f2f5be52f7b519f6a39d5d148f41166f2040499768fb",
+        "sha256": "8f6bb947dbc528902e11f2f5be52f7b519f6a39d5d148f41166f2040499768fb"
+      }
+    ]
+  },
+  "resources": {
+    "cpus": 2,
+    "memoryMiB": 2048,
+    "gpu": "none",
+    "timeoutSeconds": 900,
+    "maxTimeoutSeconds": 3600
+  },
+  "network": "none",
+  "run": {
+    "args": [
+      "filesystem",
+      "--cache-dir",
+      "/tmp/trivy",
+      "--skip-db-update",
+      "--skip-java-db-update",
+      "--skip-check-update",
+      "--offline-scan",
+      "--scanners",
+      "vuln",
+      "--format",
+      "sarif",
+      "--output",
+      "{outdir}/trivy.sarif",
+      "--quiet",
+      "{target}"
+    ]
+  },
+  "data": {
+    "mount": "/tmp/trivy/db",
+    "updateArgs": [
+      "image",
+      "--cache-dir",
+      "/tmp/trivy",
+      "--download-db-only",
+      "--no-progress"
+    ],
+    "maxAgeDays": 7
+  },
+  "output": {
+    "format": "sarif",
+    "parser": "sarif",
+    "file": "trivy.sarif"
+  }
+}

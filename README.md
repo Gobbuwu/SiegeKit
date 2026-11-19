@@ -2,7 +2,7 @@
 
 SiegeKit is a free, local, open-source tool that runs security tests against software you own: static code analysis, dependency and secret scanning, infrastructure-as-code checks, dynamic web/API testing, fuzzing and password-hash audits. You choose which tests to run. Everything runs on your machine.
 
-**Status:** milestone M1 in progress. An early developer preview can scan a source directory for committed secrets (gitleaks) and insecure Dockerfile, Kubernetes, Terraform and CI settings (checkov). Do not rely on it yet.
+**Status:** milestone M1 in progress. An early developer preview can scan a source directory for committed secrets (gitleaks), insecure Dockerfile, Kubernetes, Terraform and CI settings (checkov) and dependencies with known vulnerabilities (trivy). Do not rely on it yet.
 
 ## Try the preview
 
@@ -11,8 +11,11 @@ You need Go 1.26 or later and Docker or Podman.
 ```sh
 go build -o siegekit ./cmd/siegekit
 ./siegekit plugins list
+./siegekit update                  # download vulnerability data (about 1.7 GB)
 ./siegekit scan path/to/your/repo
 ```
+
+`siegekit update` is the only step that uses the network, and it runs without access to your files. Run it again at least weekly; reports say when the data is old.
 
 The scan writes `report.html`, `report.json` and `report.sarif` to `./siegekit-report` and saves a copy of the run under `~/.local/share/siegekit/runs`. Each tool runs in a container with no network and read-only access to your directory. Exit codes: 0 no findings at or above `--fail-on` (default high), 3 findings, 4 a check failed or timed out, 1 an error, 2 a usage error.
 

@@ -2,6 +2,7 @@
 
 - Status: Accepted
 - Date: 2026-11-18
+- Amended by: [0014](0014-offline-tool-data.md) (network for data updates)
 
 ## Context
 

@@ -66,6 +66,7 @@ type Options struct {
 	Version   string // SiegeKit version recorded in the report
 	TargetDir string // absolute path of the source directory to scan
 	WorkDir   string // parent for the private temporary directory; "" means the OS default
+	DataRoot  string // where 'siegekit update' keeps tool data (ADR 0014)
 }
 
 // MaxReportSize is the largest tool report read, matching the SARIF limit.
@@ -97,7 +98,7 @@ func Run(ctx context.Context, ex Executor, selected []*manifest.Manifest, opt Op
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		pr, fs := runPlugin(ctx, ex, m, opt.TargetDir, work)
+		pr, fs := runPlugin(ctx, ex, m, opt, work)
 		run.Plugins = append(run.Plugins, pr)
 		all = append(all, fs...)
 	}
@@ -112,7 +113,7 @@ func Run(ctx context.Context, ex Executor, selected []*manifest.Manifest, opt Op
 	return run, nil
 }
 
-func runPlugin(ctx context.Context, ex Executor, m *manifest.Manifest, target, work string) (report.PluginResult, []findings.Finding) {
+func runPlugin(ctx context.Context, ex Executor, m *manifest.Manifest, opt Options, work string) (report.PluginResult, []findings.Finding) {
 	pr := report.PluginResult{ID: m.ID, Family: m.Family, Tool: m.Tool.Name, Version: m.Tool.Version}
 	fail := func(status report.Status, format string, a ...any) (report.PluginResult, []findings.Finding) {
 		pr.Status = status
@@ -126,8 +127,17 @@ func runPlugin(ctx context.Context, ex Executor, m *manifest.Manifest, target, w
 	if !ok {
 		return fail(report.Skipped, "no container image for linux/%s", runtime.GOARCH)
 	}
+	var dataDir, dataMount, warning string
+	if m.Data != nil {
+		var err error
+		dataDir, warning, err = dataFor(opt.DataRoot, m, time.Now())
+		if err != nil {
+			return fail(report.Failed, "%v", err)
+		}
+		dataMount = m.Data.Mount
+	}
 	cpus := min(m.Resources.CPUs, runtime.NumCPU())
-	args, err := substitute(m.Run.Args, cpus)
+	args, err := substitute(m.Run.Args, cpus, dataMount)
 	if err != nil {
 		return fail(report.Failed, "%v", err)
 	}
@@ -136,7 +146,8 @@ func runPlugin(ctx context.Context, ex Executor, m *manifest.Manifest, target, w
 		return fail(report.Failed, "create output directory: %v", err)
 	}
 	res, err := ex.Run(ctx, sandbox.Spec{
-		Image: image, Args: args, TargetDir: target, OutDir: out, Network: m.Network,
+		Image: image, Args: args, TargetDir: opt.TargetDir, OutDir: out, Network: m.Network,
+		DataDir: dataDir, DataMount: dataMount,
 		CPUs: cpus, MemoryMiB: m.Resources.MemoryMiB,
 		Timeout: time.Duration(m.Resources.TimeoutSeconds) * time.Second,
 	})
@@ -163,6 +174,7 @@ func runPlugin(ctx context.Context, ex Executor, m *manifest.Manifest, target, w
 		return fail(report.Failed, "%v", err)
 	}
 	pr.Status = report.Ran
+	pr.Reason = warning
 	pr.Findings = len(fs)
 	return pr, fs
 }
@@ -180,17 +192,21 @@ func imageFor(m *manifest.Manifest) (string, bool) {
 
 // substitute replaces placeholders with their in-container values. The
 // manifest validator already allows only known placeholders.
-func substitute(args []string, cpus int) ([]string, error) {
+func substitute(args []string, cpus int, dataMount string) ([]string, error) {
 	r := strings.NewReplacer(
 		"{target}", sandbox.TargetMount,
 		"{outdir}", sandbox.OutMount,
 		"{workdir}", sandbox.WorkDir,
 		"{threads}", strconv.Itoa(cpus),
+		"{data}", dataMount,
 	)
 	out := make([]string, len(args))
 	for i, a := range args {
 		if strings.Contains(a, "{ratelimit}") {
 			return nil, errors.New("{ratelimit} is only available to active plugins, which are not supported yet")
+		}
+		if strings.Contains(a, "{data}") && dataMount == "" {
+			return nil, errors.New("{data} used without a data section")
 		}
 		out[i] = r.Replace(a)
 	}

@@ -30,7 +30,7 @@ var (
 	GPUModes   = []string{"none", "optional", "required"}
 	Networks   = []string{"none", "target-only"}
 	Formats    = []string{"sarif", "json", "jsonl", "xml", "text"}
-	Placeholds = []string{"target", "outdir", "workdir", "threads", "ratelimit"}
+	Placeholds = []string{"target", "outdir", "workdir", "threads", "ratelimit", "data"}
 	Parsers    = sarif.Parsers
 )
 
@@ -43,6 +43,8 @@ var (
 	reArg     = regexp.MustCompile(`^([^{}]|\{(` + strings.Join(Placeholds, "|") + `)\})*$`)
 	reHomeURL = regexp.MustCompile(`^https://`)
 	reOutFile = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$`)
+	reMount   = regexp.MustCompile(`^/(tmp|data)(/[a-z0-9_-][a-z0-9._-]*)+$`)
+	reUpdArg  = regexp.MustCompile(`^([^{}]|\{(data|threads)\})*$`)
 )
 
 // Manifest describes one plugin. Pointer fields are required fields whose
@@ -62,6 +64,15 @@ type Manifest struct {
 	Network       string     `json:"network"`
 	Run           *Run       `json:"run"`
 	Output        *Output    `json:"output"`
+	Data          *Data      `json:"data,omitempty"`
+}
+
+// Data is downloadable data the tool needs, such as a vulnerability
+// database (ADR 0014).
+type Data struct {
+	Mount      string   `json:"mount"`      // path inside the container
+	UpdateArgs []string `json:"updateArgs"` // arguments for the update run
+	MaxAgeDays int      `json:"maxAgeDays"` // warn when older
 }
 
 // Tool is the upstream tool a plugin runs.
@@ -193,6 +204,28 @@ func (m *Manifest) Validate() error {
 		for i, a := range m.Run.Args {
 			if !reArg.MatchString(a) {
 				add("run.args[%d] %q uses braces other than an allowed placeholder {%s}", i, a, strings.Join(Placeholds, "}, {"))
+			}
+		}
+	}
+	if m.Data != nil {
+		if !reMount.MatchString(m.Data.Mount) || m.Data.Mount == "/tmp/work" || strings.HasPrefix(m.Data.Mount, "/tmp/work/") {
+			add("data.mount %q must be a path under /tmp or /data (not /tmp/work) matching %s", m.Data.Mount, reMount)
+		}
+		if len(m.Data.UpdateArgs) == 0 {
+			add("data.updateArgs must have at least one argument")
+		}
+		for i, a := range m.Data.UpdateArgs {
+			if !reUpdArg.MatchString(a) {
+				add("data.updateArgs[%d] %q may only use the placeholders {data} and {threads}", i, a)
+			}
+		}
+		if m.Data.MaxAgeDays < 1 || m.Data.MaxAgeDays > 90 {
+			add("data.maxAgeDays must be 1 to 90")
+		}
+	} else if m.Run != nil {
+		for i, a := range m.Run.Args {
+			if strings.Contains(a, "{data}") {
+				add("run.args[%d] uses {data} but the manifest has no data section", i)
 			}
 		}
 	}

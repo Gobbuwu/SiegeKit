@@ -67,3 +67,13 @@ func TestSeverityText(t *testing.T) {
 		t.Fatal("out-of-range severity should be unknown")
 	}
 }
+
+func TestDedupeKeepsDistinctAdvisories(t *testing.T) {
+	loc := Location{URI: "requirements.txt", StartLine: 1}
+	a := Finding{RuleID: "CVE-2019-14234", Family: "sca", CWEs: []string{"CWE-89"}, Location: loc}
+	b := Finding{RuleID: "CVE-2019-14235", Family: "sca", CWEs: []string{"CWE-89"}, Location: loc}
+	c := Finding{RuleID: "CVE-2019-14234", Family: "sca", Location: loc, Sources: []Source{{Plugin: "osv", RuleID: "CVE-2019-14234"}}}
+	if out := Dedupe([]Finding{a, b, c}); len(out) != 2 {
+		t.Fatalf("got %d findings, want 2: %+v", len(out), out)
+	}
+}
