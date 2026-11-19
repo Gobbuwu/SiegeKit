@@ -42,6 +42,7 @@
   },
   "output": {
     "format": "sarif",
-    "parser": "sarif"
+    "parser": "sarif",
+    "file": "report.sarif"
   }
 }

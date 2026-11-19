@@ -2,7 +2,18 @@
 
 SiegeKit runs these tools as separate processes inside containers. It does not include their code in its own binary or release archives; each tool is downloaded from its publisher at a pinned version and checksum (see [ADR 0003](docs/adr/0003-wrap-external-tools.md) and [ADR 0008](docs/adr/0008-supply-chain.md)). Each tool keeps its own license.
 
-Versions are the latest published versions checked on 2026-11-18 and are **not yet pinned**; pins and checksums are added with each plugin. Licenses were read from each project's LICENSE file on that date.
+Versions are the latest published versions checked on 2026-11-18. Rows marked "Pinned" are used by a built-in plugin at exactly that version; the others are **not yet pinned**. Licenses were read from each project's LICENSE file on that date.
+
+## Pinned images
+
+These are the publishers' official Docker Hub images. Each tag was resolved to its multi-architecture index digest with `docker buildx imagetools inspect` on 2026-11-19 (linux/amd64 and linux/arm64), and the plugin manifest refers to the image only by that digest. Publisher image signatures are not verified yet (planned for M1.5).
+
+| Plugin | Image | Tag resolved |
+| --- | --- | --- |
+| [gitleaks](plugins/gitleaks/plugin.json) | `docker.io/zricethezav/gitleaks@sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f` | `v8.30.1` |
+| [checkov](plugins/checkov/plugin.json) | `docker.io/bridgecrew/checkov@sha256:122602cf32cc72286155d39f1f234b7b594818f7b8d7fdf490701620e521368b` | `3.4.5` |
+
+## All tools
 
 | Tool | Purpose | Latest version seen | License | Status |
 | --- | --- | --- | --- | --- |
@@ -14,9 +25,9 @@ Versions are the latest published versions checked on 2026-11-18 and are **not y
 | [Syft](https://github.com/anchore/syft) | SBOM | 1.57.2 | Apache-2.0 | Planned (M1) |
 | [Grype](https://github.com/anchore/grype) | Vulnerabilities, images | 0.122.1 | Apache-2.0 | Planned (M1) |
 | [Trivy](https://github.com/aquasecurity/trivy) | Images, IaC, dependencies | 0.76.2 | Apache-2.0 | Planned (M1) |
-| [Gitleaks](https://github.com/gitleaks/gitleaks) | Secrets | 8.30.1 | MIT | Planned (M1) |
+| [Gitleaks](https://github.com/gitleaks/gitleaks) | Secrets | 8.30.1 | MIT | Pinned (M1) |
 | [TruffleHog](https://github.com/trufflesecurity/trufflehog) | Secrets with verification | 3.99.9 | AGPL-3.0 | Optional |
-| [Checkov](https://github.com/bridgecrewio/checkov) | IaC | 3.4.5 | Apache-2.0 | Planned (M1) |
+| [Checkov](https://github.com/bridgecrewio/checkov) | IaC | 3.4.5 | Apache-2.0 | Pinned (M1) |
 | [KICS](https://github.com/Checkmarx/kics) | IaC | not checked | Apache-2.0 | Later |
 | [Hadolint](https://github.com/hadolint/hadolint) | Dockerfiles | not checked | GPL-3.0 | Optional |
 | [ZAP](https://github.com/zaproxy/zaproxy) | DAST | 2.17.0 | Apache-2.0 | Planned (M2) |

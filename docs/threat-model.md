@@ -38,7 +38,7 @@
 | T4 | B3 | Elevation | A tool follows redirects or links to other hosts. | Egress proxy denies every address not approved for this run. | 0006 |
 | T5 | B2 | Elevation | A hostile repository's build script or fuzz harness escapes to the host. | Container with dropped capabilities, non-root user, read-only target mount, no secrets or engine socket mounted; rootless engine recommended. | 0006 |
 | T6 | B2 | Denial of service | A fuzzer or scanner exhausts CPU, memory or disk. | Per-container CPU, memory, process and time limits; output directory size cap (to be set in M1). | 0006 |
-| T7 | B4 | Tampering | A scanned web app injects content that breaks our parsers or forges findings. | Memory-safe parsers in Go, strict schemas, fuzzed in CI; tool output never interpreted as commands. | 0007 |
+| T7 | B4 | Tampering | A scanned web app injects content that breaks our parsers or forges findings. | Memory-safe parsers in Go, strict schemas, fuzzed in CI; tool output never interpreted as commands; report files opened without following symlinks; control characters stripped from tool messages shown to the user. | 0007 |
 | T8 | B4 | Tampering | Attacker-controlled text in findings executes script in the HTML report. | Every value escaped; report has a strict Content-Security-Policy and no external resources. | 0007 |
 | T9 | B4 | Information disclosure | Secrets found by scanners leak through reports or logs. | Masked by default in all outputs; reports stay local; no telemetry. | 0007 |
 | T10 | B5 | Tampering | A compromised upstream release or re-pointed tag delivers malware (as in the March 2026 Trivy incident). | Version + SHA-256 pinning, signature checks where available, reviewed updates, 7-day adoption delay. | 0008 |
@@ -71,6 +71,7 @@ A pull request that adds any feature in point 2 will be declined, and this secti
 - Default request-rate cap for deployed mode, set from measurements on test fixtures (M2).
 - ~~Output directory size cap and behavior when exceeded (M1).~~ Resolved in M1.3: 512 MiB default per plugin; exceeding it marks the plugin as failed, so the run is reported incomplete.
 - Rootless Podman and rootless Docker map container users to sub-UIDs, so the output directory may not be writable with `--user <host uid>`. Needs `--userns=keep-id` (Podman) or equivalent, tested on each engine (M1.5).
+- When SiegeKit runs as root, tools run as UID 65532 and cannot read target files that only root may read, so those files are silently not scanned. Decide before M1 ends whether to detect this and mark the plugin incomplete, or to refuse to run as root (M1.5).
 - GPU pass-through isolation guarantees per engine (M3).
 
 ## Residual risks accepted

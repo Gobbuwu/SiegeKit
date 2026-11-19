@@ -13,6 +13,8 @@ import (
 	"os"
 	"regexp"
 	"strings"
+
+	"github.com/Gobbuwu/SiegeKit/internal/sarif"
 )
 
 // MaxFileSize is the largest manifest accepted, in bytes.
@@ -29,6 +31,7 @@ var (
 	Networks   = []string{"none", "target-only"}
 	Formats    = []string{"sarif", "json", "jsonl", "xml", "text"}
 	Placeholds = []string{"target", "outdir", "workdir", "threads", "ratelimit"}
+	Parsers    = sarif.Parsers
 )
 
 var (
@@ -39,6 +42,7 @@ var (
 	reSHA256  = regexp.MustCompile(`^[a-f0-9]{64}$`)
 	reArg     = regexp.MustCompile(`^([^{}]|\{(` + strings.Join(Placeholds, "|") + `)\})*$`)
 	reHomeURL = regexp.MustCompile(`^https://`)
+	reOutFile = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$`)
 )
 
 // Manifest describes one plugin. Pointer fields are required fields whose
@@ -95,6 +99,7 @@ type Run struct {
 type Output struct {
 	Format string `json:"format"`
 	Parser string `json:"parser"`
+	File   string `json:"file"` // report file name inside {outdir}
 }
 
 // ValidationError lists every rule a manifest breaks.
@@ -195,8 +200,12 @@ func (m *Manifest) Validate() error {
 		add("output is required")
 	} else {
 		checkEnum(&p, "output.format", m.Output.Format, Formats)
-		if !reID.MatchString(m.Output.Parser) {
-			add("output.parser %q must match %s", m.Output.Parser, reID)
+		checkEnum(&p, "output.parser", m.Output.Parser, Parsers)
+		if !reOutFile.MatchString(m.Output.File) {
+			add("output.file %q must be a plain file name matching %s", m.Output.File, reOutFile)
+		}
+		if strings.HasPrefix(m.Output.Parser, "sarif") && m.Output.Format != "sarif" {
+			add("output.parser %q needs output.format \"sarif\"", m.Output.Parser)
 		}
 	}
 
