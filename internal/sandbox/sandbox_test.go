@@ -275,7 +275,9 @@ func TestContainerTimeoutKillsContainer(t *testing.T) {
 	if time.Since(start) > 45*time.Second {
 		t.Fatalf("timeout took %v", time.Since(start))
 	}
-	out, err := exec.Command(e.Bin, "ps", "--all", "--filter", "name=siegekit-", "--format", "{{.Names}}").Output()
+	// Only containers of the test image: other packages' tests run tool
+	// containers named siegekit-* at the same time.
+	out, err := exec.Command(e.Bin, "ps", "--all", "--filter", "name=siegekit-", "--filter", "ancestor="+testImage, "--format", "{{.Names}}").Output()
 	if err != nil {
 		t.Fatal(err)
 	}
