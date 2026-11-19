@@ -83,12 +83,14 @@ func useActive(t *testing.T) *fakeActive {
 		return &runner.ActiveResult{Result: &sandbox.Result{Status: sandbox.Completed}, Stats: egress.Stats{Requests: 3}}, nil
 	}
 	useEngine(t, &fakeEngine{}, nil)
-	oldReach, oldFetch := reachable, deps.FetchFile
-	reachable = func(context.Context, egress.Config) error { return nil }
+	// These tests check the Linux path on every host; macOS is refused
+	// (TestScanURLNotRun).
+	oldReach, oldFetch, oldOS := reachable, deps.FetchFile, hostOS
+	reachable, hostOS = func(context.Context, egress.Config) error { return nil }, "linux"
 	deps.FetchFile = func(context.Context, string, manifest.Artifact) error {
 		return errors.New("tests download nothing")
 	}
-	t.Cleanup(func() { activeRunner, reachable, deps.FetchFile = old, oldReach, oldFetch })
+	t.Cleanup(func() { activeRunner, reachable, deps.FetchFile, hostOS = old, oldReach, oldFetch, oldOS })
 	t.Chdir(t.TempDir()) // reports go to ./siegekit-report
 	return f
 }
