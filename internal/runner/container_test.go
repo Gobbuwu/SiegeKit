@@ -2,6 +2,7 @@ package runner
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -146,9 +147,19 @@ func TestPinnedImageVersions(t *testing.T) {
 		}
 		got := r.Stderr
 		if b, err := os.ReadFile(filepath.Join(out, "v.sarif")); err == nil {
-			got = string(b)
-			if len(got) > 2000 {
-				got = got[:2000]
+			var l struct {
+				Runs []struct {
+					Tool struct {
+						Driver json.RawMessage `json:"driver"`
+					} `json:"tool"`
+				} `json:"runs"`
+			}
+			if err := json.Unmarshal(b, &l); err != nil || len(l.Runs) == 0 {
+				t.Fatalf("%s: bad SARIF: %v", m.ID, err)
+			}
+			got = string(l.Runs[0].Tool.Driver)
+			if len(got) > 1000 {
+				got = got[:1000]
 			}
 		}
 		if !strings.Contains(got, `"version": "`+m.Tool.Version+`"`) && !strings.Contains(got, m.Tool.Version+"\n") && !strings.Contains(got, " "+m.Tool.Version) && !strings.Contains(got, "v"+m.Tool.Version) {
