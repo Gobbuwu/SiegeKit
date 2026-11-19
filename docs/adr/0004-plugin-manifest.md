@@ -2,7 +2,7 @@
 
 - Status: Accepted
 - Date: 2026-11-18
-- Amended by: [0012](0012-manifest-file-format.md) (file is `plugin.json`; Go validator is authoritative), [0022](0022-plan-confirmation.md) (only URL scans ask before running)
+- Amended by: [0012](0012-manifest-file-format.md) (file is `plugin.json`; Go validator is authoritative), [0022](0022-plan-confirmation.md) (only URL scans ask before running), [0023](0023-active-web-scans.md) (`localOnly` and `run.config`)
 
 ## Context
 

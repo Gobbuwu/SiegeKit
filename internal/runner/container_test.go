@@ -97,7 +97,11 @@ func TestBuiltinPluginsFindPlantedIssues(t *testing.T) {
 			}
 		}
 	}
-	r, err := Run(context.Background(), e, all, Options{Version: "test", TargetDir: target, DataRoot: dataRoot, Checks: checks.Builtin()})
+	repo, _, err := Select(all, nil, "repo", nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r, err := Run(context.Background(), e, repo, Options{Version: "test", TargetDir: target, DataRoot: dataRoot, Checks: checks.Builtin()})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -173,6 +177,7 @@ func TestPinnedImageVersions(t *testing.T) {
 	versionArgs := map[string][]string{
 		"bandit": {"--version"}, "checkov": {"--version"}, "gitleaks": {"version"},
 		"gosec": {"-fmt", "sarif", "-out", "/out/v.sarif", "-no-fail", "/target/..."}, "trivy": {"--version"}, "gitleaks-history": {"version"},
+		"zap": {"zap.sh", "-cmd", "-silent", "-dir", "/tmp/zap", "-version"}, "zap-active": {"zap.sh", "-cmd", "-silent", "-dir", "/tmp/zap", "-version"},
 	}
 	all, err := plugins.Builtin()
 	if err != nil {

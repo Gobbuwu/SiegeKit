@@ -17,6 +17,7 @@ These are the publishers' official images on Docker Hub or the GitHub Container 
 | [bandit](plugins/bandit/plugin.json) | `ghcr.io/pycqa/bandit/bandit@sha256:b405a808f5d50156aee921a77fb17c044d69d90ecef6499447a037678967c936` | `latest` (the publisher tags no versions; CI checks that the image reports 1.9.4) |
 | [gosec](plugins/gosec/plugin.json) | `ghcr.io/securego/gosec@sha256:7bcf1edbab3e80d8006a28d53e7031a9c9775be8eec30679e4adc1f51d272121` | `2.30.0` (released 2026-10-23; the binary in this image reports version "dev", so the version rests on the tag the digest was resolved from) |
 | relay for active tests ([ADR 0021](docs/adr/0021-built-in-relay.md)) | `docker.io/library/alpine@sha256:f59abe656b692d901e184be3445e084786602108599d2a51d229c0f5a48c71bf` (Docker Official Image; used only as a root file system for SiegeKit's own relay binary; busybox GPL-2.0, musl MIT, other packages under their own licenses) | `3.24.4` (published 2026-11-08) |
+| [zap](plugins/zap/plugin.json) and [zap-active](plugins/zap-active/plugin.json) | `docker.io/zaproxy/zap-stable@sha256:9624669db72f54d86c4b46a7064518bd9bf79d8c61a4c31befa9923489f328af` (published by the ZAP organization, ZAProxy Ltd; about 1.1 GB) | `2.17.0` (published 2026-11-03) |
 
 The two GitHub Container Registry digests were resolved on 2026-11-19. Every pinned image's reported version is checked by `TestPinnedImageVersions` in CI.
 
@@ -40,7 +41,7 @@ Trivy's vulnerability database is not pinned: `siegekit update` lets Trivy downl
 | [Checkov](https://github.com/bridgecrewio/checkov) | IaC | 3.4.5 | Apache-2.0 | Pinned (M1) |
 | [KICS](https://github.com/Checkmarx/kics) | IaC | not checked | Apache-2.0 | Later |
 | [Hadolint](https://github.com/hadolint/hadolint) | Dockerfiles | not checked | GPL-3.0 | Optional |
-| [ZAP](https://github.com/zaproxy/zaproxy) | DAST | 2.17.0 | Apache-2.0 | Planned (M2) |
+| [ZAP](https://github.com/zaproxy/zaproxy) | DAST | 2.17.0 | Apache-2.0 | Pinned (M2) |
 | [Nuclei](https://github.com/projectdiscovery/nuclei) and [templates](https://github.com/projectdiscovery/nuclei-templates) | DAST, known CVEs | 3.11.1 | MIT | Planned (M2) |
 | [ffuf](https://github.com/ffuf/ffuf) | Content discovery | 2.3.0 | MIT | Planned (M2) |
 | [Schemathesis](https://github.com/schemathesis/schemathesis) | API fuzzing | 4.33.4 | MIT | Planned (M2) |

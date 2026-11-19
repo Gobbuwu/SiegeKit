@@ -45,6 +45,11 @@ type PluginResult struct {
 	Suppressed    int      `json:"suppressed,omitempty"`
 	RepoSettings  []string `json:"repoSettings,omitempty"`
 	IgnoreMarkers int      `json:"ignoreMarkers,omitempty"`
+	// Requests counts requests the egress proxy forwarded to the target in an
+	// active run; Refused counts requests and connections it refused because
+	// they went somewhere else (ADR 0018, ADR 0023).
+	Requests int `json:"requests,omitempty"`
+	Refused  int `json:"refused,omitempty"`
 }
 
 // IgnoreNote says in one line what the repository told the tool to ignore,
@@ -77,10 +82,11 @@ type Run struct {
 // NotTested lists what automated checks cannot cover (ADR 0009 item 3).
 // Every report shows it.
 var NotTested = []string{
-	// Keep this list true for the current version. Update the language and
-	// access-control lines when Opengrep (M2.9) and the two-account test
-	// (M2.7) land.
-	"The running application, unless you scanned its URL: a directory scan only reads files. Active web and API tests are not available yet (planned for M2).",
+	// Keep this list true for the current version. Update the web, language
+	// and access-control lines when more web tools (M2.5), Opengrep (M2.9)
+	// and the two-account test (M2.7) land.
+	"The running application, unless you scanned its URL: a directory scan only reads files. A URL scan crawls the app with ZAP and runs ZAP's passive checks; ZAP's attack scan runs only on local targets, and deployed targets get passive checks until request limits are measured. API specifications, other web tools (Nuclei, ffuf, sqlmap, Nikto) and login checks are planned for M2.",
+	"The source code, unless you scanned its directory: a URL scan only sends requests to the running app.",
 	"Code in languages without an analyzer: Python (bandit) and Go (gosec) code is analyzed; JavaScript, TypeScript and other languages are not yet (planned for M2). Secrets, dependencies and configuration files are checked in any language.",
 	"Access control: whether every request checks that this user may access this record. SiegeKit has no access-control test yet; a partial two-account test is planned for M2.",
 	"Business logic: skipping steps, replaying actions, tampering with prices or limits.",

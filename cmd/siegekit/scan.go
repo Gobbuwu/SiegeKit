@@ -51,7 +51,11 @@ executed from DIR). Reports are written to --report-dir.
 A URL target is checked against the target rules (ADR 0005) first: this
 machine is allowed, a private network address needs you to type its host
 name (or pass it with --authorized-host), and public systems need --deployed
-and proof that you control them. Active web tests arrive later in M2.
+and proof that you control them. SiegeKit then prints the plan, records the
+run in its audit log and runs the web tests: ZAP's crawler and passive
+checks, and on local targets only, ZAP's attack scan, which can change data.
+Every request goes through SiegeKit's egress proxy, which reaches only the
+target's own address. Web tests run on Linux only for now.
 
 With --deployed, SiegeKit gives you a token for the host the first time and
 checks it at the start of every run: publish it at
@@ -136,7 +140,16 @@ func scan(args []string, stdout, stderr io.Writer) int {
 	}
 
 	if isURL(pos[0]) {
-		return scanURL(pos[0], *deployed, *authorizedHost, stdout, stderr)
+		if *doUpdate {
+			fmt.Fprint(stderr, "siegekit scan: --update only applies to directory scans\n")
+			return exitUsage
+		}
+		return scanURL(pos[0], urlScan{
+			deployed: *deployed, authorizedHost: *authorizedHost,
+			only: splitList(*only), skip: splitList(*skip), threshold: threshold,
+			reportDir: *reportDir, noSave: *noSave, consent: consent{yes: *yes, none: *noInstall},
+			requireAll: *requireAll,
+		}, stdout, stderr)
 	}
 	if *deployed || *authorizedHost != "" {
 		fmt.Fprint(stderr, "siegekit scan: --deployed and --authorized-host only apply to URL targets\n")
@@ -154,13 +167,9 @@ func scan(args []string, stdout, stderr io.Writer) int {
 	if err != nil {
 		return fail(err)
 	}
-	var st *store.Store
 	dataRoot := ""
 	if dir, err := dataDir(); err == nil {
 		dataRoot = filepath.Join(dir, "data")
-		if !*noSave {
-			st = &store.Store{Dir: filepath.Join(dir, "runs")}
-		}
 	} else if !*noSave {
 		return fail(fmt.Errorf("%w (or use --no-save)", err))
 	}
@@ -203,10 +212,29 @@ func scan(args []string, stdout, stderr io.Writer) int {
 		return fail(err)
 	}
 
-	paths, err := writeReports(*reportDir, run)
+	return finish(run, *reportDir, *noSave, filepath.Base(target), threshold, *requireAll, unavailable, stdout, stderr)
+}
+
+// finish writes the reports, prints the summary, saves the run unless
+// noSave, and returns the exit code.
+func finish(run *report.Run, reportDir string, noSave bool, name string, threshold findings.Severity, requireAll bool, unavailable map[string]runner.Unavailable, stdout, stderr io.Writer) int {
+	fail := func(err error) int {
+		fmt.Fprintf(stderr, "siegekit scan: %v\n", err)
+		return exitInvalid
+	}
+	var st *store.Store
+	if !noSave {
+		dir, err := dataDir()
+		if err != nil {
+			return fail(fmt.Errorf("%w (or use --no-save)", err))
+		}
+		st = &store.Store{Dir: filepath.Join(dir, "runs")}
+	}
+	paths, err := writeReports(reportDir, run)
 	if err != nil {
 		return fail(err)
 	}
+
 	fmt.Fprintf(stdout, "\n%s\n", run.Headline())
 	if !run.Complete() {
 		fmt.Fprintln(stdout, "This run is incomplete: at least one check failed or timed out.")
@@ -220,11 +248,14 @@ func scan(args []string, stdout, stderr io.Writer) int {
 		if n := p.IgnoreNote(); n != "" {
 			line += " (repository ignores: " + n + ")"
 		}
+		if p.Requests > 0 || p.Refused > 0 {
+			line += fmt.Sprintf(" (%d request(s) sent, %d refused by SiegeKit)", p.Requests, p.Refused)
+		}
 		fmt.Fprintln(stdout, line)
 	}
 	fmt.Fprintf(stdout, "\nReports: %s\n", strings.Join(paths, ", "))
 	if st != nil {
-		id, err := st.Save(run, filepath.Base(target))
+		id, err := st.Save(run, name)
 		if err != nil {
 			return fail(fmt.Errorf("save run: %w", err))
 		}
@@ -232,7 +263,7 @@ func scan(args []string, stdout, stderr io.Writer) int {
 	}
 	fmt.Fprintln(stdout, "Automated checks do not cover everything; see \"Not tested by SiegeKit\" in the HTML report.")
 	code := run.ExitCode(threshold)
-	if *requireAll && code == report.ExitClean {
+	if requireAll && code == report.ExitClean {
 		for _, p := range run.Plugins {
 			if u, ok := unavailable[p.ID]; ok && u.Status == report.Skipped {
 				fmt.Fprintln(stdout, "Incomplete (--require-all): tests were skipped for missing dependencies.")
