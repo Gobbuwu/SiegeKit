@@ -17,14 +17,18 @@ var files embed.FS
 
 // Builtin parses and returns every built-in plugin, sorted by ID. Each
 // manifest's ID must equal its directory name.
-func Builtin() ([]*manifest.Manifest, error) {
-	names, err := fs.Glob(files, "*/plugin.json")
+func Builtin() ([]*manifest.Manifest, error) { return load(files) }
+
+// load reads every */plugin.json in fsys; Builtin calls it on the embedded
+// files, and tests on broken ones.
+func load(fsys fs.FS) ([]*manifest.Manifest, error) {
+	names, err := fs.Glob(fsys, "*/plugin.json")
 	if err != nil {
 		return nil, err
 	}
 	var out []*manifest.Manifest
 	for _, name := range names {
-		data, err := files.ReadFile(name)
+		data, err := fs.ReadFile(fsys, name)
 		if err != nil {
 			return nil, err
 		}

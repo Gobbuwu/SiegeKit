@@ -1,6 +1,6 @@
 # Roadmap
 
-Each milestone ends with a gate. The next milestone does not start until the gate passes and the project owner signs off.
+Each milestone ends with a gate. The next milestone does not start until the gate passes and the project owner signs off. What each milestone built, verified and left open is recorded in [docs/milestones](milestones/README.md).
 
 | Milestone | Scope | Gate |
 | --- | --- | --- |
