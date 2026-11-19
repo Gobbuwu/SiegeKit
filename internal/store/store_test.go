@@ -97,7 +97,7 @@ func TestComparison(t *testing.T) {
 		len(c.Fixed) != 1 || c.Fixed[0].RuleID != "a" || len(c.NotRechecked) != 1 || c.NotRechecked[0].RuleID != "b" || c.StillPresent != 1 {
 		t.Fatalf("comparison %+v", c)
 	}
-	if s := c.Summary(); s != "Since the last scan of this target (2026-11-18 01:02 UTC): 1 new, 1 fixed, 1 still present, 1 not checked again because their check did not complete." {
+	if s := c.Summary(); s != "Since the last scan of this target (2026-11-18 01:02 UTC): 1 new, 1 fixed, 1 still present, 1 not checked again because their check did not run to completion." {
 		t.Errorf("summary %q", s)
 	}
 	if c.VersionNote("0.1") != "" || !strings.Contains(c.VersionNote("0.2"), "SiegeKit 0.1, this one 0.2") {
@@ -131,5 +131,32 @@ func TestLatest(t *testing.T) {
 	}
 	if id, _, _ := s.Latest("/c"); id != "" {
 		t.Errorf("latest /c: %q", id)
+	}
+}
+
+// A finding that one run could not check again stays in the baseline of
+// the next comparison: it is fixed or still present later, never new.
+func TestComparisonCarriesNotRechecked(t *testing.T) {
+	x := f("x", "gitleaks")
+	run1 := &report.Run{Findings: []findings.Finding{x}}
+	run2 := &report.Run{Plugins: []report.PluginResult{{ID: "gitleaks", Status: report.Failed}}}
+	run2.Comparison = Comparison("r1", run1, run2)
+	if len(run2.Comparison.NotRechecked) != 1 {
+		t.Fatalf("run 2: %+v", run2.Comparison)
+	}
+	still := &report.Run{Plugins: []report.PluginResult{{ID: "gitleaks", Status: report.Ran}}, Findings: []findings.Finding{x}}
+	if c := Comparison("r2", run2, still); len(c.New) != 0 || c.StillPresent != 1 {
+		t.Errorf("still present: %+v", c)
+	}
+	fixed := &report.Run{Plugins: []report.PluginResult{{ID: "gitleaks", Status: report.Ran}}}
+	if c := Comparison("r2", run2, fixed); len(c.Fixed) != 1 {
+		t.Errorf("fixed: %+v", c)
+	}
+	failedAgain := &report.Run{Plugins: []report.PluginResult{{ID: "gitleaks", Status: report.Failed}}}
+	if c := Comparison("r2", run2, failedAgain); len(c.NotRechecked) != 1 {
+		t.Errorf("failed again: %+v", c)
+	}
+	if n := (&report.Comparison{}).VersionNote("1.0"); !strings.Contains(n, "an unknown version") {
+		t.Errorf("note %q", n)
 	}
 }

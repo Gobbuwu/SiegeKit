@@ -60,13 +60,19 @@ func (s *Store) Save(r *report.Run, targetSlug string) (string, error) {
 	// same target in the same second gets a suffix.
 	base := id
 	for n := 2; ; n++ {
+		// Claim the name with O_EXCL, so two runs finishing at once never
+		// take the same file, then move the finished run over the claim.
 		final := filepath.Join(s.Dir, id+".json")
-		if _, err := os.Lstat(final); errors.Is(err, os.ErrNotExist) {
+		claim, err := os.OpenFile(final, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600) // #nosec G304 -- id is checked against reRunID
+		if err == nil {
+			claim.Close() // #nosec G104 -- empty file; the rename below replaces it
 			if err := os.Rename(tmp.Name(), final); err != nil {
+				os.Remove(final) // #nosec G104 -- best effort; the rename error is returned
 				return "", err
 			}
 			return id, nil
-		} else if err != nil {
+		}
+		if !errors.Is(err, os.ErrExist) {
 			return "", err
 		}
 		if n > 9 {
@@ -130,8 +136,15 @@ func (s *Store) Latest(target string) (string, *report.Run, error) {
 }
 
 // Comparison compares cur with the saved run prev, whose ID is id.
+// Findings that prev itself could not check again are still open, so they
+// stay in the baseline: a later run reports them as fixed or still present,
+// never as new.
 func Comparison(id string, prev, cur *report.Run) *report.Comparison {
-	d := Compare(prev, cur)
+	base := *prev
+	if prev.Comparison != nil && len(prev.Comparison.NotRechecked) > 0 {
+		base.Findings = append(append([]findings.Finding(nil), prev.Findings...), prev.Comparison.NotRechecked...)
+	}
+	d := Compare(&base, cur)
 	c := &report.Comparison{
 		PreviousRun: id, PreviousStarted: prev.Started, PreviousVersion: prev.SiegeKitVersion,
 		New: []string{}, Fixed: d.Fixed, NotRechecked: []findings.Finding{},

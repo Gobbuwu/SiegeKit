@@ -100,7 +100,7 @@ func (c *Comparison) Summary() string {
 	s := fmt.Sprintf("Since the last scan of this target (%s): %d new, %d fixed, %d still present",
 		c.PreviousStarted.UTC().Format("2006-01-02 15:04 UTC"), len(c.New), len(c.Fixed), c.StillPresent)
 	if n := len(c.NotRechecked); n > 0 {
-		s += fmt.Sprintf(", %d not checked again because their check did not complete", n)
+		s += fmt.Sprintf(", %d not checked again because their check did not run to completion", n)
 	}
 	return s + "."
 }
@@ -111,7 +111,11 @@ func (c *Comparison) VersionNote(current string) string {
 	if c.PreviousVersion == current {
 		return ""
 	}
-	return fmt.Sprintf("The previous run used SiegeKit %s, this one %s: some changes may come from the upgrade, not from the target.", c.PreviousVersion, current)
+	prev := c.PreviousVersion
+	if prev == "" {
+		prev = "an unknown version"
+	}
+	return fmt.Sprintf("The previous run used SiegeKit %s, this one %s: some changes may come from the upgrade, not from the target.", prev, current)
 }
 
 // NotTested lists what automated checks cannot cover (ADR 0009 item 3).
@@ -353,7 +357,7 @@ code,pre{font:13px ui-monospace,monospace;white-space:pre-wrap;word-break:break-
 {{with .Run.Comparison}}<h2>Since the last scan</h2>
 <p>{{.Summary}} Previous run: <code>{{.PreviousRun}}</code>.</p>
 {{with $.VersionNote}}<p class="warn">{{.}}</p>{{end}}
-{{if .Fixed}}<p>Fixed (the check that reported each one ran to completion and did not report it again):</p>
+{{if .Fixed}}<p>Fixed: the check that reported each one ran to completion and did not report it again. An ignore setting added to the repository also hides a finding; each check's ignore counts are under "What was tested".</p>
 <ul>{{range .Fixed}}<li>[{{.Severity}}] {{.Title}} · <code>{{.Location.URI}}{{if .Location.StartLine}}:{{.Location.StartLine}}{{end}}</code></li>{{end}}</ul>{{end}}
 {{if .NotRechecked}}<p class="warn">Not checked again, because their check did not complete in this run:</p>
 <ul>{{range .NotRechecked}}<li>[{{.Severity}}] {{.Title}} · <code>{{.Location.URI}}{{if .Location.StartLine}}:{{.Location.StartLine}}{{end}}</code></li>{{end}}</ul>{{end}}
