@@ -181,7 +181,40 @@ func engine(t *testing.T) *Engine {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Runs never pull (ADR 0016), so the test image is pulled explicitly,
+	// once: a pull asks the registry even when the image is present, and
+	// registries rate-limit those requests.
+	if ok, err := e.HasImage(context.Background(), testImage); err != nil {
+		t.Fatal(err)
+	} else if !ok {
+		if err := e.Pull(context.Background(), testImage); err != nil {
+			t.Fatal(err)
+		}
+	}
 	return e
+}
+
+func TestHasImageAndPull(t *testing.T) {
+	e := engine(t)
+	ctx := context.Background()
+	if ok, err := e.HasImage(ctx, testImage); !ok || err != nil {
+		t.Fatalf("pulled image not found: %v %v", ok, err)
+	}
+	absent := "docker.io/library/alpine@sha256:" + strings.Repeat("0", 64)
+	if ok, err := e.HasImage(ctx, absent); ok || err != nil {
+		t.Errorf("absent image: %v %v", ok, err)
+	}
+	if err := e.Pull(ctx, absent); err == nil {
+		t.Error("pulling a digest that does not exist succeeded")
+	}
+	for _, bad := range []string{"alpine:3.20", "docker.io/library/alpine:latest"} {
+		if _, err := e.HasImage(ctx, bad); err == nil {
+			t.Errorf("HasImage accepted unpinned %q", bad)
+		}
+		if err := e.Pull(ctx, bad); err == nil {
+			t.Errorf("Pull accepted unpinned %q", bad)
+		}
+	}
 }
 
 func run(t *testing.T, e *Engine, s Spec) *Result {
@@ -242,7 +275,9 @@ func TestContainerTimeoutKillsContainer(t *testing.T) {
 	if time.Since(start) > 45*time.Second {
 		t.Fatalf("timeout took %v", time.Since(start))
 	}
-	out, err := exec.Command(e.Bin, "ps", "--all", "--filter", "name=siegekit-", "--format", "{{.Names}}").Output()
+	// Only containers of the test image: other packages' tests run tool
+	// containers named siegekit-* at the same time.
+	out, err := exec.Command(e.Bin, "ps", "--all", "--filter", "name=siegekit-", "--filter", "ancestor="+testImage, "--format", "{{.Names}}").Output()
 	if err != nil {
 		t.Fatal(err)
 	}

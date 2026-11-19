@@ -51,7 +51,7 @@ jobs:
         run: |
           go build -o "$RUNNER_TEMP/siegekit" ./cmd/siegekit
           set +e
-          "$RUNNER_TEMP/siegekit" scan --update --no-save --report-dir "$RUNNER_TEMP/self-report" .
+          "$RUNNER_TEMP/siegekit" scan --yes --update --no-save --report-dir "$RUNNER_TEMP/self-report" .
           code=$?
           set -e
           echo "exit code $code"
@@ -64,6 +64,7 @@ jobs:
           go test -run='^$' -fuzz=FuzzSARIF -fuzztime=60s ./internal/sarif
           go test -run='^$' -fuzz=FuzzBandit -fuzztime=30s ./internal/bandit
           go test -run='^$' -fuzz=FuzzBackendRules -fuzztime=30s ./internal/checks
+          go test -run='^$' -fuzz=FuzzParse -fuzztime=60s ./internal/target
       - name: Vulnerability check
         if: runner.os == 'Linux'
         run: go run golang.org/x/vuln/cmd/govulncheck@${GOVULNCHECK_VERSION} ./...

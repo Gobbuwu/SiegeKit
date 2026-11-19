@@ -7,22 +7,75 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
+	"github.com/Gobbuwu/SiegeKit/internal/deps"
 	"github.com/Gobbuwu/SiegeKit/internal/runner"
 	"github.com/Gobbuwu/SiegeKit/internal/sandbox"
+	"github.com/Gobbuwu/SiegeKit/plugins"
 )
 
 type fakeExec func(s sandbox.Spec) (*sandbox.Result, error)
 
 func (f fakeExec) Run(_ context.Context, s sandbox.Spec) (*sandbox.Result, error) { return f(s) }
 
+// fakeEngine runs tools with run and holds the images in have.
+type fakeEngine struct {
+	run     runner.Executor
+	have    map[string]bool // nil: every image is present
+	hasErr  error
+	pullErr error
+	pulled  []string
+}
+
+func (f *fakeEngine) Run(ctx context.Context, s sandbox.Spec) (*sandbox.Result, error) {
+	return f.run.Run(ctx, s)
+}
+
+func (f *fakeEngine) HasImage(_ context.Context, image string) (bool, error) {
+	return f.have == nil || f.have[image], f.hasErr
+}
+
+func (f *fakeEngine) Pull(_ context.Context, image string) error {
+	if f.pullErr != nil {
+		return f.pullErr
+	}
+	f.pulled = append(f.pulled, image)
+	if f.have != nil {
+		f.have[image] = true
+	}
+	return nil
+}
+
+type fakeSizer struct{}
+
+func (fakeSizer) DownloadSize(context.Context, string, string) (int64, error) { return 42 << 20, nil }
+
+// useExecutor makes every image present and runs tools with ex.
 func useExecutor(t *testing.T, ex runner.Executor, err error) {
 	t.Helper()
-	old := newExecutor
-	newExecutor = func() (runner.Executor, error) { return ex, err }
-	t.Cleanup(func() { newExecutor = old })
+	var e *fakeEngine
+	if ex != nil {
+		e = &fakeEngine{run: ex}
+	}
+	useEngine(t, e, err)
+}
+
+func useEngine(t *testing.T, e *fakeEngine, err error) {
+	t.Helper()
+	old, oldSizer, oldIn, oldTTY := newEngine, sizer, stdin, stdinIsTerminal
+	newEngine = func() (engine, error) {
+		if err != nil {
+			return nil, err
+		}
+		return e, nil
+	}
+	sizer = fakeSizer{}
+	stdin = strings.NewReader("")
+	stdinIsTerminal = func() bool { return false }
+	t.Cleanup(func() { newEngine, sizer, stdin, stdinIsTerminal = old, oldSizer, oldIn, oldTTY })
 }
 
 // emptySARIF makes every plugin complete with no findings.
@@ -54,12 +107,16 @@ func TestScan(t *testing.T) {
 	reports := filepath.Join(t.TempDir(), "rep")
 	useExecutor(t, emptySARIF, nil)
 	var out, errb bytes.Buffer
-	// Without data the trivy check cannot run, so the run is incomplete.
-	if code := run([]string{"scan", target, "--no-save", "--report-dir", reports}, &out, &errb); code != 4 || !strings.Contains(out.String(), "run 'siegekit update'") {
+	// Without a terminal nothing is installed: trivy is skipped and says why.
+	if code := run([]string{"scan", target, "--no-save", "--report-dir", reports}, &out, &errb); code != exitOK || !strings.Contains(out.String(), "trivy data is not installed (no terminal to ask; use --yes)") {
 		t.Fatalf("exit %d: %s %s", code, out.String(), errb.String())
 	}
+	// --require-all turns that into an incomplete run.
+	if code := run([]string{"scan", target, "--no-save", "--require-all", "--report-dir", reports}, &out, &errb); code != 4 {
+		t.Fatalf("--require-all: exit %d: %s", code, out.String())
+	}
 	out.Reset()
-	if code := run([]string{"scan", "--update", target, "--report-dir", reports}, &out, &errb); code != exitOK {
+	if code := run([]string{"scan", "--yes", "--update", target, "--report-dir", reports}, &out, &errb); code != exitOK {
 		t.Fatalf("exit %d: %s %s", code, out.String(), errb.String())
 	}
 	if !strings.Contains(out.String(), "No issues found by the 6 check(s) that ran.") || !strings.Contains(out.String(), "Saved run") {
@@ -99,7 +156,8 @@ func TestScanErrors(t *testing.T) {
 		{"missing dir", []string{filepath.Join(dir, "missing")}, nil, nil, exitInvalid, "no such file"},
 		{"not a dir", []string{file}, nil, nil, exitInvalid, "not a directory"},
 		{"unknown plugin", []string{"--only", "nmap", dir}, nil, nil, exitInvalid, `unknown plugin "nmap"`},
-		{"no engine", []string{dir}, nil, errors.New("no container engine found"), exitInvalid, "no container engine"},
+		{"yes and no-install", []string{"--yes", "--no-install", dir}, nil, nil, exitUsage, "cannot be used together"},
+		{"no engine", []string{"--no-save", "--report-dir", filepath.Join(dir, "r0"), dir}, nil, errors.New("no container engine found"), exitOK, "SiegeKit does not install one"},
 		{"incomplete", []string{"--no-save", "--report-dir", filepath.Join(dir, "r"), dir}, fakeExec(func(sandbox.Spec) (*sandbox.Result, error) {
 			return &sandbox.Result{Status: sandbox.TimedOut}, nil
 		}), nil, 4, "incomplete"},
@@ -147,5 +205,118 @@ func TestUpdate(t *testing.T) {
 	out.Reset()
 	if code := run([]string{"update"}, &out, &errb); code != exitInvalid || !strings.Contains(out.String(), "network unreachable") {
 		t.Errorf("failed update: exit %d %s", code, out.String())
+	}
+}
+
+func TestScanDependencyConsent(t *testing.T) {
+	all, err := plugins.Builtin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ref := map[string]string{}
+	for _, m := range all {
+		ref[m.ID], _ = runner.ImageFor(m)
+	}
+	oldLook := deps.LookPath
+	deps.LookPath = func(name string) (string, error) {
+		if name == "trivy" {
+			return "/usr/local/bin/trivy", nil
+		}
+		return "", errors.New("not found")
+	}
+	t.Cleanup(func() { deps.LookPath = oldLook })
+
+	for _, tc := range []struct {
+		name    string
+		args    []string
+		answer  string
+		eng     *fakeEngine
+		code    int
+		pulled  []string
+		want    []string
+		wantNot []string
+	}{
+		{
+			name: "user picks one", args: nil, answer: "1\n",
+			eng: &fakeEngine{run: emptySARIF, have: map[string]bool{}}, code: exitOK,
+			pulled: []string{ref["bandit"]},
+			want: []string{"1. bandit 1.9.4 container image (42 MiB download), needed by: bandit",
+				"trivy was found on your system at /usr/local/bin/trivy, but SiegeKit uses its own sandboxed, pinned copy.",
+				"bandit     ran", "gitleaks   skipped    0 finding(s) - you declined gitleaks 8.30.1 container image",
+				"trivy      skipped    0 finding(s) - you declined trivy 0.76.2 container image",
+				"Skipped because a dependency is not installed: checkov, gitleaks, gosec, trivy."},
+		},
+		{
+			name: "invalid answers then none", answer: "9\nx\nq\n",
+			eng: &fakeEngine{run: emptySARIF, have: map[string]bool{}}, code: exitOK,
+			want: []string{"Please answer a, n, or numbers from the list.", "you declined bandit"},
+		},
+		{
+			name: "images installed, data accepted", answer: "a\n",
+			eng: &fakeEngine{run: emptySARIF}, code: exitOK,
+			want:    []string{"Already installed (not downloaded again): bandit 1.9.4 container image", "1. trivy data (size not known in advance), needed by: trivy", "trivy      ran"},
+			wantNot: []string{"was found on your system", "Skipped because"},
+		},
+		{
+			name: "no-install", args: []string{"--no-install"},
+			eng: &fakeEngine{run: emptySARIF, have: map[string]bool{}}, code: exitOK,
+			want: []string{"bandit 1.9.4 container image is not installed (--no-install)"},
+		},
+		{
+			name: "download fails", args: []string{"--yes"},
+			eng: &fakeEngine{run: emptySARIF, have: map[string]bool{}, pullErr: errors.New("registry unreachable")}, code: 4,
+			want: []string{"failed     0 finding(s) - could not install bandit 1.9.4 container image: registry unreachable"},
+		},
+		{
+			name: "engine not working",
+			eng:  &fakeEngine{run: emptySARIF, hasErr: errors.New("container engine is not working: daemon down")}, code: 4,
+			want: []string{"The container engine is not working", "backend-rules ran", "gitleaks   failed"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("XDG_DATA_HOME", t.TempDir())
+			target := t.TempDir()
+			for _, name := range []string{"app.py", "main.go"} {
+				os.WriteFile(filepath.Join(target, name), nil, 0o644)
+			}
+			useEngine(t, tc.eng, nil)
+			stdin = strings.NewReader(tc.answer)
+			stdinIsTerminal = func() bool { return true }
+			var out, errb bytes.Buffer
+			args := append([]string{"scan", "--no-save", "--report-dir", filepath.Join(t.TempDir(), "r"), target}, tc.args...)
+			code := run(args, &out, &errb)
+			if code != tc.code {
+				t.Errorf("exit %d, want %d", code, tc.code)
+			}
+			if !slices.Equal(tc.eng.pulled, tc.pulled) {
+				t.Errorf("pulled %v, want %v", tc.eng.pulled, tc.pulled)
+			}
+			for _, w := range tc.want {
+				if !strings.Contains(out.String(), w) {
+					t.Errorf("missing %q", w)
+				}
+			}
+			for _, w := range tc.wantNot {
+				if strings.Contains(out.String(), w) {
+					t.Errorf("unexpected %q", w)
+				}
+			}
+			if t.Failed() {
+				t.Log(out.String(), errb.String())
+			}
+		})
+	}
+}
+
+func TestUpdateAsksForMissingImage(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	useEngine(t, &fakeEngine{run: emptySARIF, have: map[string]bool{}}, nil)
+	var out, errb bytes.Buffer
+	if code := run([]string{"update"}, &out, &errb); code != exitInvalid || !strings.Contains(out.String(), "trivy      skipped - trivy 0.76.2 container image is not installed (no terminal to ask; use --yes)") {
+		t.Fatalf("exit %d: %s", code, out.String())
+	}
+	out.Reset()
+	if code := run([]string{"update", "--yes"}, &out, &errb); code != exitOK || !strings.Contains(out.String(), "trivy      updated") {
+		t.Fatalf("--yes: exit %d: %s", code, out.String())
 	}
 }

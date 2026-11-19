@@ -83,7 +83,7 @@ jobs:
         # the report is checked too.
         run: |
           set +e
-          "$RUNNER_TEMP/siegekit" scan --update --no-save --report-dir "$RUNNER_TEMP/report" "$RUNNER_TEMP/target"
+          "$RUNNER_TEMP/siegekit" scan --yes --update --no-save --report-dir "$RUNNER_TEMP/report" "$RUNNER_TEMP/target"
           code=$?
           set -e
           echo "exit code $code"

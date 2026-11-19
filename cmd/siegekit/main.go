@@ -1,6 +1,6 @@
 // Command siegekit runs security tests against software you own.
 //
-// Milestone M1 in progress: passive scans of source directories are available.
+// Milestone M1 (alpha) is complete: passive scans of source directories.
 package main
 
 import (
