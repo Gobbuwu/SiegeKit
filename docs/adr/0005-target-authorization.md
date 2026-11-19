@@ -2,6 +2,7 @@
 
 - Status: Accepted
 - Date: 2026-11-18
+- Amended by: [0017](0017-target-rule-details.md) (more internal ranges, IPv6 forms, ambiguous IP spellings, --authorized-host)
 
 ## Context
 
