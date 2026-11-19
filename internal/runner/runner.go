@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path"
 	"path/filepath"
 	"runtime"
 	"slices"
@@ -90,6 +91,70 @@ type Unavailable struct {
 	Reason string
 }
 
+// getuid and getgid are replaced in tests.
+var getuid, getgid = os.Getuid, os.Getgid
+
+// unreadable records which target files a tool cannot read (see
+// checks.Unreadable). It is only filled in when SiegeKit runs as root.
+type unreadable struct {
+	paths []string
+	err   error // the list could not be made; every check is then incomplete
+}
+
+// findUnreadable lists target files the tools cannot read when SiegeKit runs
+// as root (owner decision, 2026-11-19). It returns nil otherwise.
+func findUnreadable(ctx context.Context, root string) *unreadable {
+	if getuid() != 0 {
+		return nil
+	}
+	uid, gid := sandbox.ToolIdentity(getuid(), getgid())
+	paths, err := checks.Unreadable(ctx, root, uint32(uid), uint32(gid)) // #nosec G115 -- ToolIdentity returns a fixed non-root ID for root
+	if errors.Is(err, checks.ErrTooManyFiles) {
+		err = nil // the tree is too large to check fully; report what was found
+	}
+	return &unreadable{paths: paths, err: err}
+}
+
+// affects reports whether the unreadable paths matter to plugin m: every
+// unreadable directory does, and a file does if m reads files like it.
+func (u *unreadable) affects(m *manifest.Manifest) bool {
+	if u == nil {
+		return false
+	}
+	if u.err != nil || len(m.AppliesTo) == 0 {
+		return u.err != nil || len(u.paths) > 0
+	}
+	for _, p := range u.paths {
+		if strings.HasSuffix(p, "/") {
+			return true
+		}
+		for _, pat := range m.AppliesTo {
+			if ok, _ := path.Match(pat, path.Base(p)); ok {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// reason explains the problem in the report.
+func (u *unreadable) reason() string {
+	if u.err != nil {
+		return fmt.Sprintf("incomplete: SiegeKit runs as root, so the tool runs as user %d, and SiegeKit could not check which files that user can read (%v). Run SiegeKit as a normal user.", nonRootUser(), u.err)
+	}
+	const show = 5
+	list := strings.Join(u.paths[:min(show, len(u.paths))], ", ")
+	if len(u.paths) > show {
+		list += fmt.Sprintf(" and %d more", len(u.paths)-show)
+	}
+	return fmt.Sprintf("incomplete: SiegeKit runs as root, so the tool runs as user %d and could not read %d path(s): %s. Run SiegeKit as a normal user, or make these readable (chmod o+r, and o+rx for directories).", nonRootUser(), len(u.paths), list)
+}
+
+func nonRootUser() int {
+	uid, _ := sandbox.ToolIdentity(0, 0)
+	return uid
+}
+
 // MaxReportSize is the largest tool report read, matching the SARIF limit.
 const MaxReportSize = sarif.MaxSize
 
@@ -132,9 +197,17 @@ func Run(ctx context.Context, ex Executor, selected []*manifest.Manifest, opt Op
 		}
 		run.Plugins = append(run.Plugins, pr)
 	}
+	var unread *unreadable
+	checked := false
 	for _, m := range selected {
 		if err := ctx.Err(); err != nil {
 			return nil, err
+		}
+		if _, ok := opt.Unavailable[m.ID]; !ok && !checked {
+			unread, checked = findUnreadable(ctx, opt.TargetDir), true
+			if ctx.Err() != nil {
+				return nil, ctx.Err()
+			}
 		}
 		if u, ok := opt.Unavailable[m.ID]; ok {
 			run.Plugins = append(run.Plugins, report.PluginResult{
@@ -144,6 +217,14 @@ func Run(ctx context.Context, ex Executor, selected []*manifest.Manifest, opt Op
 			continue
 		}
 		pr, fs := runPlugin(ctx, ex, m, opt, work)
+		if pr.Status == report.Ran && unread.affects(m) {
+			// Its findings are kept, but the run is incomplete (exit code 4).
+			reason := unread.reason()
+			if pr.Reason != "" {
+				reason += " " + pr.Reason
+			}
+			pr.Status, pr.Reason = report.Failed, reason
+		}
 		run.Plugins = append(run.Plugins, pr)
 		all = append(all, fs...)
 	}

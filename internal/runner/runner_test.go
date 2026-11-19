@@ -369,3 +369,70 @@ func TestRunReportsRepoIgnores(t *testing.T) {
 		t.Errorf("note %q", note)
 	}
 }
+
+// As root, tools run as a fixed non-root user. Files that user cannot read
+// make the checks that need them incomplete (owner decision, 2026-11-19).
+func TestRunMarksUnreadableFilesIncomplete(t *testing.T) {
+	oldUID, oldGID := getuid, getgid
+	t.Cleanup(func() { getuid, getgid = oldUID, oldGID })
+	f := &fake{act: func(s sandbox.Spec) (*sandbox.Result, error) {
+		if strings.Contains(s.Image, "gitleaks") {
+			write(t, s.OutDir, "gitleaks.sarif", gitleaksSARIF)
+		} else {
+			write(t, s.OutDir, "bandit.json", `{"results":[],"errors":[]}`)
+		}
+		return &sandbox.Result{Status: sandbox.Completed}, nil
+	}}
+	o := opts(t)
+	write(t, o.TargetDir, "app.py", "x = 1\n")
+	write(t, o.TargetDir, ".env", "KEY=1\n")
+	if err := os.Chmod(filepath.Join(o.TargetDir, ".env"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	selected := []*manifest.Manifest{builtin(t, "gitleaks"), builtin(t, "bandit")}
+
+	getuid, getgid = func() int { return 0 }, func() int { return 0 }
+	r, err := Run(context.Background(), f, selected, o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gl, bd := r.Plugins[0], r.Plugins[1]
+	if gl.Status != report.Failed || !strings.Contains(gl.Reason, "could not read 1 path(s): .env") || gl.Findings != 1 {
+		t.Errorf("gitleaks: %+v", gl)
+	}
+	if bd.Status != report.Ran { // bandit reads only *.py, which is readable
+		t.Errorf("bandit: %+v", bd)
+	}
+	if len(r.Findings) != 1 || r.Complete() {
+		t.Errorf("findings %d, complete %v: findings must be kept and the run incomplete", len(r.Findings), r.Complete())
+	}
+
+	// An unreadable directory affects every check.
+	if err := os.Chmod(filepath.Join(o.TargetDir, ".env"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(o.TargetDir, "private"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	r, err = Run(context.Background(), f, selected, o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range r.Plugins {
+		if p.Status != report.Failed || !strings.Contains(p.Reason, "private/") {
+			t.Errorf("unreadable directory: %+v", p)
+		}
+	}
+
+	// Not running as root: nothing is checked or changed.
+	getuid = func() int { return 1000 }
+	r, err = Run(context.Background(), f, selected, o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range r.Plugins {
+		if p.Status != report.Ran {
+			t.Errorf("not root: %+v", p)
+		}
+	}
+}

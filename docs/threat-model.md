@@ -75,7 +75,7 @@ A pull request that adds any feature in point 2 will be declined, and this secti
 - Default request-rate cap for deployed mode, set from measurements on test fixtures (M2).
 - ~~Output directory size cap and behavior when exceeded (M1).~~ Resolved in M1.3: 512 MiB default per plugin; exceeding it marks the plugin as failed, so the run is reported incomplete.
 - Rootless Podman and rootless Docker map container users to sub-UIDs, so the output directory may not be writable with `--user <host uid>`. Needs `--userns=keep-id` (Podman) or equivalent, tested on each engine (M1.5). Status on 2026-11-19: not tested in M1; rootless Podman is part of the self-audit gate (roadmap, item 5). ADR 0006's warning when rootless mode is not used is not implemented, because recommending rootless engines waits on that test.
-- When SiegeKit runs as root, tools run as UID 65532 and cannot read target files that only root may read, so those files are silently not scanned. Decide before M1 ends whether to detect this and mark the plugin incomplete, or to refuse to run as root (M1.5).
+- ~~When SiegeKit runs as root, tools run as UID 65532 and cannot read target files that only root may read, so those files are silently not scanned. Decide before M1 ends whether to detect this and mark the plugin incomplete, or to refuse to run as root (M1.5).~~ Decided by the owner on 2026-11-19 and done: when SiegeKit runs as root, it lists the target files and directories user 65532 cannot read, and each check that needs them is marked incomplete (failed, exit code 4) with the paths and how to fix it. Its findings are kept.
 - GPU pass-through isolation guarantees per engine (M3).
 
 ## Residual risks accepted
