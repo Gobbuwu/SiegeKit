@@ -2,6 +2,7 @@
 
 - Status: Accepted
 - Date: 2026-11-18
+- Amended by: [0013](0013-run-storage.md) (runs stored as JSON files, not SQLite)
 
 ## Context
 

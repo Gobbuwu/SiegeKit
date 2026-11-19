@@ -1,0 +1,285 @@
+// Package report builds SiegeKit's run reports (ADR 0007, ADR 0009).
+//
+// Wording rule (ADR 0009): a report never says "secure", "safe" or "passed".
+// The strongest summary is "No issues found by the N checks that ran."
+package report
+
+import (
+	"encoding/json"
+	"fmt"
+	"html/template"
+	"io"
+	"sort"
+	"time"
+
+	"github.com/Gobbuwu/SiegeKit/internal/findings"
+)
+
+// Status of one plugin in a run.
+type Status string
+
+// Plugin statuses.
+const (
+	Ran      Status = "ran"
+	Skipped  Status = "skipped"
+	Failed   Status = "failed"
+	TimedOut Status = "timed-out"
+)
+
+// PluginResult is the coverage record for one plugin (ADR 0009 item 2).
+type PluginResult struct {
+	ID       string `json:"id"`
+	Family   string `json:"family"`
+	Tool     string `json:"tool"`
+	Version  string `json:"version"`
+	Status   Status `json:"status"`
+	Reason   string `json:"reason,omitempty"`
+	Findings int    `json:"findings"`
+}
+
+// Run is everything a report shows.
+type Run struct {
+	SiegeKitVersion string             `json:"siegekitVersion"`
+	Target          string             `json:"target"`
+	Mode            string             `json:"mode"`
+	Started         time.Time          `json:"started"`
+	Finished        time.Time          `json:"finished"`
+	Plugins         []PluginResult     `json:"plugins"`
+	Findings        []findings.Finding `json:"findings"`
+}
+
+// NotTested lists what automated checks cannot cover (ADR 0009 item 3).
+// Every report shows it.
+var NotTested = []string{
+	"Access control beyond the automated two-account test: whether every request checks that this user may access this record.",
+	"Business logic: skipping steps, replaying actions, tampering with prices or limits.",
+	"Authentication and session design decisions that need human judgement.",
+	"Code paths the tools did not reach: pages behind logins that were not configured, endpoints missing from specs, code without fuzz harnesses.",
+	"Systems that were not scanned: cloud accounts, third-party services, infrastructure outside the target.",
+}
+
+// Complete reports whether every selected plugin ran to completion.
+func (r *Run) Complete() bool {
+	for _, p := range r.Plugins {
+		if p.Status == Failed || p.Status == TimedOut {
+			return false
+		}
+	}
+	return true
+}
+
+// RanCount returns how many plugins ran to completion.
+func (r *Run) RanCount() int {
+	n := 0
+	for _, p := range r.Plugins {
+		if p.Status == Ran {
+			n++
+		}
+	}
+	return n
+}
+
+// Counts returns the number of findings per severity.
+func (r *Run) Counts() map[findings.Severity]int {
+	c := map[findings.Severity]int{}
+	for _, f := range r.Findings {
+		c[f.Severity]++
+	}
+	return c
+}
+
+// Headline is the one-sentence summary at the top of every report.
+func (r *Run) Headline() string {
+	switch {
+	case r.RanCount() == 0:
+		return "No checks completed. Nothing was tested."
+	case len(r.Findings) > 0:
+		return fmt.Sprintf("%d issue(s) found by the %d check(s) that ran.", len(r.Findings), r.RanCount())
+	default:
+		return fmt.Sprintf("No issues found by the %d check(s) that ran. This does not mean the application is secure.", r.RanCount())
+	}
+}
+
+// Exit codes for CI use (ADR 0009 item 4). 1 and 2 are used by the CLI for
+// invalid input and usage errors.
+const (
+	ExitClean      = 0
+	ExitFindings   = 3
+	ExitIncomplete = 4
+)
+
+// ExitCode returns ExitFindings if any finding is at or above threshold,
+// otherwise ExitIncomplete if any plugin failed or timed out, otherwise
+// ExitClean. An incomplete run is never reported as clean.
+func (r *Run) ExitCode(threshold findings.Severity) int {
+	for _, f := range r.Findings {
+		if f.Severity >= threshold {
+			return ExitFindings
+		}
+	}
+	if !r.Complete() || r.RanCount() == 0 {
+		return ExitIncomplete
+	}
+	return ExitClean
+}
+
+// WriteJSON writes the run as indented JSON.
+func WriteJSON(w io.Writer, r *Run) error {
+	enc := json.NewEncoder(w)
+	enc.SetIndent("", "  ")
+	return enc.Encode(r)
+}
+
+// WriteSARIF writes the deduplicated findings as one SARIF 2.1.0 log with a
+// single "SiegeKit" run, so code hosts and IDEs can read them.
+func WriteSARIF(w io.Writer, r *Run) error {
+	type msg struct {
+		Text string `json:"text"`
+	}
+	type rule struct {
+		ID               string         `json:"id"`
+		ShortDescription msg            `json:"shortDescription"`
+		Properties       map[string]any `json:"properties,omitempty"`
+	}
+	type region struct {
+		StartLine int `json:"startLine,omitempty"`
+	}
+	type loc struct {
+		PhysicalLocation struct {
+			ArtifactLocation struct {
+				URI string `json:"uri"`
+			} `json:"artifactLocation"`
+			Region *region `json:"region,omitempty"`
+		} `json:"physicalLocation"`
+	}
+	type result struct {
+		RuleID              string            `json:"ruleId"`
+		Level               string            `json:"level"`
+		Message             msg               `json:"message"`
+		Locations           []loc             `json:"locations,omitempty"`
+		PartialFingerprints map[string]string `json:"partialFingerprints"`
+		Properties          map[string]any    `json:"properties"`
+	}
+	levels := map[findings.Severity]string{
+		findings.Critical: "error", findings.High: "error",
+		findings.Medium: "warning", findings.Low: "note", findings.Info: "none",
+	}
+	var rules []rule
+	seenRule := map[string]bool{}
+	var results []result
+	for _, f := range r.Findings {
+		if !seenRule[f.RuleID] {
+			seenRule[f.RuleID] = true
+			var props map[string]any
+			if len(f.CWEs) > 0 {
+				props = map[string]any{"tags": f.CWEs}
+			}
+			rules = append(rules, rule{ID: f.RuleID, ShortDescription: msg{f.Title}, Properties: props})
+		}
+		res := result{
+			RuleID:              f.RuleID,
+			Level:               levels[f.Severity],
+			Message:             msg{f.Message},
+			PartialFingerprints: map[string]string{"siegekit/v1": f.Fingerprint},
+			Properties:          map[string]any{"siegekit-severity": f.Severity.String(), "sources": f.Sources},
+		}
+		if f.Location.URI != "" {
+			var l loc
+			l.PhysicalLocation.ArtifactLocation.URI = f.Location.URI
+			if f.Location.StartLine > 0 {
+				l.PhysicalLocation.Region = &region{StartLine: f.Location.StartLine}
+			}
+			res.Locations = []loc{l}
+		}
+		results = append(results, res)
+	}
+	if results == nil {
+		results = []result{}
+	}
+	out := map[string]any{
+		"$schema": "https://json.schemastore.org/sarif-2.1.0.json",
+		"version": "2.1.0",
+		"runs": []any{map[string]any{
+			"tool": map[string]any{"driver": map[string]any{
+				"name": "SiegeKit", "version": r.SiegeKitVersion,
+				"informationUri": "https://github.com/Gobbuwu/SiegeKit", "rules": rules,
+			}},
+			"results": results,
+		}},
+	}
+	enc := json.NewEncoder(w)
+	enc.SetIndent("", "  ")
+	return enc.Encode(out)
+}
+
+// WriteHTML writes a self-contained HTML report: no scripts, no external
+// resources, every value escaped by html/template (threat model T8).
+func WriteHTML(w io.Writer, r *Run) error {
+	plugins := append([]PluginResult(nil), r.Plugins...)
+	sort.SliceStable(plugins, func(i, j int) bool { return plugins[i].Family < plugins[j].Family })
+	counts := r.Counts()
+	return page.Execute(w, map[string]any{
+		"Run":       r,
+		"Headline":  r.Headline(),
+		"Complete":  r.Complete(),
+		"Plugins":   plugins,
+		"NotTested": NotTested,
+		"Counts": []struct {
+			Name string
+			N    int
+		}{
+			{"critical", counts[findings.Critical]},
+			{"high", counts[findings.High]},
+			{"medium", counts[findings.Medium]},
+			{"low", counts[findings.Low]},
+			{"info", counts[findings.Info]},
+		},
+	})
+}
+
+var page = template.Must(template.New("report").Parse(`<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SiegeKit report</title>
+<style>
+body{font:15px/1.5 system-ui,sans-serif;margin:0 auto;max-width:960px;padding:16px;color:#1b1b1b;background:#fff}
+h1{font-size:22px}h2{font-size:18px;margin-top:32px}
+table{border-collapse:collapse;width:100%}th,td{border-bottom:1px solid #ddd;padding:6px 8px;text-align:left;vertical-align:top}
+.warn{background:#fff4e5;border:1px solid #f0b46b;padding:8px 12px;border-radius:6px}
+.sev-critical,.sev-high{font-weight:600}
+code,pre{font:13px ui-monospace,monospace;white-space:pre-wrap;word-break:break-word}
+@media (prefers-color-scheme:dark){body{background:#151515;color:#e8e8e8}th,td{border-color:#333}.warn{background:#3a2a12;border-color:#8a5a1a}}
+</style>
+</head>
+<body>
+<h1>SiegeKit report</h1>
+<p><strong>{{.Headline}}</strong></p>
+{{if not .Complete}}<p class="warn">This run is incomplete: at least one check failed or timed out. Missing checks may hide issues.</p>{{end}}
+<p>Target: <code>{{.Run.Target}}</code> · Mode: {{.Run.Mode}} · SiegeKit {{.Run.SiegeKitVersion}} · {{.Run.Started.Format "2006-01-02 15:04 MST"}}</p>
+
+<h2>What was tested</h2>
+<table>
+<tr><th>Check</th><th>Family</th><th>Tool</th><th>Status</th><th>Findings</th></tr>
+{{range .Plugins}}<tr><td>{{.ID}}</td><td>{{.Family}}</td><td>{{.Tool}} {{.Version}}</td><td>{{.Status}}{{if .Reason}}: {{.Reason}}{{end}}</td><td>{{.Findings}}</td></tr>
+{{else}}<tr><td colspan="5">No checks were selected.</td></tr>{{end}}
+</table>
+
+<h2>Not tested by SiegeKit</h2>
+<p>Automated tools cannot check these. Review them yourself before deploying; see the pre-deploy checklist in the SiegeKit documentation.</p>
+<ul>{{range .NotTested}}<li>{{.}}</li>{{end}}</ul>
+
+<h2>Findings</h2>
+<p>{{range $i, $c := .Counts}}{{if $i}} · {{end}}{{$c.Name}}: {{$c.N}}{{end}}</p>
+{{range .Run.Findings}}
+<h3 class="sev-{{.Severity}}">[{{.Severity}}] {{.Title}}</h3>
+<p>{{.Message}}</p>
+<p><code>{{.Location.URI}}{{if .Location.StartLine}}:{{.Location.StartLine}}{{end}}</code>{{if .CWEs}} · {{range $i, $c := .CWEs}}{{if $i}}, {{end}}{{$c}}{{end}}{{end}}</p>
+{{if .Snippet}}<pre>{{.Snippet}}</pre>{{end}}
+<p>Reported by: {{range $i, $s := .Sources}}{{if $i}}, {{end}}{{$s.Plugin}} ({{$s.RuleID}}){{end}}</p>
+{{else}}<p>None reported by the checks that ran.</p>{{end}}
+</body>
+</html>
+`))
