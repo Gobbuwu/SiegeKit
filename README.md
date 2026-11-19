@@ -15,7 +15,9 @@ go build -o siegekit ./cmd/siegekit
 ./siegekit scan path/to/your/repo
 ```
 
-`siegekit update` is the only step that uses the network, and it runs without access to your files. Run it again at least weekly; reports say when the data is old.
+Nothing is downloaded without asking. Before a scan or update installs a missing tool image or tool data, SiegeKit lists it with its size and the tests that need it, says what is already installed, and asks which to install. Declined dependencies skip their tests, and the report lists them. Use `--yes` to install without asking (CI) or `--no-install` to install nothing. SiegeKit never installs Docker or Podman itself, and never uses a copy of a tool installed elsewhere on your machine (ADR 0016).
+
+Downloads are the only steps that use the network, and they run without access to your files. Run `siegekit update` at least weekly; reports say when the data is old.
 
 The scan writes `report.html`, `report.json` and `report.sarif` to `./siegekit-report` and saves a copy of the run under `~/.local/share/siegekit/runs`. Each tool runs in a container with no network and read-only access to your directory. Exit codes: 0 no findings at or above `--fail-on` (default high), 3 findings, 4 a check failed or timed out, 1 an error, 2 a usage error.
 

@@ -9,11 +9,16 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"runtime"
+	"slices"
 	"strings"
 	"syscall"
 
 	"github.com/Gobbuwu/SiegeKit/internal/checks"
+	"github.com/Gobbuwu/SiegeKit/internal/deps"
 	"github.com/Gobbuwu/SiegeKit/internal/findings"
+	"github.com/Gobbuwu/SiegeKit/internal/manifest"
+	"github.com/Gobbuwu/SiegeKit/internal/registry"
 	"github.com/Gobbuwu/SiegeKit/internal/report"
 	"github.com/Gobbuwu/SiegeKit/internal/runner"
 	"github.com/Gobbuwu/SiegeKit/internal/sandbox"
@@ -21,8 +26,24 @@ import (
 	"github.com/Gobbuwu/SiegeKit/plugins"
 )
 
-// newExecutor finds the container engine. Tests replace it.
-var newExecutor = func() (runner.Executor, error) { return sandbox.Detect() }
+// engine runs sandboxed tools and manages their images. *sandbox.Engine
+// implements it.
+type engine interface {
+	runner.Executor
+	deps.Engine
+}
+
+// Replaced in tests.
+var (
+	newEngine            = func() (engine, error) { return sandbox.Detect() }
+	sizer     deps.Sizer = &registry.Client{}
+	stdin     io.Reader  = os.Stdin
+	// stdinIsTerminal reports whether someone can answer a question.
+	stdinIsTerminal = func() bool {
+		st, err := os.Stdin.Stat()
+		return err == nil && st.Mode()&os.ModeCharDevice != 0
+	}
+)
 
 const scanUsage = `Usage: siegekit scan [flags] DIR
 
@@ -37,7 +58,17 @@ Flags:
   --report-dir DIR  where to write report.html, report.json and report.sarif
                     (default ./siegekit-report)
   --no-save         do not keep a copy of the run for later comparison
-  --update          run 'siegekit update' first (downloads vulnerability data)
+  --update          refresh downloaded tool data first (network access)
+  --yes             install missing dependencies without asking (for CI)
+  --no-install      install nothing; tests that need a missing dependency
+                    are skipped
+  --require-all     treat tests skipped for a missing dependency as an
+                    incomplete run (exit code 4 unless there are findings)
+
+Before installing a missing dependency (a tool's container image or its
+data), SiegeKit lists it with its size and the tests that need it and asks.
+Without a terminal and without --yes, nothing is installed. Declined
+dependencies skip the tests that need them; the report lists them.
 `
 
 func scan(args []string, stdout, stderr io.Writer) int {
@@ -49,6 +80,9 @@ func scan(args []string, stdout, stderr io.Writer) int {
 	reportDir := fl.String("report-dir", "siegekit-report", "")
 	noSave := fl.Bool("no-save", false, "")
 	doUpdate := fl.Bool("update", false, "")
+	yes := fl.Bool("yes", false, "")
+	noInstall := fl.Bool("no-install", false, "")
+	requireAll := fl.Bool("require-all", false, "")
 	// Allow flags before and after DIR.
 	var pos []string
 	for {
@@ -67,6 +101,10 @@ func scan(args []string, stdout, stderr io.Writer) int {
 	}
 	if len(pos) != 1 {
 		fmt.Fprint(stderr, scanUsage)
+		return exitUsage
+	}
+	if *yes && *noInstall {
+		fmt.Fprint(stderr, "siegekit scan: --yes and --no-install cannot be used together\n")
 		return exitUsage
 	}
 	threshold, err := findings.ParseSeverity(*failOn)
@@ -101,32 +139,38 @@ func scan(args []string, stdout, stderr io.Writer) int {
 	} else if !*noSave {
 		return fail(fmt.Errorf("%w (or use --no-save)", err))
 	}
-	ex, err := newExecutor()
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	ex, unavailable, fetched, err := prepare(ctx, selected, dataRoot, consent{yes: *yes, none: *noInstall}, stdout)
 	if err != nil {
 		return fail(err)
 	}
-
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
-	if *doUpdate {
+	if *doUpdate && ex != nil {
 		if dataRoot == "" {
 			return fail(errors.New("cannot find a directory for downloaded data"))
 		}
-		fmt.Fprintln(stdout, "Updating vulnerability data (network access, none of your files).")
-		results, err := runner.Update(ctx, ex, selected, dataRoot, "")
-		if err != nil {
-			return fail(err)
+		var refresh []*manifest.Manifest
+		for _, m := range selected {
+			if _, ok := unavailable[m.ID]; !ok && m.Data != nil && !fetched[m.ID] {
+				refresh = append(refresh, m)
+			}
 		}
-		for _, r := range results {
-			if r.Err != nil {
-				// Keep going: the scan uses older data if there is any and
-				// otherwise reports the check as failed.
-				fmt.Fprintf(stdout, "  %-10s update failed - %v\n", r.ID, r.Err)
+		if len(refresh) > 0 {
+			fmt.Fprintln(stdout, "Updating tool data (network access, none of your files).")
+			results, err := runner.Update(ctx, ex, refresh, dataRoot, "")
+			if err != nil {
+				return fail(err)
+			}
+			for _, r := range results {
+				if r.Err != nil {
+					// Keep going: the scan uses the older data.
+					fmt.Fprintf(stdout, "  %-10s update failed - %v\n", r.ID, r.Err)
+				}
 			}
 		}
 	}
-	fmt.Fprintf(stdout, "Scanning %s with %d check(s). Tool images are downloaded on first use.\n", target, len(selected)+len(builtins))
-	run, err := runner.Run(ctx, ex, selected, runner.Options{Version: version, TargetDir: target, DataRoot: dataRoot, Checks: builtins})
+	fmt.Fprintf(stdout, "Scanning %s with %d check(s).\n", target, len(selected)+len(builtins))
+	run, err := runner.Run(ctx, ex, selected, runner.Options{Version: version, TargetDir: target, DataRoot: dataRoot, Checks: builtins, Unavailable: unavailable})
 	if errors.Is(err, context.Canceled) {
 		return fail(errors.New("interrupted; no report written"))
 	}
@@ -159,7 +203,112 @@ func scan(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stdout, "Saved run %s\n", id)
 	}
 	fmt.Fprintln(stdout, "Automated checks do not cover everything; see \"Not tested by SiegeKit\" in the HTML report.")
-	return run.ExitCode(threshold)
+	code := run.ExitCode(threshold)
+	if *requireAll && code == report.ExitClean {
+		for _, p := range run.Plugins {
+			if u, ok := unavailable[p.ID]; ok && u.Status == report.Skipped {
+				fmt.Fprintln(stdout, "Incomplete (--require-all): tests were skipped for missing dependencies.")
+				return report.ExitIncomplete
+			}
+		}
+	}
+	return code
+}
+
+// consent is the user's standing answer, if any, from the command line.
+// data means downloading tool data needs no question ('siegekit update').
+type consent struct{ yes, none, data bool }
+
+// prepare finds the container engine and each plugin's dependencies, asks
+// before installing missing ones (ADR 0016), and returns the plugins that
+// cannot run and those whose data was downloaded now. ex is nil when there
+// is no working engine.
+func prepare(ctx context.Context, selected []*manifest.Manifest, dataRoot string, c consent, out io.Writer) (ex engine, un map[string]runner.Unavailable, fetched map[string]bool, err error) {
+	if len(selected) == 0 {
+		return nil, nil, nil, nil
+	}
+	eng, err := newEngine()
+	if err != nil {
+		fmt.Fprintln(out, deps.EngineHelp(runtime.GOOS))
+		return nil, deps.NoEngine(selected, "no container engine (Docker or Podman) found"), nil, nil
+	}
+	all, err := deps.Plan(ctx, eng, selected, dataRoot)
+	if err != nil {
+		if ctx.Err() != nil {
+			return nil, nil, nil, ctx.Err()
+		}
+		fmt.Fprintf(out, "The container engine is not working, so only built-in checks run: %v\n", err)
+		un := deps.NoEngine(selected, err.Error())
+		for id, u := range un {
+			u.Status = report.Failed
+			un[id] = u
+		}
+		return nil, un, nil, nil
+	}
+	if c.data {
+		// Asked for explicitly: data is downloaded without a question.
+		for i := range all {
+			if all[i].Kind == deps.Data {
+				all[i].Installed = false
+			}
+		}
+	}
+	var auto []deps.Dep
+	missing := deps.Missing(all)
+	if len(missing) > 0 && !c.none {
+		deps.AddSizes(ctx, sizer, all)
+		missing = deps.Missing(all)
+	}
+	if c.data {
+		var ask []deps.Dep
+		for _, d := range missing {
+			if d.Kind == deps.Data {
+				auto = append(auto, d)
+			} else {
+				ask = append(ask, d)
+			}
+		}
+		missing = ask
+		deps.Describe(out, slices.DeleteFunc(slices.Clone(all), func(d deps.Dep) bool { return d.Kind == deps.Data }))
+	} else {
+		deps.Describe(out, all)
+	}
+	var chosen []deps.Dep
+	notChosen := func(d deps.Dep) string { return "you declined " + d.Name() }
+	switch {
+	case len(missing) == 0:
+	case c.yes:
+		chosen = missing
+	case c.none:
+		fmt.Fprintln(out, "Not installing anything (--no-install).")
+		notChosen = func(d deps.Dep) string { return d.Name() + " is not installed (--no-install)" }
+	case !stdinIsTerminal():
+		fmt.Fprintln(out, "Not installing anything: no terminal to ask in. Use --yes to install, or --no-install to silence this.")
+		notChosen = func(d deps.Dep) string { return d.Name() + " is not installed (no terminal to ask; use --yes)" }
+	default:
+		chosen = deps.Ask(stdin, out, missing)
+	}
+	chosen = append(chosen, auto...)
+	un, err = deps.Install(ctx, eng, eng, all, chosen, dataRoot, notChosen, out)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	fetched = map[string]bool{}
+	for _, d := range chosen {
+		if _, failed := un[d.Plugin.ID]; d.Kind == deps.Data && !failed {
+			fetched[d.Plugin.ID] = true
+		}
+	}
+	var skipped []string
+	for _, m := range selected {
+		if u, ok := un[m.ID]; ok && u.Status == report.Skipped {
+			skipped = append(skipped, m.ID)
+		}
+	}
+	if len(skipped) > 0 {
+		fmt.Fprintf(out, "Skipped because a dependency is not installed: %s.\n", strings.Join(skipped, ", "))
+	}
+	return eng, un, fetched, nil
 }
 
 // resolveDir returns the absolute, symlink-free path of an existing directory,

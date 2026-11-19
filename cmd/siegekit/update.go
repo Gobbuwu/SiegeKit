@@ -13,28 +13,32 @@ import (
 	"syscall"
 
 	"github.com/Gobbuwu/SiegeKit/internal/manifest"
-	"github.com/Gobbuwu/SiegeKit/internal/runner"
 	"github.com/Gobbuwu/SiegeKit/plugins"
 )
 
-const updateUsage = `Usage: siegekit update [--only a,b]
+const updateUsage = `Usage: siegekit update [--only a,b] [--yes | --no-install]
 
 Downloads the data some checks need, such as vulnerability databases, into
 ~/.local/share/siegekit/data. Each download runs in a container that has
 network access but none of your files. Scans then use the data offline.
+If a tool's container image is missing, SiegeKit asks before downloading it.
 
 Flags:
-  --only a,b   update only these plugins
+  --only a,b     update only these plugins
+  --yes          download missing tool images without asking
+  --no-install   do not download missing tool images
 `
 
 func update(args []string, stdout, stderr io.Writer) int {
 	fl := flag.NewFlagSet("update", flag.ContinueOnError)
 	fl.SetOutput(io.Discard)
 	only := fl.String("only", "", "")
+	yes := fl.Bool("yes", false, "")
+	noInstall := fl.Bool("no-install", false, "")
 	if err := fl.Parse(args); errors.Is(err, flag.ErrHelp) {
 		fmt.Fprint(stdout, updateUsage)
 		return exitOK
-	} else if err != nil || fl.NArg() != 0 {
+	} else if err != nil || fl.NArg() != 0 || *yes && *noInstall {
 		fmt.Fprint(stderr, updateUsage)
 		return exitUsage
 	}
@@ -67,24 +71,24 @@ func update(args []string, stdout, stderr io.Writer) int {
 	if err != nil {
 		return fail(err)
 	}
-	ex, err := newExecutor()
-	if err != nil {
-		return fail(err)
-	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	fmt.Fprintf(stdout, "Updating data for %d plugin(s). This downloads from each tool's publisher.\n", len(selected))
-	results, err := runner.Update(ctx, ex, selected, filepath.Join(dir, "data"), "")
+	_, un, fetched, err := prepare(ctx, selected, filepath.Join(dir, "data"), consent{yes: *yes, none: *noInstall, data: true}, stdout)
 	if err != nil {
 		return fail(err)
 	}
 	code := exitOK
-	for _, r := range results {
-		if r.Err != nil {
-			fmt.Fprintf(stdout, "  %-10s failed - %v\n", r.ID, r.Err)
+	for _, m := range selected {
+		switch u, ok := un[m.ID]; {
+		case fetched[m.ID]:
+			fmt.Fprintf(stdout, "  %-10s updated\n", m.ID)
+		case ok:
+			fmt.Fprintf(stdout, "  %-10s %s - %s\n", m.ID, u.Status, u.Reason)
 			code = exitInvalid
-		} else {
-			fmt.Fprintf(stdout, "  %-10s updated\n", r.ID)
+		default:
+			fmt.Fprintf(stdout, "  %-10s not updated\n", m.ID)
+			code = exitInvalid
 		}
 	}
 	return code

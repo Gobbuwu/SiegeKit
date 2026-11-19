@@ -79,6 +79,15 @@ type Options struct {
 	WorkDir   string         // parent for the private temporary directory; "" means the OS default
 	DataRoot  string         // where 'siegekit update' keeps tool data (ADR 0014)
 	Checks    []checks.Check // built-in checks to run (ADR 0015)
+	// Unavailable records plugins that cannot run because a dependency is
+	// missing (ADR 0016), keyed by plugin ID. They are reported, not run.
+	Unavailable map[string]Unavailable
+}
+
+// Unavailable is the reported outcome of a plugin that was not run.
+type Unavailable struct {
+	Status report.Status // report.Skipped or report.Failed
+	Reason string
 }
 
 // MaxReportSize is the largest tool report read, matching the SARIF limit.
@@ -127,6 +136,13 @@ func Run(ctx context.Context, ex Executor, selected []*manifest.Manifest, opt Op
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
+		if u, ok := opt.Unavailable[m.ID]; ok {
+			run.Plugins = append(run.Plugins, report.PluginResult{
+				ID: m.ID, Family: m.Family, Tool: m.Tool.Name, Version: m.Tool.Version,
+				Status: u.Status, Reason: u.Reason,
+			})
+			continue
+		}
 		pr, fs := runPlugin(ctx, ex, m, opt, work)
 		run.Plugins = append(run.Plugins, pr)
 		all = append(all, fs...)
@@ -163,7 +179,7 @@ func runPlugin(ctx context.Context, ex Executor, m *manifest.Manifest, opt Optio
 			return fail(report.Skipped, "no files matching %s", strings.Join(m.AppliesTo, ", "))
 		}
 	}
-	image, ok := imageFor(m)
+	image, ok := ImageFor(m)
 	if !ok {
 		return fail(report.Skipped, "no container image for linux/%s", runtime.GOARCH)
 	}
@@ -216,9 +232,9 @@ func runPlugin(ctx context.Context, ex Executor, m *manifest.Manifest, opt Optio
 	return pr, fs
 }
 
-// imageFor picks the plugin's OCI image. Containers run Linux on every host
+// ImageFor picks the plugin's OCI image. Containers run Linux on every host
 // (macOS engines use a Linux VM), so the platform is linux/<arch> or "any".
-func imageFor(m *manifest.Manifest) (string, bool) {
+func ImageFor(m *manifest.Manifest) (string, bool) {
 	for _, a := range m.Tool.Artifacts {
 		if a.Kind == "oci-image" && (a.Platform == "any" || a.Platform == "linux/"+runtime.GOARCH) {
 			return a.Ref, true

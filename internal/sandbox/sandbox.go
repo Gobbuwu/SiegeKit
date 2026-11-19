@@ -10,6 +10,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"os/exec"
@@ -194,7 +195,8 @@ func (s *Spec) EngineArgs(name string, uid, gid int) ([]string, error) {
 	args := []string{
 		"run", "--rm",
 		"--name", name,
-		"--pull", "missing",
+		// Images are pulled only after the user agrees (ADR 0016).
+		"--pull", "never",
 	}
 	// "egress" uses the engine's default network, so no flag is passed.
 	if s.Network == "none" {
@@ -327,6 +329,69 @@ func requirePrivateParent(dir string) error {
 		return fmt.Errorf("parent of output directory %q must be accessible only by its owner (mode 0700), has %v", dir, st.Mode().Perm())
 	}
 	return nil
+}
+
+// HasImage reports whether the engine already holds image, a reference
+// pinned by digest. It never downloads anything.
+func (e *Engine) HasImage(ctx context.Context, image string) (bool, error) {
+	if !reImage.MatchString(image) {
+		return false, fmt.Errorf("image %q must be pinned by digest", image)
+	}
+	cmd := exec.CommandContext(ctx, e.Bin, "image", "inspect", "--format", "{{.Id}}", image)
+	cmd.Env = minimalEnv()
+	var out tailBuffer
+	cmd.Stdout, cmd.Stderr = io.Discard, &out
+	err := cmd.Run()
+	if err == nil {
+		return true, nil
+	}
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) && isNoSuchImage(out.String()) {
+		return false, nil
+	}
+	return false, fmt.Errorf("container engine is not working: %s", lastLine(out.String(), err))
+}
+
+// isNoSuchImage recognizes the "image not found" messages of Docker and
+// Podman, so any other failure (daemon not running) is reported as such.
+func isNoSuchImage(msg string) bool {
+	m := strings.ToLower(msg)
+	return strings.Contains(m, "no such image") || strings.Contains(m, "image not known") || strings.Contains(m, "no such object")
+}
+
+// Pull downloads image, a reference pinned by digest.
+func (e *Engine) Pull(ctx context.Context, image string) error {
+	if !reImage.MatchString(image) {
+		return fmt.Errorf("image %q must be pinned by digest", image)
+	}
+	cmd := exec.CommandContext(ctx, e.Bin, "pull", "--quiet", image)
+	cmd.Env = minimalEnv()
+	var out tailBuffer
+	cmd.Stdout, cmd.Stderr = io.Discard, &out
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("download failed: %s", lastLine(out.String(), err))
+	}
+	return nil
+}
+
+// lastLine returns the last non-empty line of engine output, or err, without
+// control characters and cut to 300 bytes.
+func lastLine(s string, err error) string {
+	lines := strings.Split(strings.TrimSpace(s), "\n")
+	l := strings.TrimSpace(lines[len(lines)-1])
+	if l == "" {
+		l = err.Error()
+	}
+	l = strings.Map(func(r rune) rune {
+		if r < 0x20 || r == 0x7f {
+			return -1
+		}
+		return r
+	}, strings.ToValidUTF8(l, ""))
+	if len(l) > 300 {
+		l = l[:300]
+	}
+	return l
 }
 
 func (e *Engine) forceRemove(name string) {
