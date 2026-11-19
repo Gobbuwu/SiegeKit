@@ -18,8 +18,11 @@ import (
 // the help, because only SiegeKit starts it, inside the relay container.
 const Command = "internal-relay"
 
-// MaxConns limits concurrent connections; the proxy limits them further.
-const MaxConns = 64
+// MaxConns limits the tool's open connections; a connection beyond it is
+// closed at once. Tools keep idle keep-alive connections open: Nuclei had up
+// to 299 open in one local scan, and the earlier limit of 64 lost requests
+// (ADR 0026). The proxy limits connections to the target separately.
+const MaxConns = 1024
 
 // Serve accepts connections on l and forwards each to the Unix socket at
 // socket until ctx ends or l is closed.
