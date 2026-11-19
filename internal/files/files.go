@@ -177,16 +177,16 @@ func (u *unpacker) target(name string) (string, error) {
 	return filepath.Join(u.dir, filepath.FromSlash(c)), nil
 }
 
-func (u *unpacker) file(name string, mode os.FileMode, r io.Reader) error {
+func (u *unpacker) file(name string, exec bool, r io.Reader) error {
 	dst, err := u.target(name)
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil { // #nosec G301 -- read by the container user; root is private
 		return err
 	}
 	perm := os.FileMode(0o644)
-	if mode&0o111 != 0 {
+	if exec {
 		perm = 0o755
 	}
 	f, err := os.OpenFile(dst, os.O_CREATE|os.O_EXCL|os.O_WRONLY, perm) // #nosec G304 -- path checked to stay under dir
@@ -212,7 +212,7 @@ func (u *unpacker) mkdir(name string) error {
 	if err != nil {
 		return err
 	}
-	return os.MkdirAll(dst, 0o755)
+	return os.MkdirAll(dst, 0o755) // #nosec G301 -- read by the container user; root is private
 }
 
 func untar(body []byte, dir string) error {
@@ -232,7 +232,7 @@ func untar(body []byte, dir string) error {
 		}
 		switch h.Typeflag {
 		case tar.TypeReg:
-			err = u.file(h.Name, os.FileMode(h.Mode), tr)
+			err = u.file(h.Name, h.Mode&0o111 != 0, tr)
 		case tar.TypeDir:
 			err = u.mkdir(h.Name)
 		case tar.TypeXGlobalHeader:
@@ -260,8 +260,10 @@ func unzip(body []byte, dir string) error {
 		case m.IsRegular():
 			var rc io.ReadCloser
 			if rc, err = f.Open(); err == nil {
-				err = u.file(f.Name, m, rc)
-				rc.Close()
+				err = u.file(f.Name, m&0o111 != 0, rc)
+				if cerr := rc.Close(); err == nil {
+					err = cerr
+				}
 			}
 		default:
 			err = fmt.Errorf("entry %q is not a regular file or directory", f.Name)
