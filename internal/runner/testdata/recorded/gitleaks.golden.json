@@ -2,7 +2,7 @@
   {
     "ruleId": "github-pat",
     "title": "Uncovered a GitHub Personal Access Token, potentially leading to unauthorized repository access and sensitive content exposure.",
-    "message": "github-pat has detected secret for file /target/config.py.",
+    "message": "github-pat has detected secret for file config.py.",
     "severity": "high",
     "location": {
       "uri": "config.py",

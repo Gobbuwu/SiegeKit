@@ -6,14 +6,14 @@ Versions are the latest published versions checked on 2026-11-18. Rows marked "P
 
 ## Pinned images
 
-These are the publishers' official images on Docker Hub or the GitHub Container Registry. Each tag was resolved to its multi-architecture index digest with `docker buildx imagetools inspect` on 2026-11-19 (linux/amd64 and linux/arm64), and the plugin manifest refers to the image only by that digest. Publisher image signatures are not verified yet (planned for M1.5).
+These are the publishers' official images on Docker Hub or the GitHub Container Registry. Each tag was resolved to its multi-architecture index digest with `docker buildx imagetools inspect` on 2026-11-19 (linux/amd64 and linux/arm64), and the plugin manifest refers to the image only by that digest. Publisher image signatures are not verified yet. ADR 0008 asks for this where a publisher signs its images; it was planned for M1 but not done, and is now an open item (re-check of 2026-11-19).
 
 | Plugin | Image | Tag resolved |
 | --- | --- | --- |
 | [gitleaks](plugins/gitleaks/plugin.json) | `docker.io/zricethezav/gitleaks@sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f` | `v8.30.1` |
+| [gitleaks-history](plugins/gitleaks-history/plugin.json) | Same image and digest as gitleaks | `v8.30.1` |
 | [checkov](plugins/checkov/plugin.json) | `docker.io/bridgecrew/checkov@sha256:122602cf32cc72286155d39f1f234b7b594818f7b8d7fdf490701620e521368b` | `3.4.5` |
 | [trivy](plugins/trivy/plugin.json) | `docker.io/aquasec/trivy@sha256:8f6bb947dbc528902e11f2f5be52f7b519f6a39d5d148f41166f2040499768fb` | `0.76.2` (released 2026-11-05, after the [March 2026 compromise](https://www.docker.com/blog/trivy-supply-chain-compromise-what-docker-hub-users-should-know/) of Docker Hub tags 0.69.4 to 0.69.6) |
-
 | [bandit](plugins/bandit/plugin.json) | `ghcr.io/pycqa/bandit/bandit@sha256:b405a808f5d50156aee921a77fb17c044d69d90ecef6499447a037678967c936` | `latest` (the publisher tags no versions; CI checks that the image reports 1.9.4) |
 | [gosec](plugins/gosec/plugin.json) | `ghcr.io/securego/gosec@sha256:7bcf1edbab3e80d8006a28d53e7031a9c9775be8eec30679e4adc1f51d272121` | `2.30.0` (released 2026-10-23; the binary in this image reports version "dev", so the version rests on the tag the digest was resolved from) |
 
@@ -30,9 +30,9 @@ Trivy's vulnerability database is not pinned: `siegekit update` lets Trivy downl
 | [Opengrep](https://github.com/opengrep/opengrep) and [opengrep-rules](https://github.com/opengrep/opengrep-rules) | SAST, many languages | 1.33.1 | Engine LGPL-2.1; rules LGPL-2.1 with Commons Clause | Planned (M2); rules downloaded by the user after accepting their license |
 | [Bandit](https://github.com/PyCQA/bandit) | SAST, Python | 1.9.4 | Apache-2.0 | Pinned (M1) |
 | [gosec](https://github.com/securego/gosec) | SAST, Go | 2.30.0 | Apache-2.0 | Pinned (M1) |
-| [OSV-Scanner](https://github.com/google/osv-scanner) | Dependency vulnerabilities | 2.7.1 | Apache-2.0 | Planned (M1) |
-| [Syft](https://github.com/anchore/syft) | SBOM | 1.57.2 | Apache-2.0 | Planned (M1) |
-| [Grype](https://github.com/anchore/grype) | Vulnerabilities, images | 0.122.1 | Apache-2.0 | Planned (M1) |
+| [OSV-Scanner](https://github.com/google/osv-scanner) | Dependency vulnerabilities | 2.7.1 | Apache-2.0 | Planned (M2; moved from M1 on 2026-11-19) |
+| [Syft](https://github.com/anchore/syft) | SBOM | 1.57.2 | Apache-2.0 | Planned (M2; moved from M1 on 2026-11-19) |
+| [Grype](https://github.com/anchore/grype) | Vulnerabilities, images | 0.122.1 | Apache-2.0 | Planned (M2; moved from M1 on 2026-11-19) |
 | [Trivy](https://github.com/aquasecurity/trivy) | Images, IaC, dependencies | 0.76.2 | Apache-2.0 | Pinned (M1, dependencies) |
 | [Gitleaks](https://github.com/gitleaks/gitleaks) | Secrets | 8.30.1 | MIT | Pinned (M1) |
 | [TruffleHog](https://github.com/trufflesecurity/trufflehog) | Secrets with verification | 3.99.9 | AGPL-3.0 | Optional |
@@ -52,5 +52,5 @@ Trivy's vulnerability database is not pinned: `siegekit update` lets Trivy downl
 | [promptfoo](https://github.com/promptfoo/promptfoo) | LLM prompt-injection probing | 0.126.0 | MIT | Optional (M3) |
 | [hashcat](https://github.com/hashcat/hashcat) | Hash strength audit, GPU | 8.0.0 | MIT | Optional (M3) |
 | [John the Ripper](https://github.com/openwall/john) | Hash strength audit, CPU | not checked | Mixed, per file | Optional (M3) |
-| [Nmap](https://github.com/nmap/nmap) | Port and service discovery | not checked | Nmap Public Source License (not OSI-approved) | Not bundled; used only if the user installed it |
+| [Nmap](https://github.com/nmap/nmap) | Port and service discovery | not checked | Nmap Public Source License (not OSI-approved) | Not planned. SiegeKit never runs tools installed on the host (ADR 0016) |
 | [CodeQL CLI](https://github.com/github/codeql-cli-binaries) | SAST | not checked | GitHub CodeQL Terms and Conditions (not open source) | Excluded |

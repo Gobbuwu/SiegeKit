@@ -17,7 +17,7 @@
 ## Commits
 
 - Small, focused commits with a clear message.
-- Every commit carries a `Signed-off-by:` line (`git commit -s`), certifying the [Developer Certificate of Origin 1.1](https://developercertificate.org/): that you wrote the change or otherwise have the right to submit it under the project's license. A CI check will enforce this from M1.
+- Every commit carries a `Signed-off-by:` line (`git commit -s`), certifying the [Developer Certificate of Origin 1.1](https://developercertificate.org/): that you wrote the change or otherwise have the right to submit it under the project's license. The "DCO sign-off" CI check enforces this on every pull request.
 - Sign your commits (SSH or GPG) once branch protection requires it.
 
 ## Features the project will not accept
