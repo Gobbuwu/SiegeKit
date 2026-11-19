@@ -219,7 +219,19 @@ func TestNucleiFindsPlantedIssues(t *testing.T) {
 func findsPlanted(t *testing.T, filesRoot string, ids ...string) {
 	t.Helper()
 	e, cfg, _, _ := activeSetup(t, http.StatusOK)
-	srv := httptest.NewServer(vulnApp())
+	// Requests for the planted files are counted, so a miss shows whether
+	// the tool asked for them at all.
+	var mu sync.Mutex
+	asked := map[string]int{}
+	app := vulnApp()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if p := r.URL.Path; p == "/.env" || p == "/.git/config" {
+			mu.Lock()
+			asked[r.Method+" "+p]++
+			mu.Unlock()
+		}
+		app.ServeHTTP(w, r)
+	}))
 	t.Cleanup(srv.Close)
 	su, _ := url.Parse(srv.URL)
 	tu, err := target.Parse("http://app.test:" + su.Port() + "/")
@@ -241,8 +253,13 @@ func findsPlanted(t *testing.T, filesRoot string, ids ...string) {
 		}
 	}
 	bin := relayBin(t)
+	var logs []string // tool output, in the order the plugins ran
 	run := func(ctx context.Context, s sandbox.Spec, c egress.Config) (*ActiveResult, error) {
-		return RunTargetOnly(ctx, e, s, c, t.TempDir(), bin)
+		res, err := RunTargetOnly(ctx, e, s, c, t.TempDir(), bin)
+		if res != nil && res.Result != nil {
+			logs = append(logs, res.Stderr)
+		}
+		return res, err
 	}
 	r, err := RunURL(context.Background(), run, ms, URLOptions{
 		Version: "test", Target: tu, Addrs: cfg.Addrs, Limits: LocalLimits, FilesRoot: filesRoot,
@@ -259,14 +276,17 @@ func findsPlanted(t *testing.T, filesRoot string, ids ...string) {
 			found[s.Plugin][s.RuleID] = true
 		}
 	}
-	for _, p := range r.Plugins {
+	for i, p := range r.Plugins {
 		t.Logf("%s: %s %q, %d findings, %d requests, %d refused, rules %v", p.ID, p.Status, p.Reason, p.Findings, p.Requests, p.Refused, found[p.ID])
 		if p.Status != report.Ran || p.Requests == 0 {
 			t.Errorf("%s did not run: %+v", p.ID, p)
 		}
 		for rule, issue := range vulnAppIssues[p.ID] {
 			if !found[p.ID][rule] {
-				t.Errorf("%s missed %s (rule %s)", p.ID, issue, rule)
+				t.Errorf("%s missed %s (rule %s); planted files asked for: %v", p.ID, issue, rule, asked)
+				if len(logs) == len(r.Plugins) {
+					t.Logf("%s output, warnings and errors:\n%s", p.ID, warnings(logs[i]))
+				}
 			}
 		}
 	}
@@ -279,4 +299,16 @@ func findsPlanted(t *testing.T, filesRoot string, ids ...string) {
 		}
 	}
 	noRelaysLeft(t, e)
+}
+
+// warnings returns the last 40 lines of a tool's output that report a
+// warning or an error.
+func warnings(log string) string {
+	var out []string
+	for _, l := range strings.Split(log, "\n") {
+		if strings.Contains(l, "WRN") || strings.Contains(l, "ERR") || strings.Contains(l, "rror") {
+			out = append(out, l)
+		}
+	}
+	return strings.Join(out[max(0, len(out)-40):], "\n")
 }
