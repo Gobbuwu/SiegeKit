@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 
+	"github.com/Gobbuwu/SiegeKit/docs"
 	"github.com/Gobbuwu/SiegeKit/internal/checks"
 	"github.com/Gobbuwu/SiegeKit/internal/manifest"
 	"github.com/Gobbuwu/SiegeKit/plugins"
@@ -23,6 +24,7 @@ Usage:
   siegekit update [--only a,b]    download vulnerability databases for offline scans
   siegekit plugins list           show the built-in checks and pinned tool versions
   siegekit plugins validate FILE...
+  siegekit agents                 how AI coding assistants should use SiegeKit
   siegekit version
 
 Only test systems you own or are authorized to test. See DISCLAIMER.md.
@@ -50,6 +52,9 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return exitOK
 	case "help", "-h", "--help":
 		fmt.Fprint(stdout, usage)
+		return exitOK
+	case "agents":
+		fmt.Fprint(stdout, docs.Agents)
 		return exitOK
 	case "scan":
 		return scan(args[1:], stdout, stderr)

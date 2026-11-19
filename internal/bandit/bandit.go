@@ -32,6 +32,7 @@ type result struct {
 	Severity   string `json:"issue_severity"`
 	Confidence string `json:"issue_confidence"`
 	Code       string `json:"code"`
+	MoreInfo   string `json:"more_info"`
 	CWE        *struct {
 		ID int `json:"id"`
 	} `json:"issue_cwe"`
@@ -76,6 +77,7 @@ func ToFindings(r io.Reader, opt Options) ([]findings.Finding, error) {
 			Confidence: strings.ToLower(res.Confidence),
 			Location:   findings.Location{URI: sarif.RelURI(res.Filename, opt.MountPath), StartLine: res.LineNumber},
 			Snippet:    res.Code,
+			HelpURI:    findings.SafeHelpURI(res.MoreInfo),
 			Family:     opt.Family,
 			Sources:    []findings.Source{{Plugin: opt.Plugin, RuleID: res.TestID}},
 		}

@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"strings"
 	"testing"
+
+	"github.com/Gobbuwu/SiegeKit/docs"
 )
 
 func TestRun(t *testing.T) {
@@ -29,5 +31,12 @@ func TestRun(t *testing.T) {
 				t.Fatalf("output %q does not contain %q", out.String()+errb.String(), tc.out)
 			}
 		})
+	}
+}
+
+func TestAgentsCommand(t *testing.T) {
+	var out, errb bytes.Buffer
+	if code := run([]string{"agents"}, &out, &errb); code != exitOK || out.String() != docs.Agents || !strings.Contains(out.String(), "Never confirm a target for the person") {
+		t.Fatalf("exit %d, %d bytes", code, out.Len())
 	}
 }

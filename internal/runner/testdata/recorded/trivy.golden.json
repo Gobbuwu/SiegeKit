@@ -15,6 +15,7 @@
         "ruleId": "CVE-2019-14234"
       }
     ],
+    "helpUri": "https://avd.aquasec.com/nvd/cve-2019-14234",
     "fingerprint": "00aacc29211120a314d50cbe7f19a30e"
   },
   {
@@ -33,6 +34,7 @@
         "ruleId": "CVE-2019-19844"
       }
     ],
+    "helpUri": "https://avd.aquasec.com/nvd/cve-2019-19844",
     "fingerprint": "cf5fccaea7e2a8ea1a065fd76b9ef1d8"
   },
   {
@@ -51,6 +53,7 @@
         "ruleId": "CVE-2020-7471"
       }
     ],
+    "helpUri": "https://avd.aquasec.com/nvd/cve-2020-7471",
     "fingerprint": "1e27caf215db51e63f950dfefef65fd4"
   },
   {
@@ -69,6 +72,7 @@
         "ruleId": "CVE-2022-28346"
       }
     ],
+    "helpUri": "https://avd.aquasec.com/nvd/cve-2022-28346",
     "fingerprint": "1efd013675ff1316a9e653a0f65120fc"
   },
   {
@@ -87,6 +91,7 @@
         "ruleId": "CVE-2022-28347"
       }
     ],
+    "helpUri": "https://avd.aquasec.com/nvd/cve-2022-28347",
     "fingerprint": "8142bd0ec5723ddb587630b692be1448"
   },
   {
@@ -105,6 +110,7 @@
         "ruleId": "CVE-2025-64459"
       }
     ],
+    "helpUri": "https://avd.aquasec.com/nvd/cve-2025-64459",
     "fingerprint": "8cfd328754f45cd58d207da4a42118d7"
   },
   {
@@ -123,6 +129,7 @@
         "ruleId": "CVE-2019-14232"
       }
     ],
+    "helpUri": "https://avd.aquasec.com/nvd/cve-2019-14232",
     "fingerprint": "f755d5b269a307a2d275cd2f87509033"
   },
   {
@@ -141,6 +148,7 @@
         "ruleId": "CVE-2019-14233"
       }
     ],
+    "helpUri": "https://avd.aquasec.com/nvd/cve-2019-14233",
     "fingerprint": "69745467450109fe997f4caf29556470"
   },
   {
@@ -159,6 +167,7 @@
         "ruleId": "CVE-2019-14235"
       }
     ],
+    "helpUri": "https://avd.aquasec.com/nvd/cve-2019-14235",
     "fingerprint": "acb378be75560695f56f8ca0fa567853"
   },
   {
@@ -177,6 +186,7 @@
         "ruleId": "CVE-2019-19118"
       }
     ],
+    "helpUri": "https://avd.aquasec.com/nvd/cve-2019-19118",
     "fingerprint": "b3fdc68998347eeb97b4302b4567797b"
   },
   {
@@ -195,6 +205,7 @@
         "ruleId": "CVE-2020-13254"
       }
     ],
+    "helpUri": "https://avd.aquasec.com/nvd/cve-2020-13254",
     "fingerprint": "a043ca5993dff39d1b11e9ce9de89298"
   },
   {
@@ -213,6 +224,7 @@
         "ruleId": "CVE-2020-24583"
       }
     ],
+    "helpUri": "https://avd.aquasec.com/nvd/cve-2020-24583",
     "fingerprint": "977db43bfd5e7fb80901d095092c702f"
   },
   {
@@ -231,6 +243,7 @@
         "ruleId": "CVE-2020-9402"
       }
     ],
+    "helpUri": "https://avd.aquasec.com/nvd/cve-2020-9402",
     "fingerprint": "008d69cc97e739628a7cec183476d882"
   },
   {
@@ -249,6 +262,7 @@
         "ruleId": "CVE-2021-31542"
       }
     ],
+    "helpUri": "https://avd.aquasec.com/nvd/cve-2021-31542",
     "fingerprint": "56abc7c450417cafb3ddf4b9efb32219"
   },
   {
@@ -267,6 +281,7 @@
         "ruleId": "CVE-2021-33571"
       }
     ],
+    "helpUri": "https://avd.aquasec.com/nvd/cve-2021-33571",
     "fingerprint": "b47dbb5452d55cc62e6fbfec563a315d"
   },
   {
@@ -285,6 +300,7 @@
         "ruleId": "CVE-2021-45115"
       }
     ],
+    "helpUri": "https://avd.aquasec.com/nvd/cve-2021-45115",
     "fingerprint": "ccb2ecda5619292c88015610dadbc630"
   },
   {
@@ -303,6 +319,7 @@
         "ruleId": "CVE-2021-45116"
       }
     ],
+    "helpUri": "https://avd.aquasec.com/nvd/cve-2021-45116",
     "fingerprint": "740dada0a68a93cd8e12de93971a67ac"
   },
   {
@@ -321,6 +338,7 @@
         "ruleId": "CVE-2022-23833"
       }
     ],
+    "helpUri": "https://avd.aquasec.com/nvd/cve-2022-23833",
     "fingerprint": "ed065455a9ba0f6dadecf3be87360d4f"
   },
   {
@@ -339,6 +357,7 @@
         "ruleId": "CVE-2022-36359"
       }
     ],
+    "helpUri": "https://avd.aquasec.com/nvd/cve-2022-36359",
     "fingerprint": "1cb3b6a09932e07cbf613d089b1a362e"
   },
   {
@@ -357,6 +376,7 @@
         "ruleId": "CVE-2025-57833"
       }
     ],
+    "helpUri": "https://avd.aquasec.com/nvd/cve-2025-57833",
     "fingerprint": "ea113e4e49827216f0e5da9b6bf68f4c"
   },
   {
@@ -375,6 +395,7 @@
         "ruleId": "CVE-2025-64458"
       }
     ],
+    "helpUri": "https://avd.aquasec.com/nvd/cve-2025-64458",
     "fingerprint": "5d651c5e1a8c03b2ec4d2d0636ae1614"
   },
   {
@@ -393,6 +414,7 @@
         "ruleId": "CVE-2026-15307"
       }
     ],
+    "helpUri": "https://avd.aquasec.com/nvd/cve-2026-15307",
     "fingerprint": "dc49118fee7564d761af0bdaa5f38c21"
   },
   {
@@ -411,6 +433,7 @@
         "ruleId": "CVE-2019-11358"
       }
     ],
+    "helpUri": "https://avd.aquasec.com/nvd/cve-2019-11358",
     "fingerprint": "576aaa791e1f59fe5db98b8dff22e8fd"
   },
   {
@@ -429,6 +452,7 @@
         "ruleId": "CVE-2019-12308"
       }
     ],
+    "helpUri": "https://avd.aquasec.com/nvd/cve-2019-12308",
     "fingerprint": "a5e024ec2e8ef8c58e9cae0795dd2448"
   },
   {
@@ -447,6 +471,7 @@
         "ruleId": "CVE-2019-12781"
       }
     ],
+    "helpUri": "https://avd.aquasec.com/nvd/cve-2019-12781",
     "fingerprint": "f7c85aa3e6022477ab49de09a7b090d3"
   },
   {
@@ -465,6 +490,7 @@
         "ruleId": "CVE-2020-13596"
       }
     ],
+    "helpUri": "https://avd.aquasec.com/nvd/cve-2020-13596",
     "fingerprint": "a4b5c48165b8d531f77b9589dc52fa5a"
   },
   {
@@ -483,6 +509,7 @@
         "ruleId": "CVE-2020-24584"
       }
     ],
+    "helpUri": "https://avd.aquasec.com/nvd/cve-2020-24584",
     "fingerprint": "f4e46800b9567c64ebd98017fa05376a"
   },
   {
@@ -501,6 +528,7 @@
         "ruleId": "CVE-2021-28658"
       }
     ],
+    "helpUri": "https://avd.aquasec.com/nvd/cve-2021-28658",
     "fingerprint": "2054d58b45c0f6aae56bcd024dfc3d11"
   },
   {
@@ -519,6 +547,7 @@
         "ruleId": "CVE-2021-32052"
       }
     ],
+    "helpUri": "https://avd.aquasec.com/nvd/cve-2021-32052",
     "fingerprint": "7897d2dd09770aba60c02d8587264442"
   },
   {
@@ -537,6 +566,7 @@
         "ruleId": "CVE-2021-3281"
       }
     ],
+    "helpUri": "https://avd.aquasec.com/nvd/cve-2021-3281",
     "fingerprint": "d8d47118a349084a2ea74f421202adc0"
   },
   {
@@ -555,6 +585,7 @@
         "ruleId": "CVE-2021-33203"
       }
     ],
+    "helpUri": "https://avd.aquasec.com/nvd/cve-2021-33203",
     "fingerprint": "3906006c1dd0fd996f5fcb999d2bdc85"
   },
   {
@@ -573,6 +604,7 @@
         "ruleId": "CVE-2021-44420"
       }
     ],
+    "helpUri": "https://avd.aquasec.com/nvd/cve-2021-44420",
     "fingerprint": "3295b184b4cd030ee13058d24e305079"
   },
   {
@@ -591,6 +623,7 @@
         "ruleId": "CVE-2021-45452"
       }
     ],
+    "helpUri": "https://avd.aquasec.com/nvd/cve-2021-45452",
     "fingerprint": "abaf11901c24fcd4759d05446b25a2cb"
   },
   {
@@ -609,6 +642,7 @@
         "ruleId": "CVE-2022-22818"
       }
     ],
+    "helpUri": "https://avd.aquasec.com/nvd/cve-2022-22818",
     "fingerprint": "d76003266852200ebd630d10ecd4c8ee"
   },
   {
@@ -627,6 +661,7 @@
         "ruleId": "CVE-2024-45231"
       }
     ],
+    "helpUri": "https://avd.aquasec.com/nvd/cve-2024-45231",
     "fingerprint": "fd11179f0858026c5a4b756ded53b084"
   },
   {
@@ -645,6 +680,7 @@
         "ruleId": "CVE-2025-48432"
       }
     ],
+    "helpUri": "https://avd.aquasec.com/nvd/cve-2025-48432",
     "fingerprint": "439eb0bb82c6ea281764479c38a22ae9"
   },
   {
@@ -663,6 +699,7 @@
         "ruleId": "CVE-2026-15830"
       }
     ],
+    "helpUri": "https://avd.aquasec.com/nvd/cve-2026-15830",
     "fingerprint": "73727ffa5792af341a6a6163a7278136"
   },
   {
@@ -681,6 +718,7 @@
         "ruleId": "CVE-2026-53877"
       }
     ],
+    "helpUri": "https://avd.aquasec.com/nvd/cve-2026-53877",
     "fingerprint": "47338f60222a4c8e1ba7325986264905"
   },
   {
@@ -699,6 +737,7 @@
         "ruleId": "CVE-2026-53878"
       }
     ],
+    "helpUri": "https://avd.aquasec.com/nvd/cve-2026-53878",
     "fingerprint": "7b8f2977b7c5ce35dbb38d3f5909ee07"
   },
   {
@@ -717,6 +756,7 @@
         "ruleId": "CVE-2026-48587"
       }
     ],
+    "helpUri": "https://avd.aquasec.com/nvd/cve-2026-48587",
     "fingerprint": "89f24ebba18fab99f5188da519adbaa2"
   },
   {
@@ -735,6 +775,7 @@
         "ruleId": "CVE-2026-48588"
       }
     ],
+    "helpUri": "https://avd.aquasec.com/nvd/cve-2026-48588",
     "fingerprint": "a5d2984461e9087598b489a7380bd21f"
   },
   {
@@ -753,6 +794,7 @@
         "ruleId": "CVE-2026-6873"
       }
     ],
+    "helpUri": "https://avd.aquasec.com/nvd/cve-2026-6873",
     "fingerprint": "127da96a917e0ac7d6f28502cddc29de"
   },
   {
@@ -771,6 +813,7 @@
         "ruleId": "CVE-2026-8404"
       }
     ],
+    "helpUri": "https://avd.aquasec.com/nvd/cve-2026-8404",
     "fingerprint": "a46c52291591984e56e5852cb8bbc37a"
   }
 ]

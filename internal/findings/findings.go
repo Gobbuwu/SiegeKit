@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"net/url"
 	"regexp"
 	"sort"
 	"strings"
@@ -79,6 +80,8 @@ type Finding struct {
 	Family     string   `json:"family"`
 	Sources    []Source `json:"sources"`
 	Confidence string   `json:"confidence,omitempty"`
+	// HelpURI is the tool's page about the rule (https only), for fixing it.
+	HelpURI string `json:"helpUri,omitempty"`
 	// Fingerprint identifies the same issue across runs and tools.
 	Fingerprint string `json:"fingerprint"`
 }
@@ -124,6 +127,9 @@ func Dedupe(in []Finding) []Finding {
 			continue
 		}
 		existing := &out[i]
+		if existing.HelpURI == "" {
+			existing.HelpURI = f.HelpURI
+		}
 		if f.Severity > existing.Severity {
 			existing.Severity = f.Severity
 		}
@@ -200,4 +206,18 @@ func (f *Finding) RedactCredentials() {
 		r := []rune(q)
 		return string(r[0]) + MaskSecret(string(r[1:len(r)-1])) + string(r[len(r)-1])
 	})
+}
+
+// SafeHelpURI returns u if it is an absolute https URL without user
+// information and at most 2048 bytes long, and "" otherwise. Tool output is
+// untrusted, and the link ends up in reports.
+func SafeHelpURI(u string) string {
+	if len(u) > 2048 {
+		return ""
+	}
+	p, err := url.Parse(u)
+	if err != nil || p.Scheme != "https" || p.Host == "" || p.User != nil || p.Opaque != "" {
+		return ""
+	}
+	return u
 }
