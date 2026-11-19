@@ -15,6 +15,7 @@ One file per milestone records what was built, how it was checked and what is st
 - **Owner decisions** are recorded with their date and where they are written down (ADR, plan or roadmap).
 - **Remove a gap or an unverified item only with the PR that closes it,** and say which PR.
 - **A CI job that GitHub never started is "not run", not "failed"** (owner, 2026-11-19). A pull request merges when every check that ran is green. "Never started" means the job ran no step and GitHub's annotation says it was not acquired by a runner; any other cancelled or failed job still blocks. The PR's row says which job did not run.
+- **Each milestone ends with a milestone check** (owner, 2026-11-19): that milestone only, against its plan rows in `docs/m2-plan.md` (or the milestone's plan) and this record, not a full project check. The next milestone starts only when everything in the check works. Findings go into one report and one fix plan, not one small patch each.
 - When a milestone's gate passes and the owner signs off, its record gets the date and the evidence for each gate item.
 
 ## How to cross-check a record
@@ -22,4 +23,4 @@ One file per milestone records what was built, how it was checked and what is st
 1. For each "Built" row, check that the PR is merged and the files it names exist on `main`.
 2. For each "Verified" item, re-run the named test or look at the named CI job on the latest `main`.
 3. Read "Unverified" and "Known gaps" as the list of what is not yet proven. Nothing in them may be reported as working.
-4. A full re-check is needed only when a record and the code disagree, or when the owner asks for one. The last full re-check is [recheck-2026-11-19.md](../recheck-2026-11-19.md).
+4. A full re-check is needed only when a record and the code disagree, or when the owner asks for one. The full re-checks so far are [recheck-2026-11-19.md](../recheck-2026-11-19.md) and [recheck-2026-11-19-second.md](../recheck-2026-11-19-second.md).

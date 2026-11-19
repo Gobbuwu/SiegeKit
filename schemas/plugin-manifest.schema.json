@@ -262,6 +262,7 @@
         },
         "config": {
           "type": "object",
+          "minProperties": 1,
           "description": "A JSON object that SiegeKit writes to a file for the tool and mounts read-only; {config} in args is that file's path (ADR 0023). String values may use only the placeholders {target} and {target-regex}, which SiegeKit substitutes as JSON strings.",
           "additionalProperties": {
             "$ref": "#/$defs/configValue"

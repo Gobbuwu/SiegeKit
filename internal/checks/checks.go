@@ -24,7 +24,6 @@ type Check struct {
 	ID      string
 	Name    string
 	Family  string
-	Version string
 	Targets []string
 	// Run scans root (an absolute directory) and returns findings with
 	// relative URIs.

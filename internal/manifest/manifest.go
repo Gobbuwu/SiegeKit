@@ -277,6 +277,10 @@ func (m *Manifest) Validate() error {
 		}
 		uses := slices.ContainsFunc(m.Run.Args, func(a string) bool { return strings.Contains(a, "{config}") })
 		switch {
+		case m.Run.Config != nil && len(m.Run.Config) == 0:
+			// An empty object would be dropped when the manifest is
+			// written again (found by FuzzParse in CI, 2026-11-19).
+			add("run.config is empty")
 		case m.Run.Config == nil && uses:
 			add("run.args uses {config} but the manifest has no run.config")
 		case m.Run.Config != nil && !uses:

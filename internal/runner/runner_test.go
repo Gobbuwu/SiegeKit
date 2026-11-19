@@ -270,7 +270,7 @@ func TestSelectAndRunBuiltinChecks(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if r.Plugins[0].Status != report.Ran || r.Plugins[0].Findings != 1 || r.Plugins[0].Tool != "siegekit" {
+	if r.Plugins[0].Status != report.Ran || r.Plugins[0].Findings != 1 || r.Plugins[0].Tool != "siegekit" || r.Plugins[0].Version != o.Version {
 		t.Errorf("%+v", r.Plugins[0])
 	}
 	if r.Plugins[1].Status != report.Failed || r.Plugins[1].Reason != "boom" || r.Complete() {

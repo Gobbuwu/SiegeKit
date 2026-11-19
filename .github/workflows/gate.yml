@@ -125,19 +125,21 @@ jobs:
           docker logs juice-shop
           exit 1
       - name: Scan
+        # --authorized-host stands for the owner's confirmation of the attack
+        # scan on this runner's own app (ADR 0005); --yes does not count.
         # Exit 0 or 3 as above. Both ZAP plugins must run and reach the app,
         # and the passive checks must report the issues seen in every local
         # run on 2026-11-19: no Content-Security-Policy (ZAP rule 10038) and
         # a permissive CORS header (10098).
         run: |
           set +e
-          "$RUNNER_TEMP/siegekit" scan --yes --no-save --report-dir "$RUNNER_TEMP/report" http://127.0.0.1:3000/
+          "$RUNNER_TEMP/siegekit" scan --yes --authorized-host 127.0.0.1 --no-save --report-dir "$RUNNER_TEMP/report" http://127.0.0.1:3000/
           code=$?
           set -e
           echo "exit code $code"
           if [ "$code" -ne 0 ] && [ "$code" -ne 3 ]; then exit 1; fi
           r="$RUNNER_TEMP/report/report.json"
-          jq '.plugins[] | {id, status, reason, requests, refused, findings}' "$r"
+          jq '.plugins[] | {id, status, reason, requests, refused, refusedTo, findings}' "$r"
           jq -e '[.plugins[] | select(.status == "ran" and .requests > 0) | .id] | sort == ["zap", "zap-active"]' "$r"
           for rule in 10038 10098; do
             jq -e --arg rule "$rule" '[.findings[] | select(.ruleId == $rule)] | length > 0' "$r" > /dev/null || { echo "ZAP rule $rule not reported"; exit 1; }

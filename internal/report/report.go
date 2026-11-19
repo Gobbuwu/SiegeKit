@@ -45,11 +45,13 @@ type PluginResult struct {
 	Suppressed    int      `json:"suppressed,omitempty"`
 	RepoSettings  []string `json:"repoSettings,omitempty"`
 	IgnoreMarkers int      `json:"ignoreMarkers,omitempty"`
-	// Requests counts requests the egress proxy forwarded to the target in an
-	// active run; Refused counts requests and connections it refused because
-	// they went somewhere else (ADR 0018, ADR 0023).
-	Requests int `json:"requests,omitempty"`
-	Refused  int `json:"refused,omitempty"`
+	// Requests counts requests the target answered through the egress proxy
+	// in an active run; Refused counts requests and connections the proxy
+	// refused, and RefusedTo names them, each once and at most 20 (ADR 0018,
+	// ADR 0023).
+	Requests  int      `json:"requests,omitempty"`
+	Refused   int      `json:"refused,omitempty"`
+	RefusedTo []string `json:"refusedTo,omitempty"`
 }
 
 // IgnoreNote says in one line what the repository told the tool to ignore,
@@ -365,7 +367,7 @@ code,pre{font:13px ui-monospace,monospace;white-space:pre-wrap;word-break:break-
 <h2>What was tested</h2>
 <table>
 <tr><th>Check</th><th>Family</th><th>Tool</th><th>Status</th><th>Findings</th></tr>
-{{range .Plugins}}<tr><td>{{.ID}}</td><td>{{.Family}}</td><td>{{.Tool}} {{.Version}}</td><td>{{.Status}}{{if .Reason}}: {{.Reason}}{{end}}{{with .IgnoreNote}}<br>Repository ignores: {{.}}{{end}}</td><td>{{.Findings}}</td></tr>
+{{range .Plugins}}<tr><td>{{.ID}}</td><td>{{.Family}}</td><td>{{.Tool}} {{.Version}}</td><td>{{.Status}}{{if .Reason}}: {{.Reason}}{{end}}{{with .IgnoreNote}}<br>Repository ignores: {{.}}{{end}}{{if or .Requests .Refused}}<br>Requests answered by the target: {{.Requests}}. Refused by SiegeKit: {{.Refused}}{{if .RefusedTo}} ({{range $i, $d := .RefusedTo}}{{if $i}}, {{end}}<code>{{$d}}</code>{{end}}){{end}}.{{end}}</td><td>{{.Findings}}</td></tr>
 {{else}}<tr><td colspan="5">No checks were selected.</td></tr>{{end}}
 </table>
 

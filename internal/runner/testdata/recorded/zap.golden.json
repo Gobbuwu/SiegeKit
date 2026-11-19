@@ -1,0 +1,424 @@
+[
+  {
+    "ruleId": "10020",
+    "title": "Missing Anti-clickjacking Header",
+    "message": "The response does not protect against 'ClickJacking' attacks. It should include either Content-Security-Policy with 'frame-ancestors' directive or X-Frame-Options.",
+    "severity": "medium",
+    "cwes": [
+      "CWE-1021"
+    ],
+    "location": {
+      "uri": "http://app.test:46199/",
+      "startLine": 1
+    },
+    "family": "dast",
+    "sources": [
+      {
+        "plugin": "zap",
+        "ruleId": "10020"
+      }
+    ],
+    "helpUri": "https://developer.mozilla.org/en-US/docs/Web/HTTP/Reference/Headers/X-Frame-Options",
+    "fingerprint": "e1db9b393ca209cf68ea5fe41d95b95a"
+  },
+  {
+    "ruleId": "10020",
+    "title": "Missing Anti-clickjacking Header",
+    "message": "The response does not protect against 'ClickJacking' attacks. It should include either Content-Security-Policy with 'frame-ancestors' directive or X-Frame-Options.",
+    "severity": "medium",
+    "cwes": [
+      "CWE-1021"
+    ],
+    "location": {
+      "uri": "http://app.test:46199/file?name=terms.txt",
+      "startLine": 1
+    },
+    "family": "dast",
+    "sources": [
+      {
+        "plugin": "zap",
+        "ruleId": "10020"
+      }
+    ],
+    "helpUri": "https://developer.mozilla.org/en-US/docs/Web/HTTP/Reference/Headers/X-Frame-Options",
+    "fingerprint": "9448becdd348dce91ad1a2b8a0f4b7a5"
+  },
+  {
+    "ruleId": "10020",
+    "title": "Missing Anti-clickjacking Header",
+    "message": "The response does not protect against 'ClickJacking' attacks. It should include either Content-Security-Policy with 'frame-ancestors' directive or X-Frame-Options.",
+    "severity": "medium",
+    "cwes": [
+      "CWE-1021"
+    ],
+    "location": {
+      "uri": "http://app.test:46199/item?id=1",
+      "startLine": 1
+    },
+    "family": "dast",
+    "sources": [
+      {
+        "plugin": "zap",
+        "ruleId": "10020"
+      }
+    ],
+    "helpUri": "https://developer.mozilla.org/en-US/docs/Web/HTTP/Reference/Headers/X-Frame-Options",
+    "fingerprint": "a313e8ffc20de6ae4036bb87748685b6"
+  },
+  {
+    "ruleId": "10020",
+    "title": "Missing Anti-clickjacking Header",
+    "message": "The response does not protect against 'ClickJacking' attacks. It should include either Content-Security-Policy with 'frame-ancestors' directive or X-Frame-Options.",
+    "severity": "medium",
+    "cwes": [
+      "CWE-1021"
+    ],
+    "location": {
+      "uri": "http://app.test:46199/search?q=shoes",
+      "startLine": 1
+    },
+    "family": "dast",
+    "sources": [
+      {
+        "plugin": "zap",
+        "ruleId": "10020"
+      }
+    ],
+    "helpUri": "https://developer.mozilla.org/en-US/docs/Web/HTTP/Reference/Headers/X-Frame-Options",
+    "fingerprint": "1e39c7b1dec14715e6a504039d547e31"
+  },
+  {
+    "ruleId": "10038",
+    "title": "Content Security Policy (CSP) Header Not Set",
+    "message": "Content Security Policy (CSP) is an added layer of security that helps to detect and mitigate certain types of attacks, including Cross Site Scripting (XSS) and data injection attacks. These attacks are used for everything from data theft to site defacement or distribution of malware. CSP provides a set of standard HTTP headers that allow website owners to declare approved sources of content that browsers should be allowed to load on that page — covered types are JavaScript, CSS, HTML frames, fonts, images and embeddable objects such as Java applets, ActiveX, audio and video files.",
+    "severity": "medium",
+    "cwes": [
+      "CWE-693"
+    ],
+    "location": {
+      "uri": "http://app.test:46199/",
+      "startLine": 1
+    },
+    "family": "dast",
+    "sources": [
+      {
+        "plugin": "zap",
+        "ruleId": "10038"
+      }
+    ],
+    "helpUri": "https://developer.mozilla.org/en-US/docs/Web/HTTP/Guides/CSP",
+    "fingerprint": "50c6ed60e540f6d3b16dbc272721aaf1"
+  },
+  {
+    "ruleId": "10038",
+    "title": "Content Security Policy (CSP) Header Not Set",
+    "message": "Content Security Policy (CSP) is an added layer of security that helps to detect and mitigate certain types of attacks, including Cross Site Scripting (XSS) and data injection attacks. These attacks are used for everything from data theft to site defacement or distribution of malware. CSP provides a set of standard HTTP headers that allow website owners to declare approved sources of content that browsers should be allowed to load on that page — covered types are JavaScript, CSS, HTML frames, fonts, images and embeddable objects such as Java applets, ActiveX, audio and video files.",
+    "severity": "medium",
+    "cwes": [
+      "CWE-693"
+    ],
+    "location": {
+      "uri": "http://app.test:46199/file?name=terms.txt",
+      "startLine": 1
+    },
+    "family": "dast",
+    "sources": [
+      {
+        "plugin": "zap",
+        "ruleId": "10038"
+      }
+    ],
+    "helpUri": "https://developer.mozilla.org/en-US/docs/Web/HTTP/Guides/CSP",
+    "fingerprint": "610cea89a21fbf47f95fd2b95c774f63"
+  },
+  {
+    "ruleId": "10038",
+    "title": "Content Security Policy (CSP) Header Not Set",
+    "message": "Content Security Policy (CSP) is an added layer of security that helps to detect and mitigate certain types of attacks, including Cross Site Scripting (XSS) and data injection attacks. These attacks are used for everything from data theft to site defacement or distribution of malware. CSP provides a set of standard HTTP headers that allow website owners to declare approved sources of content that browsers should be allowed to load on that page — covered types are JavaScript, CSS, HTML frames, fonts, images and embeddable objects such as Java applets, ActiveX, audio and video files.",
+    "severity": "medium",
+    "cwes": [
+      "CWE-693"
+    ],
+    "location": {
+      "uri": "http://app.test:46199/item?id=1",
+      "startLine": 1
+    },
+    "family": "dast",
+    "sources": [
+      {
+        "plugin": "zap",
+        "ruleId": "10038"
+      }
+    ],
+    "helpUri": "https://developer.mozilla.org/en-US/docs/Web/HTTP/Guides/CSP",
+    "fingerprint": "c9bdbe3bc57f3c984ae4216ac3b98a40"
+  },
+  {
+    "ruleId": "10038",
+    "title": "Content Security Policy (CSP) Header Not Set",
+    "message": "Content Security Policy (CSP) is an added layer of security that helps to detect and mitigate certain types of attacks, including Cross Site Scripting (XSS) and data injection attacks. These attacks are used for everything from data theft to site defacement or distribution of malware. CSP provides a set of standard HTTP headers that allow website owners to declare approved sources of content that browsers should be allowed to load on that page — covered types are JavaScript, CSS, HTML frames, fonts, images and embeddable objects such as Java applets, ActiveX, audio and video files.",
+    "severity": "medium",
+    "cwes": [
+      "CWE-693"
+    ],
+    "location": {
+      "uri": "http://app.test:46199/search?q=shoes",
+      "startLine": 1
+    },
+    "family": "dast",
+    "sources": [
+      {
+        "plugin": "zap",
+        "ruleId": "10038"
+      }
+    ],
+    "helpUri": "https://developer.mozilla.org/en-US/docs/Web/HTTP/Guides/CSP",
+    "fingerprint": "fbe05861bfdcf2175e7683c300bd31a8"
+  },
+  {
+    "ruleId": "10010",
+    "title": "Cookie No HttpOnly Flag",
+    "message": "A cookie has been set without the HttpOnly flag, which means that the cookie can be accessed by JavaScript. If a malicious script can be run on this page then the cookie will be accessible and can be transmitted to another site. If this is a session cookie then session hijacking may be possible.",
+    "severity": "low",
+    "cwes": [
+      "CWE-1004"
+    ],
+    "location": {
+      "uri": "http://app.test:46199/",
+      "startLine": 1
+    },
+    "snippet": "Set-Cookie: session",
+    "family": "dast",
+    "sources": [
+      {
+        "plugin": "zap",
+        "ruleId": "10010"
+      }
+    ],
+    "helpUri": "https://owasp.org/www-community/HttpOnly",
+    "fingerprint": "0623d2f95c904acdbf5a3b9ae88d5237"
+  },
+  {
+    "ruleId": "10021",
+    "title": "X-Content-Type-Options Header Missing",
+    "message": "This issue still applies to error type pages (401, 403, 500, etc.) as those pages are often still affected by injection issues, in which case there is still concern for browsers sniffing pages away from their actual content type.\nAt \"High\" threshold this scan rule will not alert on client or server error responses.",
+    "severity": "low",
+    "cwes": [
+      "CWE-693"
+    ],
+    "location": {
+      "uri": "http://app.test:46199/",
+      "startLine": 1
+    },
+    "family": "dast",
+    "sources": [
+      {
+        "plugin": "zap",
+        "ruleId": "10021"
+      }
+    ],
+    "helpUri": "https://learn.microsoft.com/en-us/previous-versions/windows/internet-explorer/ie-developer/compatibility/gg622941(v=vs.85)",
+    "fingerprint": "50c6ed60e540f6d3b16dbc272721aaf1"
+  },
+  {
+    "ruleId": "10021",
+    "title": "X-Content-Type-Options Header Missing",
+    "message": "This issue still applies to error type pages (401, 403, 500, etc.) as those pages are often still affected by injection issues, in which case there is still concern for browsers sniffing pages away from their actual content type.\nAt \"High\" threshold this scan rule will not alert on client or server error responses.",
+    "severity": "low",
+    "cwes": [
+      "CWE-693"
+    ],
+    "location": {
+      "uri": "http://app.test:46199/file?name=terms.txt",
+      "startLine": 1
+    },
+    "family": "dast",
+    "sources": [
+      {
+        "plugin": "zap",
+        "ruleId": "10021"
+      }
+    ],
+    "helpUri": "https://learn.microsoft.com/en-us/previous-versions/windows/internet-explorer/ie-developer/compatibility/gg622941(v=vs.85)",
+    "fingerprint": "610cea89a21fbf47f95fd2b95c774f63"
+  },
+  {
+    "ruleId": "10021",
+    "title": "X-Content-Type-Options Header Missing",
+    "message": "This issue still applies to error type pages (401, 403, 500, etc.) as those pages are often still affected by injection issues, in which case there is still concern for browsers sniffing pages away from their actual content type.\nAt \"High\" threshold this scan rule will not alert on client or server error responses.",
+    "severity": "low",
+    "cwes": [
+      "CWE-693"
+    ],
+    "location": {
+      "uri": "http://app.test:46199/item?id=1",
+      "startLine": 1
+    },
+    "family": "dast",
+    "sources": [
+      {
+        "plugin": "zap",
+        "ruleId": "10021"
+      }
+    ],
+    "helpUri": "https://learn.microsoft.com/en-us/previous-versions/windows/internet-explorer/ie-developer/compatibility/gg622941(v=vs.85)",
+    "fingerprint": "c9bdbe3bc57f3c984ae4216ac3b98a40"
+  },
+  {
+    "ruleId": "10021",
+    "title": "X-Content-Type-Options Header Missing",
+    "message": "This issue still applies to error type pages (401, 403, 500, etc.) as those pages are often still affected by injection issues, in which case there is still concern for browsers sniffing pages away from their actual content type.\nAt \"High\" threshold this scan rule will not alert on client or server error responses.",
+    "severity": "low",
+    "cwes": [
+      "CWE-693"
+    ],
+    "location": {
+      "uri": "http://app.test:46199/search?q=shoes",
+      "startLine": 1
+    },
+    "family": "dast",
+    "sources": [
+      {
+        "plugin": "zap",
+        "ruleId": "10021"
+      }
+    ],
+    "helpUri": "https://learn.microsoft.com/en-us/previous-versions/windows/internet-explorer/ie-developer/compatibility/gg622941(v=vs.85)",
+    "fingerprint": "fbe05861bfdcf2175e7683c300bd31a8"
+  },
+  {
+    "ruleId": "10036",
+    "title": "Server Leaks Version Information via \"Server\" HTTP Response Header Field",
+    "message": "The web/application server is leaking version information via the \"Server\" HTTP response header. Access to such information may facilitate attackers identifying other vulnerabilities your web/application server is subject to.",
+    "severity": "low",
+    "cwes": [
+      "CWE-497"
+    ],
+    "location": {
+      "uri": "http://app.test:46199/",
+      "startLine": 1
+    },
+    "snippet": "Apache/2.4.29 (Ubuntu)",
+    "family": "dast",
+    "sources": [
+      {
+        "plugin": "zap",
+        "ruleId": "10036"
+      }
+    ],
+    "helpUri": "https://httpd.apache.org/docs/current/mod/core.html#servertokens",
+    "fingerprint": "be824f0144b5f899459e9ee8db3c56c0"
+  },
+  {
+    "ruleId": "10036",
+    "title": "Server Leaks Version Information via \"Server\" HTTP Response Header Field",
+    "message": "The web/application server is leaking version information via the \"Server\" HTTP response header. Access to such information may facilitate attackers identifying other vulnerabilities your web/application server is subject to.",
+    "severity": "low",
+    "cwes": [
+      "CWE-497"
+    ],
+    "location": {
+      "uri": "http://app.test:46199/file?name=terms.txt",
+      "startLine": 1
+    },
+    "snippet": "Apache/2.4.29 (Ubuntu)",
+    "family": "dast",
+    "sources": [
+      {
+        "plugin": "zap",
+        "ruleId": "10036"
+      }
+    ],
+    "helpUri": "https://httpd.apache.org/docs/current/mod/core.html#servertokens",
+    "fingerprint": "3b90fcf051ca6a8b205181f4d3e71c45"
+  },
+  {
+    "ruleId": "10036",
+    "title": "Server Leaks Version Information via \"Server\" HTTP Response Header Field",
+    "message": "The web/application server is leaking version information via the \"Server\" HTTP response header. Access to such information may facilitate attackers identifying other vulnerabilities your web/application server is subject to.",
+    "severity": "low",
+    "cwes": [
+      "CWE-497"
+    ],
+    "location": {
+      "uri": "http://app.test:46199/item?id=1",
+      "startLine": 1
+    },
+    "snippet": "Apache/2.4.29 (Ubuntu)",
+    "family": "dast",
+    "sources": [
+      {
+        "plugin": "zap",
+        "ruleId": "10036"
+      }
+    ],
+    "helpUri": "https://httpd.apache.org/docs/current/mod/core.html#servertokens",
+    "fingerprint": "0db542911a989ef3e9ad51fb281282d8"
+  },
+  {
+    "ruleId": "10036",
+    "title": "Server Leaks Version Information via \"Server\" HTTP Response Header Field",
+    "message": "The web/application server is leaking version information via the \"Server\" HTTP response header. Access to such information may facilitate attackers identifying other vulnerabilities your web/application server is subject to.",
+    "severity": "low",
+    "cwes": [
+      "CWE-497"
+    ],
+    "location": {
+      "uri": "http://app.test:46199/search?q=shoes",
+      "startLine": 1
+    },
+    "snippet": "Apache/2.4.29 (Ubuntu)",
+    "family": "dast",
+    "sources": [
+      {
+        "plugin": "zap",
+        "ruleId": "10036"
+      }
+    ],
+    "helpUri": "https://httpd.apache.org/docs/current/mod/core.html#servertokens",
+    "fingerprint": "319ce75d3a0299e689c7e76b07c0dbd9"
+  },
+  {
+    "ruleId": "10054",
+    "title": "Cookie without SameSite Attribute",
+    "message": "A cookie has been set without the SameSite attribute, which means that the cookie can be sent as a result of a 'cross-site' request. The SameSite attribute is an effective counter measure to cross-site request forgery, cross-site script inclusion, and timing attacks.",
+    "severity": "low",
+    "cwes": [
+      "CWE-1275"
+    ],
+    "location": {
+      "uri": "http://app.test:46199/",
+      "startLine": 1
+    },
+    "snippet": "Set-Cookie: session",
+    "family": "dast",
+    "sources": [
+      {
+        "plugin": "zap",
+        "ruleId": "10054"
+      }
+    ],
+    "helpUri": "https://datatracker.ietf.org/doc/html/draft-ietf-httpbis-cookie-same-site",
+    "fingerprint": "018973d7d0322c5478ce6c0b8c23ed02"
+  },
+  {
+    "ruleId": "10112",
+    "title": "Session Management Response Identified",
+    "message": "cookie:session",
+    "severity": "info",
+    "location": {
+      "uri": "http://app.test:46199/",
+      "startLine": 1
+    },
+    "snippet": "session",
+    "family": "dast",
+    "sources": [
+      {
+        "plugin": "zap",
+        "ruleId": "10112"
+      }
+    ],
+    "helpUri": "https://www.zaproxy.org/docs/desktop/addons/authentication-helper/session-mgmt-id/",
+    "fingerprint": "2d5388ea655b5c2b9f3e33242ce05ff9"
+  }
+]

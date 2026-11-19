@@ -52,10 +52,13 @@ A URL target is checked against the target rules (ADR 0005) first: this
 machine is allowed, a private network address needs you to type its host
 name (or pass it with --authorized-host), and public systems need --deployed
 and proof that you control them. SiegeKit then prints the plan, records the
-run in its audit log and runs the web tests: ZAP's crawler and passive
-checks, and on local targets only, ZAP's attack scan, which can change data.
-Every request goes through SiegeKit's egress proxy, which reaches only the
-target's own address. Web tests run on Linux only for now.
+run in its audit log, checks with one GET that the target answers, and runs
+the web tests: ZAP's crawler and passive checks, and on local targets only,
+ZAP's attack scan, which can change data. On this machine the attack scan
+asks you to type yes first (or pass --authorized-host with the target's
+host); --yes does not count. Every request goes through SiegeKit's egress
+proxy, which reaches only the target's own address. Web tests run on Linux
+only for now.
 
 With --deployed, SiegeKit gives you a token for the host the first time and
 checks it at the start of every run: publish it at
@@ -139,6 +142,12 @@ func scan(args []string, stdout, stderr io.Writer) int {
 		return exitInvalid
 	}
 
+	if sc := otherScheme(pos[0]); sc != "" {
+		if _, err := os.Stat(pos[0]); err != nil {
+			fmt.Fprintf(stderr, "siegekit scan: %s:// URLs cannot be scanned; give an http:// or https:// URL or a directory\n", sc)
+			return exitUsage
+		}
+	}
 	if isURL(pos[0]) {
 		if *doUpdate {
 			fmt.Fprint(stderr, "siegekit scan: --update only applies to directory scans\n")
@@ -259,7 +268,14 @@ func finish(run *report.Run, reportDir string, noSave bool, name string, thresho
 			line += " (repository ignores: " + n + ")"
 		}
 		if p.Requests > 0 || p.Refused > 0 {
-			line += fmt.Sprintf(" (%d request(s) sent, %d refused by SiegeKit)", p.Requests, p.Refused)
+			line += fmt.Sprintf(" (%d request(s) answered by the target, %d refused by SiegeKit", p.Requests, p.Refused)
+			if len(p.RefusedTo) > 0 {
+				line += ": " + strings.Join(p.RefusedTo[:min(3, len(p.RefusedTo))], ", ")
+				if len(p.RefusedTo) > 3 {
+					line += ", ... (all in report.json)"
+				}
+			}
+			line += ")"
 		}
 		fmt.Fprintln(stdout, line)
 	}

@@ -96,7 +96,7 @@ func TestRunURL(t *testing.T) {
 		"stopped":     {&ActiveResult{Result: &sandbox.Result{Status: sandbox.Failed, ExitCode: -1}, Stats: egress.Stats{Requests: 9}, Stopped: "3 server errors in a row"}, nil, report.Failed, "stopped by SiegeKit: 3 server errors"},
 		"timed out":   {&ActiveResult{Result: &sandbox.Result{Status: sandbox.TimedOut}, Stats: egress.Stats{Requests: 9}}, nil, report.TimedOut, "stopped after"},
 		"exit code":   {&ActiveResult{Result: &sandbox.Result{Status: sandbox.Completed, ExitCode: 1, Stderr: "Automation plan failures"}, Stats: egress.Stats{Requests: 9}}, nil, report.Failed, "Automation plan failures"},
-		"no requests": {&ActiveResult{Result: &sandbox.Result{Status: sandbox.Completed}}, nil, report.Failed, "sent no request"},
+		"no requests": {&ActiveResult{Result: &sandbox.Result{Status: sandbox.Completed}}, nil, report.Failed, "answered no request"},
 		"relay error": {nil, errors.New("start relay: no image"), report.Failed, "start relay"},
 	} {
 		r, err := RunURL(context.Background(), func(context.Context, sandbox.Spec, egress.Config) (*ActiveResult, error) {

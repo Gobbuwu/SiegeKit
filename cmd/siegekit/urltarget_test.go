@@ -77,7 +77,9 @@ func useActive(t *testing.T) *fakeActive {
 		return &runner.ActiveResult{Result: &sandbox.Result{Status: sandbox.Completed}, Stats: egress.Stats{Requests: 3}}, nil
 	}
 	useEngine(t, &fakeEngine{}, nil)
-	t.Cleanup(func() { activeRunner = old })
+	oldReach := reachable
+	reachable = func(context.Context, egress.Config) error { return nil }
+	t.Cleanup(func() { activeRunner, reachable = old, oldReach })
 	t.Chdir(t.TempDir()) // reports go to ./siegekit-report
 	return f
 }
@@ -111,6 +113,7 @@ func TestScanURL(t *testing.T) {
 		{"unresolvable", []string{"http://nowhere.example"}, false, "", exitInvalid, "no such host"},
 		{"flag on directory", []string{"--deployed", "."}, false, "", exitUsage, "only apply to URL targets"},
 		{"update on URL", []string{"--update", "http://localhost"}, false, "", exitUsage, "only applies to directory scans"},
+		{"other scheme", []string{"ftp://localhost/"}, false, "", exitUsage, "ftp:// URLs cannot be scanned"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Setenv("XDG_DATA_HOME", t.TempDir()) // runs in the same second share an ID
@@ -223,7 +226,7 @@ func TestScanURLRunsActivePlugins(t *testing.T) {
 	data := t.TempDir()
 	t.Setenv("XDG_DATA_HOME", data)
 	var out, errb bytes.Buffer
-	code := run([]string{"scan", "--fail-on", "medium", "http://localhost:3000/app"}, &out, &errb)
+	code := run([]string{"scan", "--fail-on", "medium", "--authorized-host", "localhost", "http://localhost:3000/app"}, &out, &errb)
 	if code != report.ExitFindings {
 		t.Fatalf("exit %d\n%s%s", code, out.String(), errb.String())
 	}
@@ -231,7 +234,7 @@ func TestScanURLRunsActivePlugins(t *testing.T) {
 		"Plan: http://localhost:3000/app, local mode, addresses 127.0.0.1.",
 		"zap-active   zap 2.17.0: ZAP attack scan (local targets only)",
 		"only http://localhost:3000 is reachable",
-		"(3 request(s) sent, 0 refused by SiegeKit)",
+		"(3 request(s) answered by the target, 0 refused by SiegeKit)",
 	} {
 		if !strings.Contains(out.String(), want) {
 			t.Errorf("output lacks %q:\n%s", want, out.String())
@@ -257,7 +260,7 @@ func TestScanURLRunsActivePlugins(t *testing.T) {
 		t.Fatal(err)
 	}
 	var e audit.Entry
-	if err := json.Unmarshal(b, &e); err != nil || e.Target != "http://localhost:3000/app" || e.Mode != "local" || e.Verification != "loopback" || !slices.Equal(e.Plugins, []string{"zap", "zap-active"}) {
+	if err := json.Unmarshal(b, &e); err != nil || e.Target != "http://localhost:3000/app" || e.Mode != "local" || e.Verification != "loopback + --authorized-host" || e.Confirmed != "localhost" || !slices.Equal(e.Plugins, []string{"zap", "zap-active"}) {
 		t.Errorf("audit entry %+v %v", e, err)
 	}
 	// The report names the URL and the request counts.
@@ -271,6 +274,75 @@ func TestScanURLRunsActivePlugins(t *testing.T) {
 	}
 	if f := r.Findings[0]; f.Location.URI != "http://localhost:3000/app" || !slices.Equal(f.CWEs, []string{"CWE-1021"}) || !strings.HasPrefix(f.HelpURI, "https://developer.mozilla.org/") {
 		t.Errorf("finding %+v", f)
+	}
+}
+
+// TestScanURLDestructiveNeedsConfirmation checks that the attack scan on a
+// loopback target runs only after a person typed yes or passed
+// --authorized-host (ADR 0005, owner decision 2026-11-19); --yes does not
+// count.
+func TestScanURLDestructiveNeedsConfirmation(t *testing.T) {
+	old := resolver
+	resolver = fakeResolver{"localhost": "127.0.0.1"}
+	t.Cleanup(func() { resolver = old })
+	for _, tc := range []struct {
+		name         string
+		args         []string
+		tty          bool
+		input        string
+		runs         int
+		verification string
+		want         string
+	}{
+		{"no terminal", nil, false, "", 1, "loopback", "pass --authorized-host localhost if you"},
+		{"--yes does not count", []string{"--yes"}, false, "", 1, "loopback", "needs a person's confirmation"},
+		{"typed yes", nil, true, "yes\n", 2, "loopback + typed yes", "Type yes to run them"},
+		{"typed no", nil, true, "no\n", 1, "loopback", `"yes" was not typed`},
+		{"flag", []string{"--authorized-host", "LOCALHOST"}, false, "", 2, "loopback + --authorized-host", "zap-active"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := useActive(t)
+			data := t.TempDir()
+			t.Setenv("XDG_DATA_HOME", data)
+			stdinIsTerminal = func() bool { return tc.tty }
+			stdin = strings.NewReader(tc.input)
+			t.Cleanup(func() { stdinIsTerminal = func() bool { return false } })
+			var out, errb bytes.Buffer
+			run(append(append([]string{"scan", "--no-save"}, tc.args...), "http://localhost:3000"), &out, &errb)
+			if len(f.specs) != tc.runs || !strings.Contains(out.String(), tc.want) {
+				t.Errorf("%d runs (want %d), output lacks %q:\n%s%s", len(f.specs), tc.runs, tc.want, out.String(), errb.String())
+			}
+			b, err := os.ReadFile(filepath.Join(data, "siegekit", "audit.log"))
+			var e audit.Entry
+			if err != nil || json.Unmarshal(b, &e) != nil || e.Verification != tc.verification || len(e.Plugins) != tc.runs {
+				t.Errorf("audit entry %+v %v", e, err)
+			}
+			if tc.runs == 1 {
+				b, err := os.ReadFile(filepath.Join("siegekit-report", "report.json"))
+				var r report.Run
+				if err != nil || json.Unmarshal(b, &r) != nil || len(r.Plugins) != 2 || r.Plugins[1].ID != "zap-active" || r.Plugins[1].Status != report.Skipped {
+					t.Errorf("report %+v %v", r.Plugins, err)
+				}
+			}
+		})
+	}
+}
+
+// TestScanURLUnreachable checks that a target that does not answer the
+// first GET is sent no scan.
+func TestScanURLUnreachable(t *testing.T) {
+	old := resolver
+	resolver = fakeResolver{"localhost": "127.0.0.1"}
+	t.Cleanup(func() { resolver = old })
+	f := useActive(t)
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	reachable = func(context.Context, egress.Config) error {
+		return errors.New("the target did not answer: connection refused")
+	}
+	var out, errb bytes.Buffer
+	code := run([]string{"scan", "--no-save", "http://localhost:3000"}, &out, &errb)
+	if code != exitInvalid || len(f.specs) != 0 || !strings.Contains(errb.String(), "connection refused; no test was sent") {
+		t.Errorf("exit %d, %d runs\n%s%s", code, len(f.specs), out.String(), errb.String())
 	}
 }
 

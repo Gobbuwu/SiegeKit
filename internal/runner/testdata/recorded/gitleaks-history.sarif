@@ -1375,7 +1375,7 @@
       }
      ],
      "partialFingerprints": {
-      "commitSha": "e0d0ef73bbf150cbbb5e60e572d126db46726f54",
+      "commitSha": "e0d0ef73bbf150cbbb5e60e572d126db46726f54", "siegekitNote": "gitleaks:allow",
       "email": "t@t",
       "author": "t",
       "date": "2026-11-19T07:50:25Z",
@@ -1409,7 +1409,7 @@
       }
      ],
      "partialFingerprints": {
-      "commitSha": "2e026f728cb63c33baca9b2ed298da681d8164b9",
+      "commitSha": "2e026f728cb63c33baca9b2ed298da681d8164b9", "siegekitNote": "gitleaks:allow",
       "email": "t@t",
       "author": "t",
       "date": "2026-11-19T07:52:37Z",

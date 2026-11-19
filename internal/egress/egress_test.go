@@ -1,6 +1,7 @@
 package egress
 
 import (
+	"context"
 	"crypto/tls"
 	"crypto/x509"
 	"fmt"
@@ -10,6 +11,7 @@ import (
 	"net/http/httptest"
 	"net/netip"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -150,8 +152,46 @@ func TestHTTPTarget(t *testing.T) {
 			t.Errorf("%s: reached the target", name)
 		}
 	}
-	if s := p.Stats(); s.Requests != 1 || s.Refused < 7 {
+	s := p.Stats()
+	if s.Requests != 1 || s.Refused < 7 {
 		t.Errorf("stats %+v", s)
+	}
+	for _, want := range []string{
+		fmt.Sprintf("GET http://other.test:%d", u.port()),
+		"GET http://169.254.169.254",
+		fmt.Sprintf("CONNECT app.test:%d", u.port()),
+		"GET http://victim.test",
+	} {
+		if !slices.Contains(s.RefusedTo, want) {
+			t.Errorf("RefusedTo %q lacks %q", s.RefusedTo, want)
+		}
+	}
+}
+
+// TestUnreachableTargetCountsNoRequest checks that a request counts only
+// when the target answered: a plugin whose requests all failed is reported
+// as having sent none.
+func TestUnreachableTargetCountsNoRequest(t *testing.T) {
+	u := newUpstream(t, false, nil)
+	p, c, origin := start(t, u, "http", "app.test", nil)
+	u.srv.Close()
+	if code, _, err := get(t, c, origin+"/", nil); err != nil || code != http.StatusBadGateway {
+		t.Errorf("answered %d %v, want 502", code, err)
+	}
+	if s := p.Stats(); s.Requests != 0 || s.ServerErrors != 1 {
+		t.Errorf("stats %+v", s)
+	}
+}
+
+func TestRefusedToIsCapped(t *testing.T) {
+	u := newUpstream(t, false, nil)
+	p, c, _ := start(t, u, "http", "app.test", nil)
+	for i := range MaxRefusedTo + 5 {
+		get(t, c, fmt.Sprintf("http://h%d.test/", i), nil)
+	}
+	get(t, c, "http://h0.test/", nil)
+	if s := p.Stats(); len(s.RefusedTo) != MaxRefusedTo || s.Refused != MaxRefusedTo+6 {
+		t.Errorf("%d entries, %d refused", len(s.RefusedTo), s.Refused)
 	}
 }
 
@@ -374,8 +414,42 @@ func TestReadOnly(t *testing.T) {
 				t.Errorf("%s %s: answered %d (%v), target hit %v", scheme, m, code, err, u.hits.Load() != before)
 			}
 		}
-		if s := p.Stats(); s.Requests != 2 || s.Refused != 6 {
+		s := p.Stats()
+		if s.Requests != 2 || s.Refused != 6 {
 			t.Errorf("%s stats %+v", scheme, s)
+		}
+		if len(s.RefusedTo) != 6 || !strings.HasPrefix(s.RefusedTo[0], "POST ") || !strings.HasSuffix(s.RefusedTo[0], " (only GET and HEAD)") {
+			t.Errorf("%s RefusedTo %q", scheme, s.RefusedTo)
+		}
+	}
+}
+
+func TestReachable(t *testing.T) {
+	for _, scheme := range []string{"http", "https"} {
+		u := newUpstream(t, scheme == "https", func() int { return http.StatusInternalServerError })
+		host := "app.test"
+		if scheme == "https" {
+			host = "example.com" // httptest's certificate name
+		}
+		tu, err := target.Parse(fmt.Sprintf("%s://%s:%d/start", scheme, host, u.port()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		cfg := Config{Target: tu, Addrs: []netip.Addr{netip.MustParseAddr("127.0.0.1")}, VerifyTLS: true, Version: "test"}
+		if u.srv.TLS != nil {
+			cfg.RootCAs = u.srv.Client().Transport.(*http.Transport).TLSClientConfig.RootCAs
+		}
+		// Any HTTP answer counts, even a server error.
+		if err := Reachable(context.Background(), cfg); err != nil {
+			t.Errorf("%s: %v", scheme, err)
+		}
+		r := u.last.Load().(*http.Request)
+		if u.hits.Load() != 1 || r.Method != http.MethodGet || r.URL.Path != "/start" || r.Header.Get("User-Agent") != "SiegeKit/test" {
+			t.Errorf("%s: %d hits, %s %s %q", scheme, u.hits.Load(), r.Method, r.URL, r.Header.Get("User-Agent"))
+		}
+		u.srv.Close()
+		if err := Reachable(context.Background(), cfg); err == nil || !strings.Contains(err.Error(), "the target did not answer") {
+			t.Errorf("%s closed: %v", scheme, err)
 		}
 	}
 }

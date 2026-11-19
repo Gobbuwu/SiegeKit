@@ -1,0 +1,94 @@
+[
+  {
+    "ruleId": "6",
+    "title": "Path Traversal",
+    "message": "The Path Traversal attack technique allows an attacker access to files, directories, and commands that potentially reside outside the web document root directory. An attacker may manipulate a URL in such a way that the web site will execute or reveal the contents of arbitrary files anywhere on the web server. Any device that exposes an HTTP-based interface is potentially vulnerable to Path Traversal.\n\nMost web sites restrict user access to a specific portion of the file-system, typically called the \"web document root\" or \"CGI root\" directory. These directories contain the files intended for user access and the executable necessary to drive web application functionality. To access files or execute commands anywhere on the file-system, Path Traversal attacks will utilize the ability of special-characters sequences.\n\nThe most basic Path Traversal attack uses the \"../\" special-character sequence to alter the resource location requested in the URL. Although most popular web servers will prevent this technique from escaping the web document root, alternate encodings of the \"../\" sequence may help bypass the security filters. These method variations include valid and invalid Unicode-encoding (\"..%u2216\" or \"..%c0%af\") of the forward slash character, backslash characters (\"..\\\") on Windows-based servers, URL encoded characters \"%2e%2e%2f\"), and double URL encoding (\"..%255c\") of the backslash character.\n\nEven if the web server properly restricts Path Traversal attempts in the URL path, a web application itself may still be vulnerable due to improper handling of user-supplied input. This is a common problem of web applications that use template mechanisms or load static text from files. In variations of the attack, the original URL parameter value is substituted with the file name of one of the web application's dynamic scripts. Consequently, the results can reveal source code because the file is interpreted as text instead of an executable script. These techniques often employ additional special characters such as the dot (\".\") to reveal the listing of the current working directory, or \"%00\" NULL characters in order to bypass rudimentary file extension checks.",
+    "severity": "high",
+    "cwes": [
+      "CWE-22"
+    ],
+    "location": {
+      "uri": "http://app.test:46199/file?name=%2Fetc%2Fpasswd",
+      "startLine": 1
+    },
+    "snippet": "root:x:0:0",
+    "family": "dast",
+    "sources": [
+      {
+        "plugin": "zap-active",
+        "ruleId": "6"
+      }
+    ],
+    "helpUri": "https://owasp.org/www-community/attacks/Path_Traversal",
+    "fingerprint": "d654de78e05475f94d07d58b6105a91c"
+  },
+  {
+    "ruleId": "40012",
+    "title": "Cross Site Scripting (Reflected)",
+    "message": "Cross-site Scripting (XSS) is an attack technique that involves echoing attacker-supplied code into a user's browser instance. A browser instance can be a standard web browser client, or a browser object embedded in a software product such as the browser within WinAmp, an RSS reader, or an email client. The code itself is usually written in HTML/JavaScript, but may also extend to VBScript, ActiveX, Java, Flash, or any other browser-supported technology.\nWhen an attacker gets a user's browser to execute his/her code, the code will run within the security context (or zone) of the hosting web site. With this level of privilege, the code has the ability to read, modify and transmit any sensitive data accessible by the browser. A Cross-site Scripted user could have his/her account hijacked (cookie theft), their browser redirected to another location, or possibly shown fraudulent content delivered by the web site they are visiting. Cross-site Scripting attacks essentially compromise the trust relationship between a user and the web site. Applications utilizing browser object instances which load content from the file system may execute code under the local machine zone allowing for system compromise.\n\nThere are three types of Cross-site Scripting attacks: non-persistent, persistent and DOM-based.\nNon-persistent attacks and DOM-based attacks require a user to either visit a specially crafted link laced with malicious code, or visit a malicious web page containing a web form, which when posted to the vulnerable site, will mount the attack. Using a malicious form will oftentimes take place when the vulnerable resource only accepts HTTP POST requests. In such a case, the form can be submitted automatically, without the victim's knowledge (e.g. by using JavaScript). Upon clicking on the malicious link or submitting the malicious form, the XSS payload will get echoed back and will get interpreted by the user's browser and execute. Another technique to send almost arbitrary requests (GET and POST) is by using an embedded client, such as Adobe Flash.\nPersistent attacks occur when the malicious code is submitted to a web site where it's stored for a period of time. Examples of an attacker's favorite targets often include message board posts, web mail messages, and web chat software. The unsuspecting user is not required to interact with any additional site/link (e.g. an attacker site or a malicious link sent via email), just simply view the web page containing the code.",
+    "severity": "high",
+    "cwes": [
+      "CWE-79"
+    ],
+    "location": {
+      "uri": "http://app.test:46199/search?q=%3C%2Fp%3E%3CscrIpt%3Ealert%281%29%3B%3C%2FscRipt%3E%3Cp%3E",
+      "startLine": 1
+    },
+    "snippet": "\u003c/p\u003e\u003cscrIpt\u003ealert(1);\u003c/scRipt\u003e\u003cp\u003e",
+    "family": "dast",
+    "sources": [
+      {
+        "plugin": "zap-active",
+        "ruleId": "40012"
+      }
+    ],
+    "helpUri": "https://owasp.org/www-community/attacks/xss/",
+    "fingerprint": "75e3bd4af350b90246101f9953d58ada"
+  },
+  {
+    "ruleId": "40018",
+    "title": "SQL Injection - MySQL",
+    "message": "RDBMS [MySQL] likely, given error message regular expression [\\QYou have an error in your SQL syntax\\E] matched by the HTML results.\nThe vulnerability was detected by manipulating the parameter to cause a database error message to be returned and recognised.",
+    "severity": "high",
+    "cwes": [
+      "CWE-89"
+    ],
+    "location": {
+      "uri": "http://app.test:46199/item?id=%27",
+      "startLine": 1
+    },
+    "snippet": "You have an error in your SQL syntax",
+    "family": "dast",
+    "sources": [
+      {
+        "plugin": "zap-active",
+        "ruleId": "40018"
+      }
+    ],
+    "helpUri": "https://cheatsheetseries.owasp.org/cheatsheets/SQL_Injection_Prevention_Cheat_Sheet.html",
+    "fingerprint": "7918d3796c4bd7898621222ecc874dae"
+  },
+  {
+    "ruleId": "90020",
+    "title": "Remote OS Command Injection",
+    "message": "The scan rule was able to retrieve the content of a file or command by sending [cat /etc/passwd] to the operating system running this application.",
+    "severity": "high",
+    "cwes": [
+      "CWE-78"
+    ],
+    "location": {
+      "uri": "http://app.test:46199/file?name=cat+%2Fetc%2Fpasswd",
+      "startLine": 1
+    },
+    "snippet": "root:x:0:0",
+    "family": "dast",
+    "sources": [
+      {
+        "plugin": "zap-active",
+        "ruleId": "90020"
+      }
+    ],
+    "helpUri": "https://cwe.mitre.org/data/definitions/78.html",
+    "fingerprint": "0cc9701463ee1772f3eaed3be9c49c13"
+  }
+]

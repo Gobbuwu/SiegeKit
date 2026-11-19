@@ -16,6 +16,9 @@ Real reports from the pinned tool versions, used by `TestRecordedToolOutput`. Th
 | `trivy.sarif` | trivy 0.76.2, pinned image (`sha256:8f6bb947…`) | the manifest's scan arguments with the vulnerability database of 2026-11-19 |
 | `gosec.sarif` | gosec v2.30.0, built with `go install` (the pinned ghcr image could not be pulled from the recording machine) | the manifest's arguments, target at `/target`. Recorded again on 2026-11-19 after `-track-suppressions` was added: byte-for-byte the same, because the target has no `#nosec` comment. |
 | `bandit.json` | bandit 1.9.4 from PyPI (same reason) | the manifest's arguments, target at `/target` |
+| `zap/zap.json`, `zap-active/zap.json` | ZAP 2.17.0, pinned image (`zaproxy/zap-stable@sha256:9624669d…`) | recorded 2026-11-19 from `RunURL` with both built-in manifests against SiegeKit's own test fixture (`vulnapp_test.go`) served at `http://app.test:46199/`, behind the relay and egress proxy, the same path as `TestZAPFindsPlantedIssues`. The `/etc/passwd` text in the path-traversal evidence is the fixture's fake answer. |
+
+In `gitleaks-history.sarif`, gitleaks' own `sourcegraph-access-token` rule matches two commit hashes of the recording repository. A `"siegekitNote": "gitleaks:allow"` property was added on those two lines (2026-11-19) so SiegeKit's self-scan does not report them; the parser ignores it.
 
 Bandit repeats the token in its output. It was replaced with `PLACEHOLDER_NOT_A_REAL_TOKEN` before the file was committed.
 

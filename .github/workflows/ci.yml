@@ -46,16 +46,20 @@ jobs:
         run: go test -race -count=1 -cover ./...
       - name: Scan SiegeKit itself
         if: runner.os == 'Linux'
-        # Exit 3 (findings) wins over 4 (incomplete), so the report is
-        # checked too: every check ran or had no files of its language.
+        # Any finding fails CI (owner decision, 2026-11-19): --fail-on info
+        # makes every finding exit 3. Fake keys in test data carry
+        # gitleaks:allow, which reports count. Exit 3 wins over 4
+        # (incomplete), so the report is checked too: every check ran or had
+        # no files of its language.
         run: |
           go build -o "$RUNNER_TEMP/siegekit" ./cmd/siegekit
           set +e
-          "$RUNNER_TEMP/siegekit" scan --yes --update --no-save --report-dir "$RUNNER_TEMP/self-report" .
+          "$RUNNER_TEMP/siegekit" scan --yes --update --fail-on info --no-save --report-dir "$RUNNER_TEMP/self-report" .
           code=$?
           set -e
           echo "exit code $code"
-          if [ "$code" -ne 0 ] && [ "$code" -ne 3 ]; then exit 1; fi
+          jq '.findings[] | {ruleId, severity, uri: .location.uri, line: .location.startLine}' "$RUNNER_TEMP/self-report/report.json"
+          if [ "$code" -ne 0 ]; then exit 1; fi
           jq -e '[.plugins[] | select(.status != "ran" and (.status != "skipped" or (.reason | startswith("no files matching") | not)))] | length == 0' "$RUNNER_TEMP/self-report/report.json"
       - name: Fuzz parsers
         if: runner.os == 'Linux'

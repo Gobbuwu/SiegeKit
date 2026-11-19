@@ -25,6 +25,7 @@ const usage = `SiegeKit - local security testing for software you own.
 
 Usage:
   siegekit scan [flags] DIR       scan a source directory (see: siegekit scan -h)
+  siegekit scan [flags] URL       test a running web app you own (Linux; see: siegekit scan -h)
   siegekit update [--only a,b]    download vulnerability databases for offline scans
   siegekit plugins list           show the built-in checks and pinned tool versions
   siegekit plugins validate FILE...
@@ -106,7 +107,7 @@ func list(stdout, stderr io.Writer) int {
 		fmt.Fprintf(stdout, "%-18s %-8s %-8s %s %s (%s)\n", m.ID, m.Family, m.Mode, m.Tool.Name, m.Tool.Version, m.Tool.License)
 	}
 	for _, c := range checks.Builtin() {
-		fmt.Fprintf(stdout, "%-18s %-8s %-8s built into SiegeKit %s\n", c.ID, c.Family, "passive", c.Version)
+		fmt.Fprintf(stdout, "%-18s %-8s %-8s built into SiegeKit %s\n", c.ID, c.Family, "passive", version)
 	}
 	return exitOK
 }
