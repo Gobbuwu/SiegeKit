@@ -39,16 +39,19 @@ var (
 	sizer     deps.Sizer = &registry.Client{}
 	stdin     io.Reader  = os.Stdin
 	// stdinIsTerminal reports whether someone can answer a question.
-	stdinIsTerminal = func() bool {
-		st, err := os.Stdin.Stat()
-		return err == nil && st.Mode()&os.ModeCharDevice != 0
-	}
+	stdinIsTerminal = func() bool { return isTerminal(os.Stdin) }
 )
 
 const scanUsage = `Usage: siegekit scan [flags] DIR
+       siegekit scan [--deployed] [--authorized-host HOST] URL
 
 Scans a source directory with the passive checks (no network, nothing is
 executed from DIR). Reports are written to --report-dir.
+
+A URL target is checked against the target rules (ADR 0005) first: this
+machine is allowed, a private network address needs you to type its host
+name (or pass it with --authorized-host), and public systems need --deployed
+and proof that you control them. Active web tests arrive later in M2.
 
 Flags:
   --only a,b        run only these plugins
@@ -62,6 +65,10 @@ Flags:
   --yes             install missing dependencies without asking (for CI)
   --no-install      install nothing; tests that need a missing dependency
                     are skipped
+  --deployed        test a public system you control (proof required)
+  --authorized-host HOST
+                    confirm without a terminal that you are authorized to
+                    test HOST; must match the URL's host exactly
   --require-all     treat tests skipped for a missing dependency as an
                     incomplete run (exit code 4 unless there are findings)
 
@@ -79,6 +86,8 @@ func scan(args []string, stdout, stderr io.Writer) int {
 	failOn := fl.String("fail-on", "high", "")
 	reportDir := fl.String("report-dir", "siegekit-report", "")
 	noSave := fl.Bool("no-save", false, "")
+	deployed := fl.Bool("deployed", false, "")
+	authorizedHost := fl.String("authorized-host", "", "")
 	doUpdate := fl.Bool("update", false, "")
 	yes := fl.Bool("yes", false, "")
 	noInstall := fl.Bool("no-install", false, "")
@@ -117,6 +126,13 @@ func scan(args []string, stdout, stderr io.Writer) int {
 		return exitInvalid
 	}
 
+	if isURL(pos[0]) {
+		return scanURL(pos[0], *deployed, *authorizedHost, stdout, stderr)
+	}
+	if *deployed || *authorizedHost != "" {
+		fmt.Fprint(stderr, "siegekit scan: --deployed and --authorized-host only apply to URL targets\n")
+		return exitUsage
+	}
 	target, err := resolveDir(pos[0])
 	if err != nil {
 		return fail(err)

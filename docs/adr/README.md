@@ -20,6 +20,7 @@ Each significant design decision is recorded as a short ADR before code is writt
 | [0014](0014-offline-tool-data.md) | Offline tool data and update containers (amends 0006) | Accepted |
 | [0015](0015-built-in-checks.md) | Built-in static checks run in-process (amends 0006, 0011) | Accepted |
 | [0016](0016-dependency-consent.md) | Ask before installing dependencies (amends 0006, 0014) | Accepted |
+| [0017](0017-target-rule-details.md) | Target rule details (amends 0005) | Accepted |
 
 ADRs 0002 to 0011 were accepted at the M0 design sign-off on 2026-11-18.
 
