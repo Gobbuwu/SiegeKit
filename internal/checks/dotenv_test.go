@@ -2,7 +2,9 @@ package checks
 
 import (
 	"context"
+	"path"
 	"slices"
+	"strings"
 	"testing"
 )
 
@@ -62,4 +64,29 @@ func TestDotenv(t *testing.T) {
 			}
 		})
 	}
+}
+
+// FuzzDotenv feeds hostile .gitignore contents and paths to the matcher
+// (ADR 0015: every built-in check has a fuzz target in CI).
+func FuzzDotenv(f *testing.F) {
+	f.Add("*.env\n!.env.example\n/build/\n**/secret\n\\#x\n", "a/b/.env.local")
+	f.Add("[\n**\n!\n/\n", ".env")
+	f.Fuzz(func(t *testing.T, gitignore, rel string) {
+		IsEnvFile(path.Base(rel))
+		var rules []ignoreRule
+		for _, line := range strings.Split(gitignore, "\n") {
+			if r, ok := parseIgnore(line); ok {
+				rules = append(rules, r)
+			}
+		}
+		g := &ignores{root: t.TempDir(), cache: map[string][]ignoreRule{}}
+		parts := strings.Split(rel, "/")
+		if len(parts) > 40 {
+			return // the walk stops at 40 levels
+		}
+		for i := range parts {
+			g.cache[strings.Join(parts[:i], "/")] = rules
+		}
+		g.ignored(rel)
+	})
 }

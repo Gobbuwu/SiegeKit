@@ -147,7 +147,7 @@ func ToFindings(l *Log, opt Options) ([]findings.Finding, error) {
 			f := findings.Finding{
 				RuleID:   ruleID,
 				Title:    title(rule, ruleID),
-				Message:  res.Message.Text,
+				Message:  stripMount(res.Message.Text, opt.MountPath),
 				Severity: adjust(opt.Parser, severity(res, rule)),
 				CWEs:     cwes(rule),
 				HelpURI:  findings.SafeHelpURI(rule.HelpURI),
@@ -201,6 +201,19 @@ func RelURI(uri, mount string) string {
 		}
 	}
 	return uri
+}
+
+// stripMount removes the container mount path from paths in a message, so
+// "/target/app/x.py" reads "app/x.py" as in the finding's location. Only a
+// path at the start of the message or after a space, quote or bracket is
+// changed, so "src/target/x" stays as it is.
+func stripMount(msg, mount string) string {
+	mount = strings.Trim(mount, "/")
+	if mount == "" {
+		return msg
+	}
+	re := regexp.MustCompile(`(^|[\s'"(\[])(?:file://)?/` + regexp.QuoteMeta(mount) + `/`)
+	return re.ReplaceAllString(msg, "$1")
 }
 
 func title(r Rule, id string) string {

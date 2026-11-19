@@ -132,6 +132,7 @@ func TestScanURLDeployed(t *testing.T) {
 		{"typed wrong", true, "api.shop.example\n", []string{"https://shop.example"}, exitInvalid, "did not match"},
 		{"no terminal", false, "", []string{"https://shop.example"}, exitInvalid, "typed in a terminal"},
 		{"flag refused", true, "shop.example\n", []string{"--authorized-host", "shop.example", "https://shop.example"}, exitInvalid, "not accepted for deployed targets"},
+		{"flag refused before lookup", true, "", []string{"--authorized-host", "nowhere.example", "https://nowhere.example"}, exitInvalid, "not accepted for deployed targets"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			code, out := scan(tc.tty, tc.input, tc.args...)
