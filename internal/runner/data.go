@@ -95,7 +95,7 @@ func Update(ctx context.Context, ex Executor, selected []*manifest.Manifest, roo
 }
 
 func updateOne(ctx context.Context, ex Executor, m *manifest.Manifest, root, work string) error {
-	image, ok := imageFor(m)
+	image, ok := ImageFor(m)
 	if !ok {
 		return fmt.Errorf("no container image for linux/%s", runtime.GOARCH)
 	}

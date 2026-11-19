@@ -12,6 +12,7 @@ import (
 
 	"github.com/Gobbuwu/SiegeKit/internal/checks"
 	"github.com/Gobbuwu/SiegeKit/internal/findings"
+	"github.com/Gobbuwu/SiegeKit/internal/manifest"
 	"github.com/Gobbuwu/SiegeKit/internal/report"
 	"github.com/Gobbuwu/SiegeKit/internal/sandbox"
 	"github.com/Gobbuwu/SiegeKit/plugins"
@@ -57,6 +58,7 @@ func TestBuiltinPluginsFindPlantedIssues(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	pullAll(t, e, all)
 	// SIEGEKIT_TEST_DATA_ROOT reuses already downloaded data (for networks
 	// where the update container cannot reach the publisher); otherwise the
 	// real update runs first.
@@ -134,13 +136,14 @@ func TestPinnedImageVersions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	pullAll(t, e, all)
 	for _, m := range all {
 		args, ok := versionArgs[m.ID]
 		if !ok {
 			t.Errorf("%s: no version check", m.ID)
 			continue
 		}
-		image, ok := imageFor(m)
+		image, ok := ImageFor(m)
 		if !ok {
 			t.Logf("%s: no image for this platform", m.ID)
 			continue
@@ -184,6 +187,26 @@ func TestPinnedImageVersions(t *testing.T) {
 		if !strings.Contains(got, `"version": "`+m.Tool.Version+`"`) && !strings.Contains(got, m.Tool.Version+"\n") && !strings.Contains(got, " "+m.Tool.Version) && !strings.Contains(got, "v"+m.Tool.Version) {
 			cfg, _ := exec.Command(e.Bin, "image", "inspect", "--format", "{{json .Config.Entrypoint}} {{json .Config.Cmd}}", image).CombinedOutput()
 			t.Errorf("%s: image does not report version %s (exit %d, entrypoint/cmd %s):\n%s", m.ID, m.Tool.Version, r.ExitCode, cfg, got)
+		}
+	}
+}
+
+// pullAll downloads each plugin's pinned image: runs never pull (ADR 0016).
+func pullAll(t *testing.T, e *sandbox.Engine, ms []*manifest.Manifest) {
+	t.Helper()
+	for _, m := range ms {
+		image, ok := ImageFor(m)
+		if !ok {
+			continue
+		}
+		// Only missing images: a pull asks the registry even when the image
+		// is present, and registries rate-limit those requests.
+		if has, err := e.HasImage(context.Background(), image); err != nil {
+			t.Fatalf("%s: %v", m.ID, err)
+		} else if !has {
+			if err := e.Pull(context.Background(), image); err != nil {
+				t.Fatalf("%s: %v", m.ID, err)
+			}
 		}
 	}
 }
