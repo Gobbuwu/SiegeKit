@@ -12,6 +12,8 @@ import (
 	"io"
 	"os"
 	"regexp"
+	"slices"
+	"sort"
 	"strings"
 
 	"github.com/Gobbuwu/SiegeKit/internal/sandbox"
@@ -30,8 +32,10 @@ var (
 	GPUModes   = []string{"none", "optional", "required"}
 	Networks   = []string{"none", "target-only"}
 	Formats    = []string{"sarif", "json", "jsonl", "xml", "text"}
-	Placeholds = []string{"target", "outdir", "workdir", "threads", "ratelimit", "data"}
-	Parsers    = []string{"sarif", "sarif-gitleaks", "sarif-checkov", "bandit-json"}
+	Placeholds = []string{"target", "outdir", "workdir", "threads", "ratelimit", "data", "config"}
+	// ConfigPlaceholds are the placeholders allowed in run.config strings.
+	ConfigPlaceholds = []string{"target", "target-regex"}
+	Parsers          = []string{"sarif", "sarif-gitleaks", "sarif-checkov", "sarif-zap", "bandit-json"}
 )
 
 var (
@@ -48,6 +52,7 @@ var (
 	reIgnoreMarker = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9:_.-]{2,63}$`)
 	reMount        = regexp.MustCompile(`^/(tmp|data)(/[a-z0-9_-][a-z0-9._-]*)+$`)
 	reUpdArg       = regexp.MustCompile(`^([^{}]|\{(data|threads)\})*$`)
+	reConfigStr    = regexp.MustCompile(`^([^{}]|\{(` + strings.Join(ConfigPlaceholds, "|") + `)\})*$`)
 )
 
 // Manifest describes one plugin. Pointer fields are required fields whose
@@ -79,6 +84,9 @@ type Manifest struct {
 	// leave out findings, so reports can say so (owner decision 2026-11-19:
 	// obey such settings, but make them visible).
 	RepoIgnores *RepoIgnores `json:"repoIgnores,omitempty"`
+	// LocalOnly limits an active plugin to local-mode targets (ADR 0023):
+	// deployed runs skip it, saying so.
+	LocalOnly bool `json:"localOnly,omitempty"`
 }
 
 // RepoIgnores describes the scanned repository's own ways of hiding
@@ -133,6 +141,11 @@ type Run struct {
 	// Env is extra environment for the tool (sandbox.CheckEnv rules).
 	// Values are passed as written; placeholders are not substituted.
 	Env map[string]string `json:"env,omitempty"`
+	// Config is a JSON object that SiegeKit writes to a file for the tool and
+	// mounts read-only; {config} in Args is its path (ADR 0023). String
+	// values may use {target} and {target-regex}, which are substituted as
+	// JSON strings, so a target cannot change the file's structure.
+	Config map[string]any `json:"config,omitempty"`
 }
 
 // Output is what the tool produces and which parser reads it.
@@ -262,6 +275,19 @@ func (m *Manifest) Validate() error {
 		if err := sandbox.CheckEnv(m.Run.Env); err != nil {
 			add("run.env: %v", err)
 		}
+		uses := slices.ContainsFunc(m.Run.Args, func(a string) bool { return strings.Contains(a, "{config}") })
+		switch {
+		case m.Run.Config == nil && uses:
+			add("run.args uses {config} but the manifest has no run.config")
+		case m.Run.Config != nil && !uses:
+			add("run.config is set but no run.args entry uses {config}")
+		}
+		if m.Run.Config != nil {
+			checkConfig(&p, "run.config", m.Run.Config, 0)
+		}
+	}
+	if m.LocalOnly && m.Mode != "active" {
+		add("localOnly is only allowed for active plugins")
 	}
 	if m.AppliesTo != nil && len(m.AppliesTo) == 0 {
 		add("appliesTo must not be empty when present")
@@ -318,6 +344,34 @@ func (m *Manifest) Validate() error {
 		return &ValidationError{Problems: p}
 	}
 	return nil
+}
+
+// checkConfig checks that every string in a run.config value uses only the
+// allowed placeholders, and limits nesting.
+func checkConfig(p *[]string, path string, v any, depth int) {
+	if depth > 16 {
+		*p = append(*p, fmt.Sprintf("%s is nested more than 16 levels", path))
+		return
+	}
+	switch t := v.(type) {
+	case string:
+		if !reConfigStr.MatchString(t) {
+			*p = append(*p, fmt.Sprintf("%s %q uses braces other than an allowed placeholder {%s}", path, t, strings.Join(ConfigPlaceholds, "}, {")))
+		}
+	case map[string]any:
+		keys := make([]string, 0, len(t))
+		for k := range t {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		for _, k := range keys {
+			checkConfig(p, path+"."+k, t[k], depth+1)
+		}
+	case []any:
+		for i, x := range t {
+			checkConfig(p, fmt.Sprintf("%s[%d]", path, i), x, depth+1)
+		}
+	}
 }
 
 func (m *Manifest) validateTool(p *[]string) {

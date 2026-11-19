@@ -20,7 +20,7 @@ SiegeKit runs security checks on code and apps the person owns. The person stays
 ```sh
 siegekit scan DIR                  # passive checks of a source directory (no network)
 siegekit scan --only gitleaks DIR  # selected checks; --skip a,b leaves some out
-siegekit scan http://localhost:3000   # a URL target: checked against the target rules
+siegekit scan http://localhost:3000   # a running app: target rules first, then ZAP web tests
 siegekit update                    # refresh vulnerability data (network; asks first)
 siegekit plugins list              # checks and pinned tool versions
 siegekit agents                    # this guide
@@ -35,6 +35,12 @@ Useful scan flags:
 - `--require-all`: treat checks skipped for a missing dependency as an incomplete run.
 
 `siegekit scan -h` lists them all.
+
+A URL scan sends real requests to the app. It first prints the plan (target, mode, addresses, checks and limits) and records the run in SiegeKit's audit log. Two checks run:
+- `zap` crawls the app and reports what ZAP's passive rules see, such as missing security headers and cookie flags.
+- `zap-active` sends attack payloads (SQL injection, cross-site scripting, path traversal) that can change data. It runs only on local targets: this machine, or a private address the person confirmed. On `--deployed` targets it is skipped.
+
+Every request goes through SiegeKit's egress proxy, which allows only the target's own address and labels the traffic `SiegeKit/<version>`. Web tests run only on Linux for now; elsewhere the run is reported as incomplete. Scan a URL only when the person asked for that app to be tested, and prefer a local or staging copy.
 
 ## Exit codes
 
@@ -58,15 +64,19 @@ Top level:
   - `suppressed`: how many findings the tool left out because of comments in the code, such as `# nosec` or `checkov:skip=`, where the tool reports this.
   - `repoSettings`: the repository's own settings files that the tool obeyed, such as `.gitleaksignore`, `.gitleaks.toml`, `.bandit` or `.checkov.yaml`. They can hide findings without a count.
   - `ignoreMarkers`: how many lines carry the tool's ignore comment (`gitleaks:allow`), counted by SiegeKit outside dependency directories, for tools that do not report what they suppressed.
+
+  URL scans add two counts, also left out when zero:
+  - `requests`: how many requests reached the target through the egress proxy. A check that sent none is reported as `failed`, because it tested nothing.
+  - `refused`: how many requests the proxy blocked because they went to another host, address or port.
 - `findings`: the deduplicated findings, most severe first.
 
 Each finding:
 - `ruleId`, `title`, `message`.
 - `severity`: `critical`, `high`, `medium`, `low` or `info`.
 - `cwes`: for example `CWE-89`.
-- `location`: `uri`, the file path relative to the scanned directory, and `startLine`.
+- `location`: `uri`, the file path relative to the scanned directory, and `startLine`. For URL scans, `uri` is the page's URL.
 - `snippet`: the code at that line. Secrets are masked.
-- `family`: `secrets`, `sast`, `sca` or `iac`.
+- `family`: `secrets`, `sast`, `sca`, `iac` or `dast` (web tests).
 - `sources`: which `plugin` and `ruleId` reported it. One finding can come from several tools.
 - `confidence`: when the tool gives one.
 - `helpUri`: the tool's page about the rule, when it has one. It explains the issue and the fix.

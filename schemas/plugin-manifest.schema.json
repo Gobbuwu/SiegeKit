@@ -241,9 +241,9 @@
           "minItems": 1,
           "items": {
             "type": "string",
-            "pattern": "^([^{}]|\\{(target|outdir|workdir|threads|ratelimit|data)\\})*$"
+            "pattern": "^([^{}]|\\{(target|outdir|workdir|threads|ratelimit|data|config)\\})*$"
           },
-          "description": "Argument vector passed directly to the tool, never through a shell. Only the listed placeholders are allowed; {data} needs a data section."
+          "description": "Argument vector passed directly to the tool, never through a shell. Only the listed placeholders are allowed; {data} needs a data section and {config} needs run.config."
         },
         "env": {
           "type": "object",
@@ -259,6 +259,13 @@
             "maxLength": 16384
           },
           "description": "Extra environment variables for the tool. Values are passed as written (no placeholders). Names that change how programs load code or reach the network, or that SiegeKit sets itself, are refused."
+        },
+        "config": {
+          "type": "object",
+          "description": "A JSON object that SiegeKit writes to a file for the tool and mounts read-only; {config} in args is that file's path (ADR 0023). String values may use only the placeholders {target} and {target-regex}, which SiegeKit substitutes as JSON strings.",
+          "additionalProperties": {
+            "$ref": "#/$defs/configValue"
+          }
         }
       }
     },
@@ -326,6 +333,7 @@
             "sarif",
             "sarif-gitleaks",
             "sarif-checkov",
+            "sarif-zap",
             "bandit-json"
           ]
         },
@@ -362,6 +370,10 @@
           "description": "Inline comment that hides a finding; SiegeKit counts the lines that carry it. Only for tools that do not report what they suppressed."
         }
       }
+    },
+    "localOnly": {
+      "type": "boolean",
+      "description": "If true, this active plugin runs only on local-mode targets; deployed runs skip it and say why (ADR 0023)."
     }
   },
   "allOf": [
@@ -428,6 +440,54 @@
           }
         }
       }
+    },
+    {
+      "if": {
+        "properties": {
+          "localOnly": {
+            "const": true
+          }
+        },
+        "required": [
+          "localOnly"
+        ]
+      },
+      "then": {
+        "properties": {
+          "mode": {
+            "const": "active"
+          }
+        }
+      }
     }
-  ]
+  ],
+  "$defs": {
+    "configValue": {
+      "anyOf": [
+        {
+          "type": "string",
+          "pattern": "^([^{}]|\\{(target|target-regex)\\})*$"
+        },
+        {
+          "type": [
+            "number",
+            "boolean",
+            "null"
+          ]
+        },
+        {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/configValue"
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/configValue"
+          }
+        }
+      ]
+    }
+  }
 }

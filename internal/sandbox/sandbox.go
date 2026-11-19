@@ -67,9 +67,12 @@ type Spec struct {
 	// only for data updates (ADR 0014) and is refused when a target is mounted.
 	// "target-only" joins the network namespace of Relay, whose only way
 	// out is the egress proxy (ADR 0018, ADR 0019).
-	Network      string
-	Relay        string // relay container name, for "target-only"
-	CAFile       string // per-run CA certificate to trust (https targets), for "target-only"
+	Network string
+	Relay   string // relay container name, for "target-only"
+	CAFile  string // per-run CA certificate to trust (https targets), for "target-only"
+	// ConfigFile is a configuration file SiegeKit wrote for the tool (ADR
+	// 0023), mounted read-only at ConfigMount; empty for none.
+	ConfigFile   string
 	DataDir      string // host directory with the tool's data; empty for none
 	DataMount    string // where DataDir is mounted; read-only unless DataWritable
 	DataWritable bool   // only for update runs
@@ -143,11 +146,8 @@ func (s *Spec) validate() error {
 			return errors.New("data cannot be writable in an active test")
 		}
 		if s.CAFile != "" {
-			if !filepath.IsAbs(s.CAFile) || filepath.Clean(s.CAFile) != s.CAFile || strings.ContainsAny(s.CAFile, ",\"'\n\r\x00") {
-				return fmt.Errorf("CA file %q must be an absolute, clean path", s.CAFile)
-			}
-			if st, err := os.Lstat(s.CAFile); err != nil || !st.Mode().IsRegular() {
-				return fmt.Errorf("CA file %q is not a regular file", s.CAFile)
+			if err := checkMountFile("CA file", s.CAFile); err != nil {
+				return err
 			}
 		}
 	default:
@@ -155,6 +155,11 @@ func (s *Spec) validate() error {
 	}
 	if s.Network != "target-only" && (s.Relay != "" || s.CAFile != "") {
 		return errors.New("relay and CA file are only for target-only runs")
+	}
+	if s.ConfigFile != "" {
+		if err := checkMountFile("config file", s.ConfigFile); err != nil {
+			return err
+		}
 	}
 	if err := CheckEnv(s.Env); err != nil {
 		return err
@@ -286,6 +291,9 @@ func (s *Spec) EngineArgs(name string, uid, gid int) ([]string, error) {
 	)
 	if s.TargetDir != "" {
 		args = append(args, "--mount", "type=bind,source="+s.TargetDir+",target="+TargetMount+",readonly")
+	}
+	if s.ConfigFile != "" {
+		args = append(args, "--mount", "type=bind,source="+s.ConfigFile+",target="+ConfigMount+",readonly")
 	}
 	if s.DataDir != "" {
 		m := "type=bind,source=" + s.DataDir + ",target=" + s.DataMount
@@ -528,13 +536,17 @@ const (
 	// 2026-11-08, pinned by index digest. It only provides a root file
 	// system: the relay itself is SiegeKit's own static binary.
 	RelayImage = "docker.io/library/alpine@sha256:f59abe656b692d901e184be3445e084786602108599d2a51d229c0f5a48c71bf"
-	RelayPort  = 8080
+	// RelayImageVersion is RelayImage's Alpine release, for consent prompts.
+	RelayImageVersion = "3.24.4"
+	RelayPort         = 8080
 	// relayBinary is the copy of SiegeKit's binary in the relay directory.
 	relayBinary = "siegekit-relay"
 	// RelaySocket is the proxy's socket file name in the relay directory.
 	RelaySocket = "proxy.sock"
 	relayMount  = "/run/siegekit"
 	CAMount     = "/siegekit/ca.pem"
+	// ConfigMount is where Spec.ConfigFile is mounted (ADR 0023).
+	ConfigMount = "/siegekit/config.json"
 )
 
 var (
@@ -603,6 +615,19 @@ func (e *Engine) StartRelay(ctx context.Context, dir, bin string) (string, error
 		return "", ctx.Err()
 	}
 	return "", errors.New("the relay container did not start listening")
+}
+
+// checkMountFile checks a file that is bind-mounted into the container: an
+// absolute, clean path to a regular file, with no character that could add
+// options to a --mount argument.
+func checkMountFile(what, p string) error {
+	if !filepath.IsAbs(p) || filepath.Clean(p) != p || strings.ContainsAny(p, ",\"'\n\r\x00") {
+		return fmt.Errorf("%s %q must be an absolute, clean path", what, p)
+	}
+	if st, err := os.Lstat(p); err != nil || !st.Mode().IsRegular() {
+		return fmt.Errorf("%s %q is not a regular file", what, p)
+	}
+	return nil
 }
 
 // StopRelay removes the relay container.

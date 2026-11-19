@@ -399,15 +399,19 @@ func readReport(path string, m *manifest.Manifest, suppressed *int) ([]findings.
 	if !st.Mode().IsRegular() {
 		return nil, fmt.Errorf("report %q is not a regular file", filepath.Base(path))
 	}
+	mount := sandbox.TargetMount
+	if m.Network == "target-only" {
+		mount = "" // locations are URLs; nothing is mounted at /target
+	}
 	if m.Output.Parser == "bandit-json" {
-		return bandit.ToFindings(f, bandit.Options{Plugin: m.ID, Family: m.Family, MountPath: sandbox.TargetMount, Suppressed: suppressed})
+		return bandit.ToFindings(f, bandit.Options{Plugin: m.ID, Family: m.Family, MountPath: mount, Suppressed: suppressed})
 	}
 	log, err := sarif.Read(f)
 	if err != nil {
 		return nil, err
 	}
 	return sarif.ToFindings(log, sarif.Options{
-		Plugin: m.ID, Family: m.Family, Parser: m.Output.Parser, MountPath: sandbox.TargetMount,
+		Plugin: m.ID, Family: m.Family, Parser: m.Output.Parser, MountPath: mount,
 		Suppressed: suppressed,
 	})
 }

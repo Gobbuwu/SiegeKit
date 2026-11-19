@@ -49,6 +49,18 @@ type Rule struct {
 	ShortDescription *Message       `json:"shortDescription"`
 	HelpURI          string         `json:"helpUri"`
 	Properties       map[string]any `json:"properties"`
+	// Relationships link a rule to taxonomies such as CWE (SARIF 3.49.15).
+	Relationships []Relationship `json:"relationships"`
+}
+
+// Relationship links a rule to a taxonomy entry.
+type Relationship struct {
+	Target struct {
+		ID            string `json:"id"`
+		ToolComponent struct {
+			Name string `json:"name"`
+		} `json:"toolComponent"`
+	} `json:"target"`
 }
 
 // Message is a SARIF message.
@@ -138,7 +150,7 @@ type Options struct {
 }
 
 // Parsers lists the accepted Options.Parser values.
-var Parsers = []string{"sarif", "sarif-gitleaks", "sarif-checkov"}
+var Parsers = []string{"sarif", "sarif-gitleaks", "sarif-checkov", "sarif-zap"}
 
 var reCWE = regexp.MustCompile(`(?i)\bCWE-([0-9]{1,5})\b`)
 
@@ -180,7 +192,7 @@ func ToFindings(l *Log, opt Options) ([]findings.Finding, error) {
 				Message:  stripMount(res.Message.Text, opt.MountPath),
 				Severity: adjust(opt.Parser, severity(res, rule)),
 				CWEs:     cwes(rule),
-				HelpURI:  findings.SafeHelpURI(rule.HelpURI),
+				HelpURI:  findings.SafeHelpURI(helpURI(opt.Parser, rule)),
 				Family:   opt.Family,
 				Sources:  []findings.Source{{Plugin: opt.Plugin, RuleID: ruleID}},
 			}
@@ -200,6 +212,21 @@ func ToFindings(l *Log, opt Options) ([]findings.Finding, error) {
 		}
 	}
 	return out, nil
+}
+
+// helpURI is the rule's help link. ZAP leaves helpUri empty and lists
+// reference links in its "references" property; the first safe one is used.
+func helpURI(parser string, r Rule) string {
+	if r.HelpURI != "" || parser != "sarif-zap" {
+		return r.HelpURI
+	}
+	refs, _ := r.Properties["references"].([]any)
+	for _, x := range refs {
+		if s, ok := x.(string); ok && findings.SafeHelpURI(s) != "" {
+			return s
+		}
+	}
+	return ""
 }
 
 // adjust applies tool-specific severity rules.
@@ -327,6 +354,11 @@ func cwes(r Rule) []string {
 	}
 	for _, k := range []string{"tags", "cwe"} {
 		visit(r.Properties[k])
+	}
+	for _, rel := range r.Relationships {
+		if strings.EqualFold(rel.Target.ToolComponent.Name, "CWE") {
+			visit("CWE-" + rel.Target.ID)
+		}
 	}
 	return out
 }

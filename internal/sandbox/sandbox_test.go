@@ -470,6 +470,39 @@ func TestCheckStatic(t *testing.T) {
 	}
 }
 
+func TestConfigFile(t *testing.T) {
+	s := spec(t, "true")
+	s.ConfigFile = filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(s.ConfigFile, []byte("{}"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	args, err := s.EngineArgs("n", 1000, 1000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(strings.Join(args, "|"), "type=bind,source="+s.ConfigFile+",target=/siegekit/config.json,readonly") {
+		t.Errorf("config mount missing: %v", args)
+	}
+	link := filepath.Join(t.TempDir(), "link.json")
+	if err := os.Symlink(s.ConfigFile, link); err != nil {
+		t.Fatal(err)
+	}
+	for name, p := range map[string]string{
+		"relative":  "config.json",
+		"unclean":   filepath.Dir(s.ConfigFile) + "/../x/config.json",
+		"injection": s.ConfigFile + ",readonly=false",
+		"symlink":   link,
+		"missing":   filepath.Join(t.TempDir(), "none.json"),
+		"directory": t.TempDir(),
+	} {
+		bad := s
+		bad.ConfigFile = p
+		if _, err := bad.EngineArgs("n", 1000, 1000); err == nil {
+			t.Errorf("%s: config file %q accepted", name, p)
+		}
+	}
+}
+
 func TestCopyExecutable(t *testing.T) {
 	dir := t.TempDir()
 	src := filepath.Join(dir, "src")

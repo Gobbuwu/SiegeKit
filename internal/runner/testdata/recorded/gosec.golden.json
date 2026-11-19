@@ -4,6 +4,9 @@
     "title": "Use of weak cryptographic primitive",
     "message": "Use of weak cryptographic primitive",
     "severity": "high",
+    "cwes": [
+      "CWE-328"
+    ],
     "location": {
       "uri": "main.go",
       "startLine": 10
@@ -16,13 +19,16 @@
         "ruleId": "G401"
       }
     ],
-    "fingerprint": "c9a694704435f7ffae8279564d91edd9"
+    "fingerprint": "81c30d973483edb43516a133ce431431"
   },
   {
     "ruleId": "G501",
     "title": "Blocklisted import crypto/md5: weak cryptographic primitive",
     "message": "Blocklisted import crypto/md5: weak cryptographic primitive",
     "severity": "high",
+    "cwes": [
+      "CWE-327"
+    ],
     "location": {
       "uri": "main.go",
       "startLine": 4
@@ -35,6 +41,6 @@
         "ruleId": "G501"
       }
     ],
-    "fingerprint": "b1c88ca90f5cae485c231409db83b046"
+    "fingerprint": "d3f968abd4e61dad7caa3fd65c5ceafb"
   }
 ]

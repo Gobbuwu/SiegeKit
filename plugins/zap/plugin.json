@@ -1,0 +1,112 @@
+{
+  "schemaVersion": 1,
+  "id": "zap",
+  "name": "ZAP crawl and passive checks",
+  "version": "1.0.0",
+  "description": "Crawls the target with ZAP's spider and reports what ZAP's passive rules see in the responses: missing security headers, cookie flags, information leaks. Follows links with GET requests and does not submit forms, so it also runs on deployed targets.",
+  "family": "dast",
+  "mode": "active",
+  "destructive": false,
+  "targets": [
+    "url"
+  ],
+  "tool": {
+    "name": "zap",
+    "version": "2.17.0",
+    "license": "Apache-2.0",
+    "homepage": "https://www.zaproxy.org/",
+    "artifacts": [
+      {
+        "platform": "any",
+        "kind": "oci-image",
+        "ref": "docker.io/zaproxy/zap-stable@sha256:9624669db72f54d86c4b46a7064518bd9bf79d8c61a4c31befa9923489f328af",
+        "sha256": "9624669db72f54d86c4b46a7064518bd9bf79d8c61a4c31befa9923489f328af"
+      }
+    ]
+  },
+  "resources": {
+    "cpus": 2,
+    "memoryMiB": 2048,
+    "gpu": "none",
+    "timeoutSeconds": 900,
+    "maxTimeoutSeconds": 3600
+  },
+  "network": "target-only",
+  "run": {
+    "args": [
+      "zap.sh",
+      "-Xmx1024m",
+      "-cmd",
+      "-silent",
+      "-port",
+      "8090",
+      "-dir",
+      "/tmp/zap",
+      "-config",
+      "network.connection.httpProxy.enabled=true",
+      "-config",
+      "network.connection.httpProxy.host=127.0.0.1",
+      "-config",
+      "network.connection.httpProxy.port=8080",
+      "-autorun",
+      "{config}"
+    ],
+    "config": {
+      "env": {
+        "contexts": [
+          {
+            "name": "target",
+            "urls": [
+              "{target}"
+            ],
+            "includePaths": [
+              "{target-regex}.*"
+            ]
+          }
+        ],
+        "parameters": {
+          "failOnError": true,
+          "failOnWarning": false,
+          "progressToStdout": true
+        }
+      },
+      "jobs": [
+        {
+          "type": "passiveScan-config",
+          "parameters": {
+            "maxAlertsPerRule": 10,
+            "scanOnlyInScope": true
+          }
+        },
+        {
+          "type": "spider",
+          "parameters": {
+            "context": "target",
+            "maxDuration": 5,
+            "processForm": false,
+            "postForm": false
+          }
+        },
+        {
+          "type": "passiveScan-wait",
+          "parameters": {
+            "maxDuration": 5
+          }
+        },
+        {
+          "type": "report",
+          "parameters": {
+            "template": "sarif-json",
+            "reportDir": "/out",
+            "reportFile": "zap"
+          }
+        }
+      ]
+    }
+  },
+  "output": {
+    "format": "sarif",
+    "parser": "sarif-zap",
+    "file": "zap.json"
+  }
+}
