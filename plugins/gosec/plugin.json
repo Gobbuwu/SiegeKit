@@ -1,0 +1,50 @@
+{
+  "schemaVersion": 1,
+  "id": "gosec",
+  "name": "gosec Go code scan",
+  "version": "1.0.0",
+  "description": "Finds common security mistakes in Go code, such as command and SQL injection, weak cryptography and unsafe file permissions.",
+  "family": "sast",
+  "mode": "passive",
+  "destructive": false,
+  "targets": [
+    "repo"
+  ],
+  "tool": {
+    "name": "gosec",
+    "version": "2.30.0",
+    "license": "Apache-2.0",
+    "homepage": "https://github.com/securego/gosec",
+    "artifacts": [
+      {
+        "platform": "any",
+        "kind": "oci-image",
+        "ref": "ghcr.io/securego/gosec@sha256:7bcf1edbab3e80d8006a28d53e7031a9c9775be8eec30679e4adc1f51d272121",
+        "sha256": "7bcf1edbab3e80d8006a28d53e7031a9c9775be8eec30679e4adc1f51d272121"
+      }
+    ]
+  },
+  "resources": {
+    "cpus": 2,
+    "memoryMiB": 2048,
+    "gpu": "none",
+    "timeoutSeconds": 900,
+    "maxTimeoutSeconds": 3600
+  },
+  "network": "none",
+  "run": {
+    "args": [
+      "-fmt",
+      "sarif",
+      "-out",
+      "{outdir}/gosec.sarif",
+      "-no-fail",
+      "{target}/..."
+    ]
+  },
+  "output": {
+    "format": "sarif",
+    "parser": "sarif",
+    "file": "gosec.sarif"
+  }
+}

@@ -30,7 +30,7 @@ var emptySARIF = fakeExec(func(s sandbox.Spec) (*sandbox.Result, error) {
 	if s.DataWritable { // an update run
 		return &sandbox.Result{Status: sandbox.Completed}, os.WriteFile(filepath.Join(s.DataDir, "db"), []byte("x"), 0o644)
 	}
-	for _, name := range []string{"gitleaks.sarif", "results_sarif.sarif", "trivy.sarif"} {
+	for _, name := range []string{"gitleaks.sarif", "results_sarif.sarif", "trivy.sarif", "bandit.sarif", "gosec.sarif"} {
 		doc := `{"version":"2.1.0","runs":[{"tool":{"driver":{"name":"x"}},"results":[]}]}`
 		if err := os.WriteFile(filepath.Join(s.OutDir, name), []byte(doc), 0o644); err != nil {
 			return nil, err
@@ -53,7 +53,7 @@ func TestScan(t *testing.T) {
 	if code := run([]string{"scan", "--update", target, "--report-dir", reports}, &out, &errb); code != exitOK {
 		t.Fatalf("exit %d: %s %s", code, out.String(), errb.String())
 	}
-	if !strings.Contains(out.String(), "No issues found by the 3 check(s) that ran.") || !strings.Contains(out.String(), "Saved run") {
+	if !strings.Contains(out.String(), "No issues found by the 5 check(s) that ran.") || !strings.Contains(out.String(), "Saved run") {
 		t.Errorf("output: %s", out.String())
 	}
 	for _, name := range []string{"report.html", "report.json", "report.sarif"} {
