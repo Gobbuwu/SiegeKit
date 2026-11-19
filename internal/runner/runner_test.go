@@ -277,3 +277,35 @@ func TestSelectAndRunBuiltinChecks(t *testing.T) {
 		t.Errorf("%+v", r.Plugins[1])
 	}
 }
+
+func TestRunSkipsPluginWithoutMatchingFiles(t *testing.T) {
+	f := &fake{act: func(s sandbox.Spec) (*sandbox.Result, error) {
+		write(t, s.OutDir, "gosec.sarif", `{"version":"2.1.0","runs":[{"tool":{"driver":{"name":"gosec"}},"results":[]}]}`)
+		return &sandbox.Result{Status: sandbox.Completed}, nil
+	}}
+	o := opts(t)
+	write(t, o.TargetDir, "app.py", "")
+	gosec := []*manifest.Manifest{builtin(t, "gosec")}
+	r, err := Run(context.Background(), f, gosec, o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := r.Plugins[0]
+	if p.Status != report.Skipped || p.Reason != "no files matching *.go" || len(f.specs) != 0 {
+		t.Fatalf("plugin %+v, %d runs", p, len(f.specs))
+	}
+	// A skipped plugin does not make the run incomplete.
+	if !r.Complete() {
+		t.Error("run marked incomplete")
+	}
+	if err := os.MkdirAll(filepath.Join(o.TargetDir, "cmd", "app"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	write(t, o.TargetDir, "cmd/app/main.go", "package main\n")
+	if r, err = Run(context.Background(), f, gosec, o); err != nil {
+		t.Fatal(err)
+	}
+	if r.Plugins[0].Status != report.Ran || len(f.specs) != 1 {
+		t.Fatalf("plugin %+v, %d runs", r.Plugins[0], len(f.specs))
+	}
+}

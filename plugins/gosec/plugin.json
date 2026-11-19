@@ -10,6 +10,9 @@
   "targets": [
     "repo"
   ],
+  "appliesTo": [
+    "*.go"
+  ],
   "tool": {
     "name": "gosec",
     "version": "2.30.0",

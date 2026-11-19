@@ -45,6 +45,12 @@ var emptySARIF = fakeExec(func(s sandbox.Spec) (*sandbox.Result, error) {
 func TestScan(t *testing.T) {
 	t.Setenv("XDG_DATA_HOME", t.TempDir())
 	target := t.TempDir()
+	// Bandit and gosec run only when there is Python or Go code.
+	for _, name := range []string{"app.py", "main.go"} {
+		if err := os.WriteFile(filepath.Join(target, name), nil, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
 	reports := filepath.Join(t.TempDir(), "rep")
 	useExecutor(t, emptySARIF, nil)
 	var out, errb bytes.Buffer

@@ -152,6 +152,17 @@ func runPlugin(ctx context.Context, ex Executor, m *manifest.Manifest, opt Optio
 	if m.Mode != "passive" {
 		return fail(report.Skipped, "%s plugins are not supported yet", m.Mode)
 	}
+	if len(m.AppliesTo) > 0 {
+		// A tree too large to search is scanned anyway.
+		found, err := checks.HasFile(ctx, opt.TargetDir, m.AppliesTo)
+		switch {
+		case errors.Is(err, checks.ErrTooManyFiles):
+		case err != nil:
+			return fail(report.Failed, "look for files to scan: %v", err)
+		case !found:
+			return fail(report.Skipped, "no files matching %s", strings.Join(m.AppliesTo, ", "))
+		}
+	}
 	image, ok := imageFor(m)
 	if !ok {
 		return fail(report.Skipped, "no container image for linux/%s", runtime.GOARCH)

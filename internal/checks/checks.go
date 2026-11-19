@@ -10,6 +10,7 @@ import (
 	"io"
 	"io/fs"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 	"syscall"
@@ -51,6 +52,21 @@ var ErrTooManyFiles = errors.New("too many files; the check stopped early")
 // walk calls fn with the slash-separated relative path of every regular file
 // under root that want accepts, without following symlinks.
 func walk(ctx context.Context, root string, want func(rel string) bool, fn func(rel string, data []byte) error) error {
+	return walkTree(ctx, root, func(p, rel string) error {
+		if !want(rel) {
+			return nil
+		}
+		data, err := readFile(p)
+		if err != nil || data == nil {
+			return err
+		}
+		return fn(rel, data)
+	})
+}
+
+// walkTree calls visit with the path and slash-separated relative path of
+// every regular file under root, within the limits above.
+func walkTree(ctx context.Context, root string, visit func(p, rel string) error) error {
 	n := 0
 	return filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
@@ -73,15 +89,33 @@ func walk(ctx context.Context, root string, want func(rel string) bool, fn func(
 			}
 			return nil
 		}
-		if !d.Type().IsRegular() || !want(rel) {
+		if !d.Type().IsRegular() {
 			return nil
 		}
-		data, err := readFile(p)
-		if err != nil || data == nil {
-			return err
-		}
-		return fn(rel, data)
+		return visit(p, rel)
 	})
+}
+
+var errFound = errors.New("found")
+
+// HasFile reports whether root holds a regular file whose base name matches
+// one of patterns (path.Match syntax). It uses the same limits and skipped
+// directories as the checks; a tree too large to search returns
+// ErrTooManyFiles.
+func HasFile(ctx context.Context, root string, patterns []string) (bool, error) {
+	err := walkTree(ctx, root, func(_, rel string) error {
+		base := path.Base(rel)
+		for _, pat := range patterns {
+			if ok, _ := path.Match(pat, base); ok {
+				return errFound
+			}
+		}
+		return nil
+	})
+	if errors.Is(err, errFound) {
+		return true, nil
+	}
+	return false, err
 }
 
 // readFile reads a regular file without following symlinks. Files larger

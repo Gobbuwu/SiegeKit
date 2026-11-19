@@ -1,0 +1,71 @@
+[
+  {
+    "ruleId": "B404",
+    "title": "blacklist",
+    "message": "Consider possible security implications associated with the subprocess module.",
+    "severity": "low",
+    "cwes": [
+      "CWE-78"
+    ],
+    "location": {
+      "uri": "app.py",
+      "startLine": 1
+    },
+    "snippet": "1 import subprocess\n2 \n3 def run(cmd):\n",
+    "family": "sast",
+    "sources": [
+      {
+        "plugin": "bandit",
+        "ruleId": "B404"
+      }
+    ],
+    "confidence": "high",
+    "fingerprint": "55e7a30bb447976836307662c6d388eb"
+  },
+  {
+    "ruleId": "B602",
+    "title": "subprocess_popen_with_shell_equals_true",
+    "message": "subprocess call with shell=True identified, security issue.",
+    "severity": "high",
+    "cwes": [
+      "CWE-78"
+    ],
+    "location": {
+      "uri": "app.py",
+      "startLine": 4
+    },
+    "snippet": "3 def run(cmd):\n4     return subprocess.call(cmd, shell=True)\n",
+    "family": "sast",
+    "sources": [
+      {
+        "plugin": "bandit",
+        "ruleId": "B602"
+      }
+    ],
+    "confidence": "high",
+    "fingerprint": "fe5eb13f2fbefb8fc6c045d37e893822"
+  },
+  {
+    "ruleId": "B105",
+    "title": "hardcoded_password_string",
+    "message": "Possible hardcoded password: 'PLAC****************'",
+    "severity": "low",
+    "cwes": [
+      "CWE-259"
+    ],
+    "location": {
+      "uri": "config.py",
+      "startLine": 1
+    },
+    "snippet": "[snippet removed: it may contain a credential]",
+    "family": "sast",
+    "sources": [
+      {
+        "plugin": "bandit",
+        "ruleId": "B105"
+      }
+    ],
+    "confidence": "medium",
+    "fingerprint": "99e67b7fe115878b1ab5de548e5b25ca"
+  }
+]

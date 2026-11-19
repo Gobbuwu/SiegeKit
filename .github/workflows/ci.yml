@@ -25,7 +25,7 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 15
+    timeout-minutes: 25
     steps:
       # Actions are pinned to full commit SHAs (ADR 0008). Tag shown for reference only.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -44,6 +44,19 @@ jobs:
           # Container sandbox tests need Docker, which GitHub provides on Linux runners only.
           SIEGEKIT_CONTAINER_TESTS: ${{ runner.os == 'Linux' && '1' || '0' }}
         run: go test -race -count=1 -cover ./...
+      - name: Scan SiegeKit itself
+        if: runner.os == 'Linux'
+        # Exit 3 (findings) wins over 4 (incomplete), so the report is
+        # checked too: every check ran or had no files of its language.
+        run: |
+          go build -o "$RUNNER_TEMP/siegekit" ./cmd/siegekit
+          set +e
+          "$RUNNER_TEMP/siegekit" scan --update --no-save --report-dir "$RUNNER_TEMP/self-report" .
+          code=$?
+          set -e
+          echo "exit code $code"
+          if [ "$code" -ne 0 ] && [ "$code" -ne 3 ]; then exit 1; fi
+          jq -e '[.plugins[] | select(.status != "ran" and (.status != "skipped" or (.reason | startswith("no files matching") | not)))] | length == 0' "$RUNNER_TEMP/self-report/report.json"
       - name: Fuzz parsers
         if: runner.os == 'Linux'
         run: |
