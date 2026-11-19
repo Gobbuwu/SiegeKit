@@ -150,6 +150,9 @@ func runActive(ctx context.Context, run ActiveRunner, m *manifest.Manifest, opt 
 		Target: opt.Target, Addrs: opt.Addrs, VerifyTLS: opt.Deployed,
 		Rate: opt.Limits.Rate, Burst: opt.Limits.Burst, MaxConns: opt.Limits.MaxConns,
 		MaxServerErrors: opt.Limits.MaxServerErrors, Version: opt.Version,
+		// Deployed targets get read-only requests from plugins that are not
+		// destructive, whatever the tool's own settings (ADR 0023).
+		ReadOnly: opt.Deployed && !*m.Destructive,
 	}
 	res, err := run(ctx, sandbox.Spec{
 		Image: image, Args: args, Env: m.Run.Env, OutDir: outDir, ConfigFile: configFile,

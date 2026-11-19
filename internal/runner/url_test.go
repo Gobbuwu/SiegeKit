@@ -44,7 +44,7 @@ func TestRunURL(t *testing.T) {
 				return nil, err
 			}
 			configs = append(configs, m)
-			if c.Target.String() != "http://app.test:8000/" || c.MaxServerErrors != LocalLimits.MaxServerErrors {
+			if c.Target.String() != "http://app.test:8000/" || c.MaxServerErrors != LocalLimits.MaxServerErrors || c.ReadOnly {
 				t.Errorf("egress config %+v", c)
 			}
 			os.WriteFile(filepath.Join(sp.OutDir, "zap.json"), []byte(zapReport), 0o600)
@@ -77,7 +77,7 @@ func TestRunURL(t *testing.T) {
 	opt := urlOpts(t)
 	opt.Deployed, opt.Limits = true, DeployedLimits
 	r, err = RunURL(context.Background(), func(_ context.Context, sp sandbox.Spec, c egress.Config) (*ActiveResult, error) {
-		if !c.VerifyTLS || c.Rate != DeployedLimits.Rate {
+		if !c.VerifyTLS || c.Rate != DeployedLimits.Rate || !c.ReadOnly {
 			t.Errorf("deployed egress config %+v", c)
 		}
 		os.WriteFile(filepath.Join(sp.OutDir, "zap.json"), []byte(zapReport), 0o600)

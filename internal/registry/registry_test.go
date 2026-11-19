@@ -74,3 +74,45 @@ func TestFetchTokenRejectsOtherSchemes(t *testing.T) {
 		t.Error("plain-HTTP token address accepted")
 	}
 }
+
+func TestGetRefusals(t *testing.T) {
+	bad := `{not json`
+	big := strings.Repeat(" ", MaxManifestSize+1)
+	blobs := map[string]string{digest(bad): bad, digest(big): big}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		d := r.URL.Path[strings.LastIndex(r.URL.Path, "/")+1:]
+		if d == digest("teapot") {
+			w.WriteHeader(http.StatusTeapot)
+			return
+		}
+		w.Write([]byte(blobs[d]))
+	}))
+	defer srv.Close()
+	c := &Client{HTTP: srv.Client(), Base: func(string) string { return srv.URL }}
+	tok := "t"
+	for name, tc := range map[string]struct{ digest, want string }{
+		"sha512":    {"sha512:" + strings.Repeat("0", 128), "unsupported digest"},
+		"not json":  {digest(bad), "read manifest"},
+		"too large": {digest(big), "manifest too large"},
+		"status":    {digest("teapot"), "418"},
+	} {
+		if _, err := c.get(context.Background(), "docker.io", "library/tool", tc.digest, &tok); err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("%s: got %v, want %q", name, err, tc.want)
+		}
+	}
+	// Without a server, the request itself fails.
+	srv.Close()
+	if _, err := c.get(context.Background(), "docker.io", "library/tool", digest(bad), &tok); err == nil {
+		t.Error("closed server: no error")
+	}
+}
+
+func TestBase(t *testing.T) {
+	c := &Client{}
+	if got := c.base("docker.io"); got != "https://registry-1.docker.io" {
+		t.Errorf("docker.io: %s", got)
+	}
+	if got := c.base("ghcr.io"); got != "https://ghcr.io" {
+		t.Errorf("ghcr.io: %s", got)
+	}
+}
