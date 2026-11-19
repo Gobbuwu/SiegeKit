@@ -133,11 +133,11 @@ func TestRelURI(t *testing.T) {
 		"app/main.go":           "app/main.go",
 		"https://example.test/": "https://example.test/",
 	} {
-		if got := relURI(in, "/target"); got != want {
-			t.Errorf("relURI(%q) = %q, want %q", in, got, want)
+		if got := RelURI(in, "/target"); got != want {
+			t.Errorf("RelURI(%q) = %q, want %q", in, got, want)
 		}
 	}
-	if got := relURI("/target/a", ""); got != "/target/a" {
+	if got := RelURI("/target/a", ""); got != "/target/a" {
 		t.Errorf("empty mount changed URI: %q", got)
 	}
 }

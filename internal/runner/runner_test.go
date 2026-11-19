@@ -196,13 +196,13 @@ func TestSelect(t *testing.T) {
 		}
 		return out
 	}
-	if got, _ := Select(all, "repo", nil, nil); !slices.Equal(ids(got), []string{"checkov", "gitleaks", "trivy"}) {
+	if got, _ := Select(all, "repo", nil, nil); !slices.Equal(ids(got), []string{"bandit", "checkov", "gitleaks", "gosec", "trivy"}) {
 		t.Errorf("all: %v", ids(got))
 	}
 	if got, _ := Select(all, "repo", []string{"gitleaks"}, nil); !slices.Equal(ids(got), []string{"gitleaks"}) {
 		t.Errorf("only: %v", ids(got))
 	}
-	if got, _ := Select(all, "repo", nil, []string{"gitleaks"}); !slices.Equal(ids(got), []string{"checkov", "trivy"}) {
+	if got, _ := Select(all, "repo", nil, []string{"gitleaks"}); !slices.Equal(ids(got), []string{"bandit", "checkov", "gosec", "trivy"}) {
 		t.Errorf("skip: %v", ids(got))
 	}
 	for name, c := range map[string][2][]string{

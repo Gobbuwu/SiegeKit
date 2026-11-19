@@ -2,7 +2,7 @@
 
 SiegeKit is a free, local, open-source tool that runs security tests against software you own: static code analysis, dependency and secret scanning, infrastructure-as-code checks, dynamic web/API testing, fuzzing and password-hash audits. You choose which tests to run. Everything runs on your machine.
 
-**Status:** milestone M1 in progress. An early developer preview can scan a source directory for committed secrets (gitleaks), insecure Dockerfile, Kubernetes, Terraform and CI settings (checkov) and dependencies with known vulnerabilities (trivy). Do not rely on it yet.
+**Status:** milestone M1 in progress. An early developer preview can scan a source directory for committed secrets (gitleaks), insecure Dockerfile, Kubernetes, Terraform and CI settings (checkov) dependencies with known vulnerabilities (trivy) and common mistakes in Python and Go code (bandit, gosec). Do not rely on it yet.
 
 ## Try the preview
 

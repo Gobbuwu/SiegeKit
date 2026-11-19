@@ -301,7 +301,8 @@
           "enum": [
             "sarif",
             "sarif-gitleaks",
-            "sarif-checkov"
+            "sarif-checkov",
+            "bandit-json"
           ]
         },
         "file": {

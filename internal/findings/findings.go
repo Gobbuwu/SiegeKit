@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"regexp"
 	"sort"
 	"strings"
 )
@@ -170,4 +171,33 @@ func MaskSecret(s string) string {
 		return strings.Repeat("*", len(r))
 	}
 	return string(r[:4]) + strings.Repeat("*", min(len(r)-4, 16))
+}
+
+// credentialCWEs are weaknesses whose findings quote a credential: hard-coded
+// passwords and keys, and plaintext storage of passwords.
+var credentialCWEs = map[string]bool{"CWE-259": true, "CWE-321": true, "CWE-798": true, "CWE-256": true}
+
+var reQuoted = regexp.MustCompile(`'[^'\n]*'|"[^"\n]*"|` + "`[^`\\n]*`")
+
+// RedactCredentials removes credential values from findings about
+// credentials, whichever tool reported them (ADR 0007, threat model T9).
+// Code scanners quote the value they flag, for example Bandit's "Possible
+// hardcoded password: '<value>'". The snippet is replaced and every quoted
+// string in the message is masked. Secret-scanner findings are masked when
+// they are converted; this is the second line of defence for the others.
+func (f *Finding) RedactCredentials() {
+	match := f.Family == "secrets"
+	for _, c := range f.CWEs {
+		match = match || credentialCWEs[c]
+	}
+	if !match {
+		return
+	}
+	if f.Family != "secrets" && f.Snippet != "" {
+		f.Snippet = "[snippet removed: it may contain a credential]"
+	}
+	f.Message = reQuoted.ReplaceAllStringFunc(f.Message, func(q string) string {
+		r := []rune(q)
+		return string(r[0]) + MaskSecret(string(r[1:len(r)-1])) + string(r[len(r)-1])
+	})
 }

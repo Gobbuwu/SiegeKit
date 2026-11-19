@@ -1,0 +1,51 @@
+{
+  "schemaVersion": 1,
+  "id": "bandit",
+  "name": "Bandit Python code scan",
+  "version": "1.0.0",
+  "description": "Finds common security mistakes in Python code, such as shell injection, unsafe deserialization and weak cryptography.",
+  "family": "sast",
+  "mode": "passive",
+  "destructive": false,
+  "targets": [
+    "repo"
+  ],
+  "tool": {
+    "name": "bandit",
+    "version": "1.9.4",
+    "license": "Apache-2.0",
+    "homepage": "https://github.com/PyCQA/bandit",
+    "artifacts": [
+      {
+        "platform": "any",
+        "kind": "oci-image",
+        "ref": "ghcr.io/pycqa/bandit/bandit@sha256:b405a808f5d50156aee921a77fb17c044d69d90ecef6499447a037678967c936",
+        "sha256": "b405a808f5d50156aee921a77fb17c044d69d90ecef6499447a037678967c936"
+      }
+    ]
+  },
+  "resources": {
+    "cpus": 2,
+    "memoryMiB": 1024,
+    "gpu": "none",
+    "timeoutSeconds": 900,
+    "maxTimeoutSeconds": 3600
+  },
+  "network": "none",
+  "run": {
+    "args": [
+      "-r",
+      "{target}",
+      "-f",
+      "json",
+      "-o",
+      "{outdir}/bandit.json",
+      "--exit-zero"
+    ]
+  },
+  "output": {
+    "format": "json",
+    "parser": "bandit-json",
+    "file": "bandit.json"
+  }
+}
