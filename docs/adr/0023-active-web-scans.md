@@ -19,6 +19,7 @@ Facts checked before this ADR, with the pinned image `zaproxy/zap-stable:2.17.0`
 - ZAP's packaged scan scripts (`zap-baseline.py`) write to `/home/zap`, which fails on the sandbox's read-only root file system. Running `zap.sh -cmd -autorun PLAN` with `-dir /tmp/zap` works read-only, as a non-root user.
 - ZAP opens its own proxy on port 8080 by default, which is the relay's port in the shared network namespace. It must listen elsewhere (`-port 8090`).
 - Java ignores `HTTP_PROXY`. ZAP's outbound proxy is set with `-config network.connection.httpProxy.*`.
+- `zap.sh` sets the Java heap to a quarter of the memory it finds. It reads the container limit only on cgroup v1, so on cgroup v2 hosts (GitHub's Ubuntu runners) it sized the heap from the host and the container was killed (exit 137). ZAP also needs more than 512 MiB to start, even with a 256 MiB heap. The plugins pass `-Xmx1024m` with a 2048 MiB limit; a full scan of Juice Shop peaked at 1.23 GiB.
 - `-silent` stops ZAP's own update and news requests. Without it, the egress proxy refused 9 requests that were not for the target.
 - The Automation Framework accepts a JSON plan, and the `sarif-json` report lists each alert's CWE in `relationships` and its references in `properties.references`.
 

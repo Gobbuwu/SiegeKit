@@ -43,6 +43,19 @@ func TestBuiltin(t *testing.T) {
 			if !slices.Contains(m.Run.Args, "network.connection.httpProxy.port="+strconv.Itoa(sandbox.RelayPort)) {
 				t.Errorf("%s: outbound proxy port is not the relay's", m.ID)
 			}
+			// zap.sh sizes the Java heap from the host's memory on cgroup v2
+			// hosts, not from the container limit, so the container is
+			// killed (exit 137, seen in CI 2026-11-19). The heap must be
+			// set and leave room for /tmp and the JVM's own memory.
+			heap := 0
+			for _, a := range m.Run.Args {
+				if v, ok := strings.CutPrefix(a, "-Xmx"); ok {
+					heap, _ = strconv.Atoi(strings.TrimSuffix(v, "m"))
+				}
+			}
+			if heap <= 0 || heap > m.Resources.MemoryMiB/2 {
+				t.Errorf("%s: Java heap %d MiB must be set and at most half of %d MiB", m.ID, heap, m.Resources.MemoryMiB)
+			}
 		default:
 			t.Errorf("%s: mode %s", m.ID, m.Mode)
 		}

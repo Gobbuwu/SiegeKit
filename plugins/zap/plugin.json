@@ -35,6 +35,7 @@
   "run": {
     "args": [
       "zap.sh",
+      "-Xmx1024m",
       "-cmd",
       "-silent",
       "-port",
