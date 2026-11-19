@@ -14,7 +14,7 @@ Status: in progress (started 2026-11-19, after the M1 sign-off). This splits the
 | M2.7 | App-logic checks: authorization differential, unauthenticated route check, rate-limit check, live backend-rules check. | ADR 0011 | Fixture issues found. |
 | M2.8 | Passive tools moved from M1: OSV-Scanner, Syft (SBOM), Grype. | ADR 0003, 0014 | Planted issues found; real-repository gate still green. |
 | M2.9 | Opengrep as the first pinned-binary plugin, with SiegeKit's own Apache-2.0 rules for JavaScript and TypeScript; opengrep-rules only downloaded after license acceptance. | ADR 0003, 0016 | Planted issues found on Linux and macOS, amd64 and arm64. |
-| M2.10 | Optional sqlmap and Nikto; measure and set the default request rate; full M2 gate run. | ADR 0005 | M2 gate: all target-authorization negative tests pass and all known issues in the vulnerable web fixture are detected. Then the owner signs off. |
+| M2.10 | Optional sqlmap and Nikto; measure and set the default request rate; full M2 gate run. | ADR 0005 | M2 gate: all target-authorization negative tests pass and all known issues in the vulnerable web fixture are detected. The milestone check includes the hand triage of results ([milestones/README.md](milestones/README.md)). Then the owner signs off. |
 
 Added at the owner's request on 2026-11-19, outside the numbered PRs: a check for environment files. The `gitleaks-history` plugin scans every commit for secrets and committed `.env` files, and the built-in `dotenv-gitignore` check warns when `.gitignore` does not exclude them. Manifests gain `run.env` and `requiresGit` for this.
 
