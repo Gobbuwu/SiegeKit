@@ -53,6 +53,23 @@ func TestBuiltin(t *testing.T) {
 					heap, _ = strconv.Atoi(strings.TrimSuffix(v, "m"))
 				}
 			}
+			// ZAP's spider fills in and submits forms, POST forms included,
+			// unless told not to (found by the security review of M2.4a,
+			// reproduced 2026-11-19). A plugin that runs on deployed targets
+			// must not submit forms.
+			if !*m.Destructive {
+				jobs, _ := m.Run.Config["jobs"].([]any)
+				for _, j := range jobs {
+					job, _ := j.(map[string]any)
+					if job["type"] != "spider" {
+						continue
+					}
+					p, _ := job["parameters"].(map[string]any)
+					if p["processForm"] != false || p["postForm"] != false {
+						t.Errorf("%s: a non-destructive spider must set processForm and postForm to false", m.ID)
+					}
+				}
+			}
 			if heap <= 0 || heap > m.Resources.MemoryMiB/2 {
 				t.Errorf("%s: Java heap %d MiB must be set and at most half of %d MiB", m.ID, heap, m.Resources.MemoryMiB)
 			}
