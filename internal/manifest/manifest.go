@@ -35,17 +35,19 @@ var (
 )
 
 var (
-	reID      = regexp.MustCompile(`^[a-z][a-z0-9-]{1,39}$`)
-	reSemver  = regexp.MustCompile(`^[0-9]+\.[0-9]+\.[0-9]+$`)
-	reHTTPS   = regexp.MustCompile(`^https://[^\s]+$`)
-	reOCI     = regexp.MustCompile(`^[a-z0-9.-]+(:[0-9]+)?/[^@\s]+@sha256:[a-f0-9]{64}$`)
-	reSHA256  = regexp.MustCompile(`^[a-f0-9]{64}$`)
-	reArg     = regexp.MustCompile(`^([^{}]|\{(` + strings.Join(Placeholds, "|") + `)\})*$`)
-	reHomeURL = regexp.MustCompile(`^https://`)
-	reOutFile = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$`)
-	reApplies = regexp.MustCompile(`^[A-Za-z0-9*?._-]{1,64}$`)
-	reMount   = regexp.MustCompile(`^/(tmp|data)(/[a-z0-9_-][a-z0-9._-]*)+$`)
-	reUpdArg  = regexp.MustCompile(`^([^{}]|\{(data|threads)\})*$`)
+	reID           = regexp.MustCompile(`^[a-z][a-z0-9-]{1,39}$`)
+	reSemver       = regexp.MustCompile(`^[0-9]+\.[0-9]+\.[0-9]+$`)
+	reHTTPS        = regexp.MustCompile(`^https://[^\s]+$`)
+	reOCI          = regexp.MustCompile(`^[a-z0-9.-]+(:[0-9]+)?/[^@\s]+@sha256:[a-f0-9]{64}$`)
+	reSHA256       = regexp.MustCompile(`^[a-f0-9]{64}$`)
+	reArg          = regexp.MustCompile(`^([^{}]|\{(` + strings.Join(Placeholds, "|") + `)\})*$`)
+	reHomeURL      = regexp.MustCompile(`^https://`)
+	reOutFile      = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$`)
+	reApplies      = regexp.MustCompile(`^[A-Za-z0-9*?._-]{1,64}$`)
+	reIgnoreFile   = regexp.MustCompile(`^\.?[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`)
+	reIgnoreMarker = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9:_.-]{2,63}$`)
+	reMount        = regexp.MustCompile(`^/(tmp|data)(/[a-z0-9_-][a-z0-9._-]*)+$`)
+	reUpdArg       = regexp.MustCompile(`^([^{}]|\{(data|threads)\})*$`)
 )
 
 // Manifest describes one plugin. Pointer fields are required fields whose
@@ -73,6 +75,22 @@ type Manifest struct {
 	// RequiresGit skips the plugin, saying so, when the target is not a git
 	// repository (no .git at its top level).
 	RequiresGit bool `json:"requiresGit,omitempty"`
+	// RepoIgnores names what in the scanned repository can make the tool
+	// leave out findings, so reports can say so (owner decision 2026-11-19:
+	// obey such settings, but make them visible).
+	RepoIgnores *RepoIgnores `json:"repoIgnores,omitempty"`
+}
+
+// RepoIgnores describes the scanned repository's own ways of hiding
+// findings from the tool.
+type RepoIgnores struct {
+	// Files are settings files at the target's top level that the tool
+	// reads, such as ".gitleaksignore".
+	Files []string `json:"files,omitempty"`
+	// Marker is an inline comment that hides a finding, such as
+	// "gitleaks:allow". SiegeKit counts the lines that carry it. Set it only
+	// for tools that do not report what they suppressed.
+	Marker string `json:"marker,omitempty"`
 }
 
 // Data is downloadable data the tool needs, such as a vulnerability
@@ -251,6 +269,22 @@ func (m *Manifest) Validate() error {
 	for i, pat := range m.AppliesTo {
 		if !reApplies.MatchString(pat) {
 			add("appliesTo[%d] %q must be a file name pattern matching %s", i, pat, reApplies)
+		}
+	}
+	if r := m.RepoIgnores; r != nil {
+		if len(r.Files) == 0 && r.Marker == "" {
+			add("repoIgnores must name files or a marker")
+		}
+		if len(r.Files) > 8 {
+			add("repoIgnores.files has more than 8 entries")
+		}
+		for i, f := range r.Files {
+			if !reIgnoreFile.MatchString(f) {
+				add("repoIgnores.files[%d] %q must be a plain file name matching %s", i, f, reIgnoreFile)
+			}
+		}
+		if r.Marker != "" && !reIgnoreMarker.MatchString(r.Marker) {
+			add("repoIgnores.marker %q must match %s", r.Marker, reIgnoreMarker)
 		}
 	}
 	if m.Output == nil {

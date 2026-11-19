@@ -54,7 +54,10 @@ Each scan writes `report.json`, `report.sarif` (SARIF 2.1.0) and `report.html` t
 
 Top level:
 - `schemaVersion`, `siegekitVersion`, `target`, `mode`, `started`, `finished`.
-- `plugins`: one entry per check, with `id`, `family`, `tool`, `version`, `status` (`ran`, `skipped`, `failed` or `timed-out`), `reason` (why it was skipped or failed) and `findings` (a count).
+- `plugins`: one entry per check, with `id`, `family`, `tool`, `version`, `status` (`ran`, `skipped`, `failed` or `timed-out`), `reason` (why it was skipped or failed) and `findings` (a count). When the scanned repository told the tool to ignore something, three more fields say so, and are left out when there is nothing to report:
+  - `suppressed`: how many findings the tool left out because of comments in the code, such as `# nosec` or `checkov:skip=`, where the tool reports this.
+  - `repoSettings`: the repository's own settings files that the tool obeyed, such as `.gitleaksignore`, `.gitleaks.toml`, `.bandit` or `.checkov.yaml`. They can hide findings without a count.
+  - `ignoreMarkers`: how many lines carry the tool's ignore comment (`gitleaks:allow`), counted by SiegeKit outside dependency directories, for tools that do not report what they suppressed.
 - `findings`: the deduplicated findings, most severe first.
 
 Each finding:
@@ -77,4 +80,4 @@ Each finding:
 4. Scan again and compare fingerprints. A finding that is gone was fixed. A new one may come from your change.
 5. Tell the person what you changed, what is still open, and what SiegeKit does not test.
 
-Do not silence a finding by deleting the check, adding a suppression comment, or moving the code out of the scanned directory, unless the person agrees that it is a false positive.
+Do not silence a finding by deleting the check, adding a suppression comment or ignore file, or moving the code out of the scanned directory, unless the person agrees that it is a false positive. SiegeKit obeys such suppressions but counts them in `report.json`, so tell the person about any `suppressed`, `repoSettings` or `ignoreMarkers` you see.

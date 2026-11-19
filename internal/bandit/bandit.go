@@ -21,6 +21,15 @@ const MaxSize = sarif.MaxSize
 
 type report struct {
 	Results *[]result `json:"results"`
+	Metrics struct {
+		Totals struct {
+			// Nosec counts results hidden by a bare "# nosec" comment,
+			// SkippedTests those hidden by "# nosec <test id>" (checked with
+			// Bandit 1.9.4).
+			Nosec        int `json:"nosec"`
+			SkippedTests int `json:"skipped_tests"`
+		} `json:"_totals"`
+	} `json:"metrics"`
 }
 
 type result struct {
@@ -43,6 +52,9 @@ type Options struct {
 	Plugin    string // plugin id recorded as the source
 	Family    string // test family
 	MountPath string // container path of the target, removed from file names
+	// Suppressed, if set, receives the number of results the scanned code
+	// hid with "# nosec" comments.
+	Suppressed *int
 }
 
 // ToFindings reads a Bandit JSON report and converts every result.
@@ -63,6 +75,10 @@ func ToFindings(r io.Reader, opt Options) ([]findings.Finding, error) {
 	}
 	if rep.Results == nil {
 		return nil, errors.New("decode Bandit report: no results list")
+	}
+	if opt.Suppressed != nil {
+		// Clamped: the report is untrusted and the sum must not overflow.
+		*opt.Suppressed = min(max(0, rep.Metrics.Totals.Nosec), 1<<30) + min(max(0, rep.Metrics.Totals.SkippedTests), 1<<30)
 	}
 	var out []findings.Finding
 	for _, res := range *rep.Results {

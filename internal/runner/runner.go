@@ -308,8 +308,13 @@ func runPlugin(ctx context.Context, ex Executor, m *manifest.Manifest, opt Optio
 		// any other exit code means the tool itself failed.
 		return fail(report.Failed, "tool exited with code %d: %s", res.ExitCode, lastLine(res.Stderr))
 	}
-	fs, err := readReport(filepath.Join(out, m.Output.File), m)
+	var suppressed int
+	fs, err := readReport(filepath.Join(out, m.Output.File), m, &suppressed)
 	if err != nil {
+		return fail(report.Failed, "%v", err)
+	}
+	pr.Suppressed = suppressed
+	if err := repoIgnores(ctx, &pr, m, opt.TargetDir); err != nil {
 		return fail(report.Failed, "%v", err)
 	}
 	for i := range fs {
@@ -319,6 +324,27 @@ func runPlugin(ctx context.Context, ex Executor, m *manifest.Manifest, opt Optio
 	pr.Reason = warning
 	pr.Findings = len(fs)
 	return pr, fs
+}
+
+// repoIgnores records what the scanned repository told the tool to ignore:
+// its settings files at the top level and the lines with the tool's ignore
+// comment (owner decision, 2026-11-19).
+func repoIgnores(ctx context.Context, pr *report.PluginResult, m *manifest.Manifest, root string) error {
+	r := m.RepoIgnores
+	if r == nil {
+		return nil
+	}
+	for _, f := range r.Files {
+		if st, err := os.Lstat(filepath.Join(root, f)); err == nil && st.Mode().IsRegular() {
+			pr.RepoSettings = append(pr.RepoSettings, f)
+		}
+	}
+	n, err := checks.CountMarker(ctx, root, r.Marker)
+	if err != nil && !errors.Is(err, checks.ErrTooManyFiles) {
+		return fmt.Errorf("count %q comments: %w", r.Marker, err)
+	}
+	pr.IgnoreMarkers = n
+	return nil
 }
 
 // ImageFor picks the plugin's OCI image. Containers run Linux on every host
@@ -357,7 +383,7 @@ func substitute(args []string, cpus int, dataMount string) ([]string, error) {
 
 // readReport opens the tool's report without following symlinks, because the
 // output directory was writable by the tool (threat model T7).
-func readReport(path string, m *manifest.Manifest) ([]findings.Finding, error) {
+func readReport(path string, m *manifest.Manifest, suppressed *int) ([]findings.Finding, error) {
 	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0) // #nosec G304 -- the report the tool wrote in our private output directory; symlinks refused
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, fmt.Errorf("tool wrote no report %q", filepath.Base(path))
@@ -374,7 +400,7 @@ func readReport(path string, m *manifest.Manifest) ([]findings.Finding, error) {
 		return nil, fmt.Errorf("report %q is not a regular file", filepath.Base(path))
 	}
 	if m.Output.Parser == "bandit-json" {
-		return bandit.ToFindings(f, bandit.Options{Plugin: m.ID, Family: m.Family, MountPath: sandbox.TargetMount})
+		return bandit.ToFindings(f, bandit.Options{Plugin: m.ID, Family: m.Family, MountPath: sandbox.TargetMount, Suppressed: suppressed})
 	}
 	log, err := sarif.Read(f)
 	if err != nil {
@@ -382,6 +408,7 @@ func readReport(path string, m *manifest.Manifest) ([]findings.Finding, error) {
 	}
 	return sarif.ToFindings(log, sarif.Options{
 		Plugin: m.ID, Family: m.Family, Parser: m.Output.Parser, MountPath: sandbox.TargetMount,
+		Suppressed: suppressed,
 	})
 }
 

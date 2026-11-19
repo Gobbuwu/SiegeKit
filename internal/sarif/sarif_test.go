@@ -2,6 +2,7 @@ package sarif
 
 import (
 	"bytes"
+	"slices"
 	"strings"
 	"testing"
 
@@ -165,5 +166,36 @@ func TestStripMount(t *testing.T) {
 	}
 	if got := stripMount("/target/a", ""); got != "/target/a" {
 		t.Errorf("empty mount changed the message: %q", got)
+	}
+}
+
+// Results suppressed in the scanned code are left out and counted; a
+// suppression that is only under review or was rejected leaves the result.
+func TestSuppressedResults(t *testing.T) {
+	const log = `{"version":"2.1.0","runs":[{"tool":{"driver":{"name":"gosec"}},"results":[
+{"ruleId":"G401","message":{"text":"a"},"locations":[{"physicalLocation":{"artifactLocation":{"uri":"a.go"},"region":{"startLine":5}}}],"suppressions":[{"kind":"inSource","justification":"test"}]},
+{"ruleId":"G401","message":{"text":"b"},"locations":[{"physicalLocation":{"artifactLocation":{"uri":"a.go"},"region":{"startLine":6}}}],"suppressions":[{"kind":"inSource","status":"accepted"}]},
+{"ruleId":"G401","message":{"text":"c"},"locations":[{"physicalLocation":{"artifactLocation":{"uri":"a.go"},"region":{"startLine":7}}}],"suppressions":[{"kind":"inSource","status":"rejected"}]},
+{"ruleId":"G401","message":{"text":"d"},"locations":[{"physicalLocation":{"artifactLocation":{"uri":"a.go"},"region":{"startLine":8}}}],"suppressions":[{"kind":"external","status":"underReview"}]},
+{"ruleId":"G401","message":{"text":"e"},"locations":[{"physicalLocation":{"artifactLocation":{"uri":"a.go"},"region":{"startLine":9}}}],"suppressions":[]}]}]}`
+	l, err := Read(strings.NewReader(log))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var n int
+	fs, err := ToFindings(l, Options{Plugin: "gosec", Family: "sast", Suppressed: &n})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var lines []int
+	for _, f := range fs {
+		lines = append(lines, f.Location.StartLine)
+	}
+	if n != 2 || !slices.Equal(lines, []int{7, 8, 9}) {
+		t.Errorf("suppressed %d, kept lines %v; want 2 and [7 8 9]", n, lines)
+	}
+	// Without a counter, suppressed results are still left out.
+	if fs, _ := ToFindings(l, Options{Plugin: "gosec", Family: "sast"}); len(fs) != 3 {
+		t.Errorf("without counter: %d findings", len(fs))
 	}
 }
