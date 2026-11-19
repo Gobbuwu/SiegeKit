@@ -16,6 +16,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -48,8 +49,11 @@ type Spec struct {
 	OutDir    string   // mounted read-write at /out; must exist and be empty
 	// Network is "none" for scans. "egress" (the engine's default network) is
 	// only for data updates (ADR 0014) and is refused when a target is mounted.
-	// "target-only" arrives with the egress proxy in M2.
+	// "target-only" joins the network namespace of Relay, whose only way
+	// out is the egress proxy (ADR 0018, ADR 0019).
 	Network      string
+	Relay        string // relay container name, for "target-only"
+	CAFile       string // per-run CA certificate to trust (https targets), for "target-only"
 	DataDir      string // host directory with the tool's data; empty for none
 	DataMount    string // where DataDir is mounted; read-only unless DataWritable
 	DataWritable bool   // only for update runs
@@ -110,8 +114,29 @@ func (s *Spec) validate() error {
 		if s.TargetDir != "" || !s.DataWritable {
 			return errors.New("network \"egress\" is only allowed for data updates, with no target mounted")
 		}
+	case "target-only":
+		if goos != "linux" {
+			return errors.New("active tests run only on Linux for now (ADR 0018)")
+		}
+		if !reRelay.MatchString(s.Relay) {
+			return fmt.Errorf("relay %q is not a SiegeKit relay container", s.Relay)
+		}
+		if s.DataWritable {
+			return errors.New("data cannot be writable in an active test")
+		}
+		if s.CAFile != "" {
+			if !filepath.IsAbs(s.CAFile) || filepath.Clean(s.CAFile) != s.CAFile || strings.ContainsAny(s.CAFile, ",\"'\n\r\x00") {
+				return fmt.Errorf("CA file %q must be an absolute, clean path", s.CAFile)
+			}
+			if st, err := os.Lstat(s.CAFile); err != nil || !st.Mode().IsRegular() {
+				return fmt.Errorf("CA file %q is not a regular file", s.CAFile)
+			}
+		}
 	default:
 		return fmt.Errorf("network %q is not supported", s.Network)
+	}
+	if s.Network != "target-only" && (s.Relay != "" || s.CAFile != "") {
+		return errors.New("relay and CA file are only for target-only runs")
 	}
 	if s.DataWritable && s.TargetDir != "" {
 		return errors.New("data can only be writable when no target is mounted")
@@ -199,8 +224,22 @@ func (s *Spec) EngineArgs(name string, uid, gid int) ([]string, error) {
 		"--pull", "never",
 	}
 	// "egress" uses the engine's default network, so no flag is passed.
-	if s.Network == "none" {
+	switch s.Network {
+	case "none":
 		args = append(args, "--network", "none")
+	case "target-only":
+		proxy := "http://127.0.0.1:" + strconv.Itoa(RelayPort)
+		args = append(args, "--network", "container:"+s.Relay)
+		for _, k := range []string{"HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"} {
+			args = append(args, "--env", k+"="+proxy)
+		}
+		args = append(args, "--env", "NO_PROXY=", "--env", "no_proxy=")
+		if s.CAFile != "" {
+			args = append(args, "--mount", "type=bind,source="+s.CAFile+",target="+CAMount+",readonly")
+			for _, k := range []string{"SSL_CERT_FILE", "REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE", "NODE_EXTRA_CA_CERTS"} {
+				args = append(args, "--env", k+"="+CAMount)
+			}
+		}
 	}
 	args = append(args,
 		"--user", fmt.Sprintf("%d:%d", uid, gid),
@@ -453,3 +492,83 @@ func (t *tailBuffer) Write(p []byte) (int, error) {
 }
 
 func (t *tailBuffer) String() string { return t.b.String() }
+
+// Relay settings (ADR 0019).
+const (
+	// RelayImage is alpine/socat 1.8.1.1 (Alpine 3.24.1), published
+	// 2026-06-20, pinned by index digest.
+	RelayImage = "docker.io/alpine/socat@sha256:7f9a06753033f2b7de18edc2353f2c15153413d95a039163c6db270fc7a6c3b0"
+	RelayPort  = 8080
+	// RelaySocket is the proxy's socket file name in the relay directory.
+	RelaySocket = "proxy.sock"
+	relayMount  = "/run/siegekit"
+	CAMount     = "/siegekit/ca.pem"
+)
+
+var (
+	reRelay = regexp.MustCompile(`^siegekit-relay-[0-9a-f]{16}$`)
+	goos    = runtime.GOOS
+)
+
+// StartRelay starts the relay container for one active run: no network,
+// forwarding 127.0.0.1:RelayPort in its namespace to the Unix socket
+// RelaySocket in dir. It returns once the relay listens.
+func (e *Engine) StartRelay(ctx context.Context, dir string) (string, error) {
+	if goos != "linux" {
+		return "", errors.New("active tests run only on Linux for now (ADR 0018)")
+	}
+	if err := checkMountPath(dir); err != nil {
+		return "", fmt.Errorf("relay directory: %w", err)
+	}
+	b := make([]byte, 8)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	name := "siegekit-relay-" + hex.EncodeToString(b)
+	uid, gid := os.Getuid(), os.Getgid()
+	if uid == 0 {
+		uid, gid = nonRootUID, nonRootGID
+	}
+	args := []string{
+		"run", "-d", "--rm", "--name", name, "--pull", "never",
+		"--network", "none",
+		"--user", fmt.Sprintf("%d:%d", uid, gid),
+		"--cap-drop", "ALL", "--security-opt", "no-new-privileges", "--read-only",
+		"--pids-limit", "64", "--memory", "64m", "--memory-swap", "64m", "--cpus", "1",
+		"--mount", "type=bind,source=" + dir + ",target=" + relayMount + ",readonly",
+		RelayImage,
+		"-d", "-d",
+		fmt.Sprintf("TCP-LISTEN:%d,bind=127.0.0.1,fork,reuseaddr", RelayPort),
+		"UNIX-CONNECT:" + relayMount + "/" + RelaySocket,
+	}
+	cmd := exec.CommandContext(ctx, e.Bin, args...) // #nosec G204 -- fixed arguments; dir is checked above
+	cmd.Env = minimalEnv()
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return "", fmt.Errorf("start relay: %s", lastLine(string(out), err))
+	}
+	deadline := time.Now().Add(15 * time.Second)
+	for time.Now().Before(deadline) {
+		logs := exec.CommandContext(ctx, e.Bin, "logs", name) // #nosec G204 -- name is generated above
+		logs.Env = minimalEnv()
+		out, err := logs.CombinedOutput()
+		if err == nil && strings.Contains(string(out), "listening on") {
+			return name, nil
+		}
+		if ctx.Err() != nil {
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	e.forceRemove(name)
+	if ctx.Err() != nil {
+		return "", ctx.Err()
+	}
+	return "", errors.New("the relay container did not start listening")
+}
+
+// StopRelay removes the relay container.
+func (e *Engine) StopRelay(name string) {
+	if reRelay.MatchString(name) {
+		e.forceRemove(name)
+	}
+}

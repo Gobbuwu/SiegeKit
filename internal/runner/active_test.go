@@ -1,0 +1,148 @@
+package runner
+
+import (
+	"context"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"net/netip"
+	"net/url"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/Gobbuwu/SiegeKit/internal/egress"
+	"github.com/Gobbuwu/SiegeKit/internal/sandbox"
+	"github.com/Gobbuwu/SiegeKit/internal/target"
+)
+
+// activeTestImage is a pinned Alpine with busybox wget and nslookup.
+const activeTestImage = "docker.io/library/alpine@sha256:d9e853e87e55526f6b2917df91a2115c36dd7c696a35be12163d44e6e2a4b6bc"
+
+func activeSetup(t *testing.T, status int) (*sandbox.Engine, egress.Config, *atomic.Int32, int) {
+	t.Helper()
+	if os.Getenv("SIEGEKIT_CONTAINER_TESTS") != "1" {
+		t.Skip("set SIEGEKIT_CONTAINER_TESTS=1 to run container tests")
+	}
+	e, err := sandbox.Detect()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, img := range []string{activeTestImage, sandbox.RelayImage} {
+		if has, err := e.HasImage(context.Background(), img); err != nil {
+			t.Fatal(err)
+		} else if !has {
+			if err := e.Pull(context.Background(), img); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	var hits atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		w.WriteHeader(status)
+		fmt.Fprint(w, "hello-from-target")
+	}))
+	t.Cleanup(srv.Close)
+	su, _ := url.Parse(srv.URL)
+	port, _ := strconv.Atoi(su.Port())
+	tu, err := target.Parse(fmt.Sprintf("http://app.test:%d/", port))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := egress.Config{
+		Target: tu, Addrs: []netip.Addr{netip.MustParseAddr("127.0.0.1")},
+		Rate: 100, Burst: 10, MaxConns: 8, MaxServerErrors: 3, Version: "test",
+	}
+	return e, cfg, &hits, port
+}
+
+func activeSpec(t *testing.T, script string) sandbox.Spec {
+	t.Helper()
+	work := t.TempDir()
+	if err := os.Chmod(work, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	out := filepath.Join(work, "out")
+	if err := os.Mkdir(out, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return sandbox.Spec{Image: activeTestImage, Args: []string{"sh", "-c", script}, OutDir: out, CPUs: 1, MemoryMiB: 128, Timeout: 90 * time.Second}
+}
+
+func noRelaysLeft(t *testing.T, e *sandbox.Engine) {
+	t.Helper()
+	out, err := exec.Command(e.Bin, "ps", "-a", "--filter", "name=siegekit-relay-", "--format", "{{.Names}}").CombinedOutput()
+	if err != nil || strings.TrimSpace(string(out)) != "" {
+		t.Errorf("relay containers left behind: %q %v", out, err)
+	}
+}
+
+// TestActiveRunOnlyReachesTarget runs a container behind the relay and the
+// egress proxy and tries every other way out (ADR 0019).
+func TestActiveRunOnlyReachesTarget(t *testing.T) {
+	e, cfg, hits, port := activeSetup(t, http.StatusOK)
+	script := fmt.Sprintf(`
+echo "allowed=$(wget -qO- http://app.test:%[1]d/ok 2>&1)"
+echo "other=$(wget -qO- http://other.test:%[1]d/ 2>&1)"
+echo "metadata=$(wget -qO- http://169.254.169.254/latest/meta-data/ 2>&1)"
+echo "direct=$(env -u http_proxy -u HTTP_PROXY wget -T 3 -qO- http://1.1.1.1/ 2>&1)"
+echo "gateway=$(env -u http_proxy -u HTTP_PROXY wget -T 3 -qO- http://172.17.0.1/ 2>&1)"
+echo "dns=$(nslookup example.com 2>&1 | tr '\n' ' ')"
+echo "routes=$(ip route | wc -l)"
+echo "interfaces=$(ip -o addr | grep -v ' lo ' | wc -l)"
+`, port)
+	res, err := RunTargetOnly(context.Background(), e, activeSpec(t, script), cfg, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]string{}
+	for _, line := range strings.Split(res.Stderr, "\n") {
+		if k, v, ok := strings.Cut(line, "="); ok {
+			got[k] = v
+		}
+	}
+	t.Logf("%v", got)
+	for k, want := range map[string]string{
+		"allowed": "hello-from-target", "other": "403", "metadata": "403",
+		"direct": "unreachable", "gateway": "unreachable", "routes": "0", "interfaces": "0",
+	} {
+		if !strings.Contains(got[k], want) {
+			t.Errorf("%s: %q, want %q", k, got[k], want)
+		}
+	}
+	if strings.Contains(got["dns"], "Address: ") && !strings.Contains(got["dns"], "unreachable") {
+		t.Errorf("DNS resolved: %q", got["dns"])
+	}
+	if hits.Load() != 1 || res.Stats.Requests != 1 || res.Stats.Refused < 2 {
+		t.Errorf("target hits %d, stats %+v", hits.Load(), res.Stats)
+	}
+	noRelaysLeft(t, e)
+}
+
+// TestActiveRunStopsOnServerErrors checks that the run ends early when the
+// target keeps failing (ADR 0005 item 3).
+func TestActiveRunStopsOnServerErrors(t *testing.T) {
+	e, cfg, hits, port := activeSetup(t, http.StatusInternalServerError)
+	script := fmt.Sprintf(`for i in 1 2 3 4 5 6 7 8 9 10; do wget -qO- http://app.test:%d/ >/dev/null 2>&1; done; sleep 80`, port)
+	start := time.Now()
+	res, err := RunTargetOnly(context.Background(), e, activeSpec(t, script), cfg, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Stopped == "" || !strings.Contains(res.Stopped, "3 server errors in a row") {
+		t.Errorf("not stopped: %+v", res)
+	}
+	if d := time.Since(start); d > 60*time.Second {
+		t.Errorf("run took %v; the stop did not end it", d)
+	}
+	if hits.Load() != 3 {
+		t.Errorf("target received %d requests, want 3", hits.Load())
+	}
+	noRelaysLeft(t, e)
+}
