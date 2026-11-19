@@ -6,10 +6,10 @@ Each row is a common security concern, the plugins planned to check it, and the 
 | --- | --- | --- |
 | API keys, tokens, private keys in source code and **git history** | Gitleaks (files, M1); gitleaks-history (every commit on every branch, including secrets deleted later; added in M2 on 2026-11-19, because M1 scanned only the files); TruffleHog (optional) | M1, M2 |
 | Environment files (`.env`, `.env.local` and similar) committed to git, or not excluded by `.gitignore` | gitleaks-history (committed in any commit); built-in `dotenv-gitignore` (not excluded, so `git add .` would commit it). Templates such as `.env.example` are allowed. Added at the owner's request on 2026-11-19. | M2 |
-| Secrets inside container images | Trivy (needs container-image targets, which SiegeKit does not support yet) | Not scheduled |
+| Secrets inside container images | Trivy (needs container-image targets, which SiegeKit does not support yet) | M3 |
 | Secrets exposed by a running site (JS bundles, public `.env`, `.git/`, backups) | Gitleaks on crawled content; Nuclei exposure templates; ffuf | M2 ([ADR 0010](adr/0010-login-checks.md)) |
 | Outdated libraries with known vulnerabilities | Trivy, from lock and manifest files (M1); OSV-Scanner, Grype (M2) | M1, M2 |
-| Outdated container base images and OS packages | Trivy, Grype (needs container-image targets) | Not scheduled |
+| Outdated container base images and OS packages | Trivy, Grype (needs container-image targets) | M3 |
 | Software inventory (what versions you ship) | Syft (SBOM) | M2 |
 | Old or forgotten endpoints, backup and leftover files, directory listings | ffuf, Nuclei, Nikto (optional) | M2 |
 | Exposed admin pages and dashboards | Nuclei panel templates, ffuf, ZAP spider | M2 |
@@ -35,4 +35,4 @@ Each row is a common security concern, the plugins planned to check it, and the 
 | Cloud account settings (buckets, IAM, firewalls) | Manual (not in scope for 1.0) | n/a |
 | Password guessing against live logins | Not provided, by design | n/a |
 
-Not yet decided: whether to flag runtimes and frameworks that are past end-of-life even without a known vulnerability. It was planned for evaluation in M1 but was not evaluated, and is still open (found in the re-check of 2026-11-19).
+Declined on 2026-11-19 by the owner: flagging runtimes and frameworks that are past end-of-life without a known vulnerability. It is not a security issue in itself, and no data source with a confirmed license was found. Known vulnerabilities in old versions are still found by Trivy.
