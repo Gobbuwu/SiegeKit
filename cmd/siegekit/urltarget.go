@@ -5,26 +5,35 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"net/netip"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
 
 	"github.com/Gobbuwu/SiegeKit/internal/target"
+	"github.com/Gobbuwu/SiegeKit/internal/verify"
 )
 
 // resolver looks up target host names; tests replace it.
 var resolver target.Resolver
+
+// prover checks deployed-mode proof of control; tests replace it.
+var prover interface {
+	Check(ctx context.Context, u *target.URL, addrs []netip.Addr, token string) (string, error)
+} = &verify.Checker{}
 
 func isURL(s string) bool {
 	l := strings.ToLower(s)
 	return strings.HasPrefix(l, "http://") || strings.HasPrefix(l, "https://")
 }
 
-// scanURL applies the target rules of ADR 0005. In M2.1 no active plugin
-// exists yet, so an allowed target ends with that message; nothing is sent
-// to the target.
+// scanURL applies the target rules of ADR 0005. Deployed mode checks proof
+// of control (a GET of the well-known file from the pinned addresses, or a
+// DNS TXT lookup) before asking for confirmation. No active plugin exists
+// yet, so an allowed target ends with that message; no test traffic is sent.
 func scanURL(raw string, deployed bool, authorizedHost string, stdout, stderr io.Writer) int {
 	refuse := func(format string, a ...any) int {
 		fmt.Fprintf(stderr, "siegekit scan: refused: "+format+"\n", a...)
@@ -51,10 +60,34 @@ func scanURL(raw string, deployed bool, authorizedHost string, stdout, stderr io
 	if !d.Allowed {
 		return refuse("%s", d.Reason)
 	}
-	if d.NeedsProof {
-		return refuse("deployed mode needs proof of control, which arrives in the next release step (M2.2)")
-	}
 	verification := "loopback"
+	proof := ""
+	if d.NeedsProof {
+		// ADR 0005: a person types the host name. A flag would let a script
+		// or an AI assistant confirm a live system on its own.
+		if authorizedHost != "" {
+			return refuse("--authorized-host is not accepted for deployed targets; the person running SiegeKit types the host name in a terminal")
+		}
+		if !stdinIsTerminal() {
+			return refuse("deployed targets need the host name typed in a terminal; run this command yourself in a terminal (an AI assistant should ask you to)")
+		}
+		dir, err := dataDir()
+		if err != nil {
+			return refuse("%v", err)
+		}
+		token, err := verify.Token(filepath.Join(dir, "verify"), u.Host)
+		if err != nil {
+			return refuse("%v", err)
+		}
+		method, err := prover.Check(ctx, u, d.Addrs, token)
+		if err != nil {
+			fmt.Fprintf(stdout, "\n%s\n\n", verify.Instructions(u, token))
+			return refuse("%v", err)
+		}
+		fmt.Fprintf(stdout, "Proof of control found: %s.\n", method)
+		fmt.Fprint(stdout, "Before testing a deployed system, check your hosting provider's penetration-testing policy (some require notice or forbid some tests), and prefer a staging copy over production.\n")
+		proof = method + " + "
+	}
 	if d.NeedsConfirmation {
 		fmt.Fprintf(stdout, "%s. Only continue if you are authorized to test it.\n", d.Reason)
 		verification = "typed confirmation"
@@ -76,7 +109,8 @@ func scanURL(raw string, deployed bool, authorizedHost string, stdout, stderr io
 	} else if authorizedHost != "" && !target.Confirmed(u, authorizedHost) {
 		return refuse("--authorized-host %q does not match the target host %q", authorizedHost, u.Host)
 	}
-	fmt.Fprintf(stdout, "Target allowed (%s). No active web test is available yet: they arrive in M2.4, after the egress proxy. Nothing was sent to the target.\n", verification)
+	verification = proof + verification
+	fmt.Fprintf(stdout, "Target allowed (%s). No active web test is available yet: they arrive in M2.4, after the egress proxy. No test traffic was sent to the target.\n", verification)
 	return exitOK
 }
 

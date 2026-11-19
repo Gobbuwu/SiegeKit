@@ -53,6 +53,14 @@ machine is allowed, a private network address needs you to type its host
 name (or pass it with --authorized-host), and public systems need --deployed
 and proof that you control them. Active web tests arrive later in M2.
 
+With --deployed, SiegeKit gives you a token for the host the first time and
+checks it at the start of every run: publish it at
+/.well-known/siegekit-verify.txt on the target's origin, or as a DNS TXT
+record on _siegekit-verify.HOST. There is no flag to skip this check, and
+the host name must then be typed in a terminal (--authorized-host is only
+for private addresses), so a script or AI assistant cannot confirm a live
+system on its own.
+
 Flags:
   --only a,b        run only these plugins
   --skip a,b        do not run these plugins
@@ -69,6 +77,7 @@ Flags:
   --authorized-host HOST
                     confirm without a terminal that you are authorized to
                     test HOST; must match the URL's host exactly
+                    (private addresses only, not --deployed)
   --require-all     treat tests skipped for a missing dependency as an
                     incomplete run (exit code 4 unless there are findings)
 
