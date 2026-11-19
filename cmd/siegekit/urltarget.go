@@ -104,7 +104,7 @@ func scanURL(raw string, deployed bool, authorizedHost string, stdout, stderr io
 				return refuse("the typed host name did not match %q", u.Host)
 			}
 		default:
-			return refuse("confirmation needed and there is no terminal to ask in; pass --authorized-host %s", u.Host)
+			return refuse("confirmation needed and there is no terminal to ask in; run this command yourself in a terminal, or pass --authorized-host %s if you (the person, not an AI assistant on its own) authorize this host", u.Host)
 		}
 	} else if authorizedHost != "" && !target.Confirmed(u, authorizedHost) {
 		return refuse("--authorized-host %q does not match the target host %q", authorizedHost, u.Host)

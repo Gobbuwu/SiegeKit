@@ -20,6 +20,7 @@
       }
     ],
     "confidence": "high",
+    "helpUri": "https://bandit.readthedocs.io/en/1.9.4/blacklists/blacklist_imports.html#b404-import-subprocess",
     "fingerprint": "55e7a30bb447976836307662c6d388eb"
   },
   {
@@ -43,6 +44,7 @@
       }
     ],
     "confidence": "high",
+    "helpUri": "https://bandit.readthedocs.io/en/1.9.4/plugins/b602_subprocess_popen_with_shell_equals_true.html",
     "fingerprint": "fe5eb13f2fbefb8fc6c045d37e893822"
   },
   {
@@ -66,6 +68,7 @@
       }
     ],
     "confidence": "medium",
+    "helpUri": "https://bandit.readthedocs.io/en/1.9.4/plugins/b105_hardcoded_password_string.html",
     "fingerprint": "99e67b7fe115878b1ab5de548e5b25ca"
   }
 ]

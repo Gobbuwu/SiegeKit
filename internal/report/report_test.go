@@ -2,6 +2,7 @@ package report
 
 import (
 	"bytes"
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
@@ -104,5 +105,29 @@ func TestSARIFRoundTrip(t *testing.T) {
 	}
 	if len(fs) != 1 || fs[0].Fingerprint != f.Fingerprint || fs[0].Severity != findings.High {
 		t.Fatalf("round trip mismatch: %+v", fs)
+	}
+}
+
+func TestAgentFacingFields(t *testing.T) {
+	f := findings.Finding{RuleID: "B602", Title: "shell", Severity: findings.High, Location: findings.Location{URI: "a.py", StartLine: 3},
+		HelpURI: "https://bandit.readthedocs.io/x?a=1&b=2", Sources: []findings.Source{{Plugin: "bandit", RuleID: "B602"}}}
+	f.ComputeFingerprint()
+	var j, s, h bytes.Buffer
+	if err := WriteJSON(&j, run(Ran, f)); err != nil {
+		t.Fatal(err)
+	}
+	var got struct {
+		SchemaVersion int `json:"schemaVersion"`
+		Target        string
+		Findings      []findings.Finding
+	}
+	if err := json.Unmarshal(j.Bytes(), &got); err != nil || got.SchemaVersion != SchemaVersion || got.Target != "./app" || got.Findings[0].HelpURI != f.HelpURI {
+		t.Fatalf("report.json: %+v %v\n%s", got, err, j.String())
+	}
+	if err := WriteSARIF(&s, run(Ran, f)); err != nil || !strings.Contains(s.String(), `"helpUri": "https://bandit.readthedocs.io/x?a=1\u0026b=2"`) {
+		t.Errorf("SARIF rule has no helpUri: %v\n%s", err, s.String())
+	}
+	if err := WriteHTML(&h, run(Ran, f)); err != nil || !strings.Contains(h.String(), `<a href="https://bandit.readthedocs.io/x?a=1&amp;b=2" rel="noreferrer">`) {
+		t.Errorf("HTML has no help link: %v", err)
 	}
 }

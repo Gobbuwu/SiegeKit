@@ -47,6 +47,7 @@ type Rule struct {
 	ID               string         `json:"id"`
 	Name             string         `json:"name"`
 	ShortDescription *Message       `json:"shortDescription"`
+	HelpURI          string         `json:"helpUri"`
 	Properties       map[string]any `json:"properties"`
 }
 
@@ -149,6 +150,7 @@ func ToFindings(l *Log, opt Options) ([]findings.Finding, error) {
 				Message:  res.Message.Text,
 				Severity: adjust(opt.Parser, severity(res, rule)),
 				CWEs:     cwes(rule),
+				HelpURI:  findings.SafeHelpURI(rule.HelpURI),
 				Family:   opt.Family,
 				Sources:  []findings.Source{{Plugin: opt.Plugin, RuleID: ruleID}},
 			}

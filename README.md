@@ -21,6 +21,10 @@ Downloads are the only steps that use the network, and they run without access t
 
 The scan writes `report.html`, `report.json` and `report.sarif` to `./siegekit-report` and saves a copy of the run under `~/.local/share/siegekit/runs`. Each tool runs in a container with no network and read-only access to your directory. Exit codes: 0 no findings at or above `--fail-on` (default high), 3 findings, 4 a check failed or timed out, 1 an error, 2 a usage error.
 
+## Using SiegeKit with an AI coding assistant
+
+If an AI assistant (Claude Code, Cursor, Copilot and others) works on your app, ask it to run `siegekit agents` first. That prints a guide to the commands, exit codes and `report.json`, and to a loop for fixing findings. The assistant can run scans and fix what they find. You stay in charge of what gets tested and downloaded: SiegeKit asks you before installing anything, and a deployed site needs you to type its host name in your own terminal.
+
 ## What a clean scan means
 
 A SiegeKit run with no findings means the automated checks that ran found nothing. It does not mean your app is secure: scanners miss access-control, business-logic and design flaws. Every report shows what was and was not tested; use the [pre-deploy checklist](docs/pre-deploy-checklist.md) for the rest.

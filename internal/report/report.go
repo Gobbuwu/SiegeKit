@@ -127,8 +127,15 @@ func (r *Run) ExitCode(threshold findings.Severity) int {
 func WriteJSON(w io.Writer, r *Run) error {
 	enc := json.NewEncoder(w)
 	enc.SetIndent("", "  ")
-	return enc.Encode(r)
+	return enc.Encode(struct {
+		SchemaVersion int `json:"schemaVersion"`
+		*Run
+	}{SchemaVersion, r})
 }
+
+// SchemaVersion is the report.json format version. It changes only when a
+// field is removed or changes meaning; new fields keep the version.
+const SchemaVersion = 1
 
 // WriteSARIF writes the deduplicated findings as one SARIF 2.1.0 log with a
 // single "SiegeKit" run, so code hosts and IDEs can read them.
@@ -139,6 +146,7 @@ func WriteSARIF(w io.Writer, r *Run) error {
 	type rule struct {
 		ID               string         `json:"id"`
 		ShortDescription msg            `json:"shortDescription"`
+		HelpURI          string         `json:"helpUri,omitempty"`
 		Properties       map[string]any `json:"properties,omitempty"`
 	}
 	type region struct {
@@ -174,7 +182,7 @@ func WriteSARIF(w io.Writer, r *Run) error {
 			if len(f.CWEs) > 0 {
 				props = map[string]any{"tags": f.CWEs}
 			}
-			rules = append(rules, rule{ID: f.RuleID, ShortDescription: msg{f.Title}, Properties: props})
+			rules = append(rules, rule{ID: f.RuleID, ShortDescription: msg{f.Title}, HelpURI: f.HelpURI, Properties: props})
 		}
 		res := result{
 			RuleID:              f.RuleID,
@@ -278,7 +286,7 @@ code,pre{font:13px ui-monospace,monospace;white-space:pre-wrap;word-break:break-
 <p>{{.Message}}</p>
 <p><code>{{.Location.URI}}{{if .Location.StartLine}}:{{.Location.StartLine}}{{end}}</code>{{if .CWEs}} · {{range $i, $c := .CWEs}}{{if $i}}, {{end}}{{$c}}{{end}}{{end}}</p>
 {{if .Snippet}}<pre>{{.Snippet}}</pre>{{end}}
-<p>Reported by: {{range $i, $s := .Sources}}{{if $i}}, {{end}}{{$s.Plugin}} ({{$s.RuleID}}){{end}}</p>
+<p>Reported by: {{range $i, $s := .Sources}}{{if $i}}, {{end}}{{$s.Plugin}} ({{$s.RuleID}}){{end}}{{if .HelpURI}} · <a href="{{.HelpURI}}" rel="noreferrer">About this rule</a>{{end}}</p>
 {{else}}<p>None reported by the checks that ran.</p>{{end}}
 </body>
 </html>

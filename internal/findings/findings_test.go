@@ -97,3 +97,29 @@ func TestRedactCredentials(t *testing.T) {
 		t.Errorf("unrelated finding changed: %+v", other)
 	}
 }
+
+func TestSafeHelpURI(t *testing.T) {
+	for u, want := range map[string]bool{
+		"https://bandit.readthedocs.io/en/1.9.4/plugins/b602.html": true,
+		"http://example.com/rule":                                  false,
+		"javascript:alert(1)":                                      false,
+		"https://user:pw@example.com/":                             false,
+		"https:opaque":                                             false,
+		"/relative":                                                false,
+		"https://example.com/" + strings.Repeat("a", 2048):         false,
+	} {
+		if got := SafeHelpURI(u) != ""; got != want {
+			t.Errorf("%.60q: kept %v, want %v", u, got, want)
+		}
+	}
+}
+
+func TestDedupeKeepsHelpURI(t *testing.T) {
+	a := Finding{RuleID: "x", CWEs: []string{"CWE-89"}, Location: Location{URI: "a.py", StartLine: 1}, Sources: []Source{{"semgrep", "x"}}}
+	b := a
+	b.Sources = []Source{{"bandit", "B608"}}
+	b.HelpURI = "https://example.com/b608"
+	if out := Dedupe([]Finding{a, b}); len(out) != 1 || out[0].HelpURI != b.HelpURI {
+		t.Fatalf("help link lost: %+v", out)
+	}
+}
