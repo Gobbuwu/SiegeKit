@@ -152,7 +152,7 @@ func TestPinnedImageVersions(t *testing.T) {
 	unversioned := map[string]bool{"gosec": true}
 	versionArgs := map[string][]string{
 		"bandit": {"--version"}, "checkov": {"--version"}, "gitleaks": {"version"},
-		"gosec": {"-fmt", "sarif", "-out", "/out/v.sarif", "-no-fail", "/target/..."}, "trivy": {"--version"},
+		"gosec": {"-fmt", "sarif", "-out", "/out/v.sarif", "-no-fail", "/target/..."}, "trivy": {"--version"}, "gitleaks-history": {"version"},
 	}
 	all, err := plugins.Builtin()
 	if err != nil {
