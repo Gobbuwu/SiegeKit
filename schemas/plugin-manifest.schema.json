@@ -136,11 +136,22 @@
               },
               "ref": {
                 "type": "string",
-                "description": "For oci-image: an image reference pinned by digest. For archive and binary: an HTTPS download URL."
+                "description": "For oci-image: an image reference pinned by digest. For archive and binary: an https://github.com/ download URL of the publisher's release (ADR 0024)."
               },
               "sha256": {
                 "type": "string",
                 "pattern": "^[a-f0-9]{64}$"
+              },
+              "size": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 1073741824,
+                "description": "Archives and binaries only: the exact download size in bytes (ADR 0024)."
+              },
+              "mount": {
+                "type": "string",
+                "pattern": "^/siegekit/files/[a-z0-9][a-z0-9._-]*$",
+                "description": "Archives and binaries only: where the unpacked file is mounted read-only (ADR 0024)."
               }
             },
             "allOf": [
@@ -157,6 +168,20 @@
                     "ref": {
                       "pattern": "^[a-z0-9.-]+(:[0-9]+)?/[^@\\s]+@sha256:[a-f0-9]{64}$"
                     }
+                  },
+                  "not": {
+                    "anyOf": [
+                      {
+                        "required": [
+                          "size"
+                        ]
+                      },
+                      {
+                        "required": [
+                          "mount"
+                        ]
+                      }
+                    ]
                   }
                 }
               },
@@ -174,7 +199,27 @@
                 "then": {
                   "properties": {
                     "ref": {
-                      "pattern": "^https://[^\\s]+$"
+                      "pattern": "^https://github\\.com/[^?#\\s]+$"
+                    }
+                  },
+                  "required": [
+                    "mount",
+                    "size"
+                  ]
+                }
+              },
+              {
+                "if": {
+                  "properties": {
+                    "kind": {
+                      "const": "archive"
+                    }
+                  }
+                },
+                "then": {
+                  "properties": {
+                    "ref": {
+                      "pattern": "\\.(tar\\.gz|tgz|zip)$"
                     }
                   }
                 }

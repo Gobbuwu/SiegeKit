@@ -5,7 +5,9 @@ import (
 	"context"
 	"errors"
 	"os"
+	"path"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -61,7 +63,7 @@ func TestPlanAndInstall(t *testing.T) {
 	ms := trivy(t)
 	root := t.TempDir()
 	e := &eng{have: map[string]bool{}}
-	ds, err := Plan(context.Background(), e, ms, root)
+	ds, err := Plan(context.Background(), e, ms, Roots{Data: root})
 	if err != nil || len(ds) != 2 || ds[0].Kind != Image || ds[1].Kind != Data || ds[0].Installed || ds[1].Installed {
 		t.Fatalf("plan %+v %v", ds, err)
 	}
@@ -76,7 +78,7 @@ func TestPlanAndInstall(t *testing.T) {
 	}
 	// Data was chosen but its image was not: nothing is downloaded and the
 	// reason names the image.
-	un, err := Install(context.Background(), e, noRun{t}, ds, ds[1:], root, func(d Dep) string { return "declined " + d.Name() }, &out)
+	un, err := Install(context.Background(), e, noRun{t}, ds, ds[1:], Roots{Data: root}, func(d Dep) string { return "declined " + d.Name() }, &out)
 	if err != nil || un["trivy"].Status != report.Skipped || un["trivy"].Reason != "declined trivy 0.76.2 container image" || e.pulled != 0 {
 		t.Errorf("install %+v %v pulled %d", un, err, e.pulled)
 	}
@@ -182,7 +184,7 @@ func TestPlanSharedImageAndHostTool(t *testing.T) {
 	e := &eng{have: map[string]bool{}}
 	img, _ := runner.ImageFor(ms[2])
 	e.have[img] = true // checkov installed
-	ds, err := Plan(context.Background(), e, ms, "")
+	ds, err := Plan(context.Background(), e, ms, Roots{})
 	if err != nil || len(ds) != 2 {
 		t.Fatalf("plan %+v %v", ds, err)
 	}
@@ -213,7 +215,7 @@ func TestPlanSharedImageAndHostTool(t *testing.T) {
 	if strings.Contains(out.String(), "Missing") {
 		t.Errorf("describe: %s", out.String())
 	}
-	if _, err := Plan(context.Background(), &hasErr{}, ms, ""); err == nil {
+	if _, err := Plan(context.Background(), &hasErr{}, ms, Roots{}); err == nil {
 		t.Error("engine error not returned")
 	}
 }
@@ -224,7 +226,7 @@ func TestInstallPullsAndUpdates(t *testing.T) {
 	ms := builtins(t, "trivy", "gitleaks")
 	root := filepath.Join(t.TempDir(), "data")
 	e := &eng{have: map[string]bool{}}
-	ds, err := Plan(context.Background(), e, ms, root)
+	ds, err := Plan(context.Background(), e, ms, Roots{Data: root})
 	if err != nil || len(ds) != 3 {
 		t.Fatalf("plan %+v %v", ds, err)
 	}
@@ -232,7 +234,7 @@ func TestInstallPullsAndUpdates(t *testing.T) {
 	never := func(Dep) string { t.Error("everything was chosen"); return "" }
 
 	// Everything chosen, data update fails: trivy fails, gitleaks is fine.
-	un, err := Install(context.Background(), e, dataRun{ok: false}, ds, ds, root, never, &out)
+	un, err := Install(context.Background(), e, dataRun{ok: false}, ds, ds, Roots{Data: root}, never, &out)
 	if err != nil || e.pulled != 2 || len(un) != 1 || un["trivy"].Status != report.Failed || !strings.Contains(un["trivy"].Reason, "could not download data") {
 		t.Fatalf("install %+v %v pulled %d", un, err, e.pulled)
 	}
@@ -241,16 +243,16 @@ func TestInstallPullsAndUpdates(t *testing.T) {
 	}
 
 	// Images now installed; the data update succeeds.
-	ds, _ = Plan(context.Background(), e, ms, root)
-	un, err = Install(context.Background(), e, dataRun{ok: true}, ds, ds, root, never, &out)
+	ds, _ = Plan(context.Background(), e, ms, Roots{Data: root})
+	un, err = Install(context.Background(), e, dataRun{ok: true}, ds, ds, Roots{Data: root}, never, &out)
 	if err != nil || len(un) != 0 || !dataInstalled(root, "trivy") {
 		t.Errorf("install %+v %v, data installed %v", un, err, dataInstalled(root, "trivy"))
 	}
 
 	// Data chosen but no data directory known.
 	empty := &eng{have: map[string]bool{}}
-	ds, _ = Plan(context.Background(), empty, ms[:1], "")
-	if _, err := Install(context.Background(), empty, dataRun{ok: true}, ds, ds, "", never, &out); err == nil {
+	ds, _ = Plan(context.Background(), empty, ms[:1], Roots{})
+	if _, err := Install(context.Background(), empty, dataRun{ok: true}, ds, ds, Roots{}, never, &out); err == nil {
 		t.Error("no error without a data directory")
 	}
 }
@@ -260,12 +262,12 @@ func TestInstallPullFailure(t *testing.T) {
 	t.Cleanup(func() { LookPath = defaultLookPath })
 	ms := builtins(t, "trivy", "gitleaks", "gitleaks-history")
 	e := &pullFail{eng: eng{have: map[string]bool{}}, err: errors.New("registry unreachable")}
-	ds, err := Plan(context.Background(), e, ms, t.TempDir())
+	ds, err := Plan(context.Background(), e, ms, Roots{Data: t.TempDir()})
 	if err != nil {
 		t.Fatal(err)
 	}
 	var out bytes.Buffer
-	un, err := Install(context.Background(), e, noRun{t}, ds, ds, t.TempDir(), func(Dep) string { return "" }, &out)
+	un, err := Install(context.Background(), e, noRun{t}, ds, ds, Roots{Data: t.TempDir()}, func(Dep) string { return "" }, &out)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -282,7 +284,7 @@ func TestInstallPullFailure(t *testing.T) {
 	// A cancelled run returns the context error, not a per-plugin failure.
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if _, err := Install(ctx, e, noRun{t}, ds, ds, t.TempDir(), func(Dep) string { return "" }, &out); !errors.Is(err, context.Canceled) {
+	if _, err := Install(ctx, e, noRun{t}, ds, ds, Roots{Data: t.TempDir()}, func(Dep) string { return "" }, &out); !errors.Is(err, context.Canceled) {
 		t.Errorf("cancelled: %v", err)
 	}
 }
@@ -292,5 +294,93 @@ func TestNoEngine(t *testing.T) {
 	un := NoEngine(ms, "no engine")
 	if len(un) != 2 || un["trivy"].Status != report.Skipped || un["gitleaks"].Reason != "no engine" {
 		t.Errorf("%+v", un)
+	}
+}
+
+// fileTool returns a plugin with an image and the given pinned files.
+func fileTool(id string, as ...manifest.Artifact) *manifest.Manifest {
+	arts := []manifest.Artifact{{Platform: "any", Kind: "oci-image", Ref: "docker.io/library/alpine@sha256:" + strings.Repeat("a", 64), SHA256: strings.Repeat("a", 64)}}
+	return &manifest.Manifest{ID: id, Tool: &manifest.Tool{Name: "tool", Version: "1.0.0", Artifacts: append(arts, as...)}}
+}
+
+func TestFiles(t *testing.T) {
+	LookPath = func(string) (string, error) { return "", errors.New("none") }
+	t.Cleanup(func() { LookPath = defaultLookPath; FetchFile = defaultFetchFile })
+	shared := manifest.Artifact{Platform: "any", Kind: "archive", Ref: "https://github.com/o/r/releases/download/v1/list.tar.gz", SHA256: strings.Repeat("1", 64), Size: 3 << 20, Mount: "/siegekit/files/list"}
+	own := manifest.Artifact{Platform: "linux/" + runtime.GOARCH, Kind: "binary", Ref: "https://github.com/o/r/releases/download/v1/tool", SHA256: strings.Repeat("2", 64), Size: 2048, Mount: "/siegekit/files/tool"}
+	other := manifest.Artifact{Platform: "darwin/arm64", Kind: "binary", Ref: "https://github.com/o/r/releases/download/v1/tool-mac", SHA256: strings.Repeat("3", 64), Size: 2048, Mount: "/siegekit/files/tool"}
+	p1, p2 := fileTool("p1", shared, own, other), fileTool("p2", shared)
+	e := &eng{have: map[string]bool{}}
+	e.have["docker.io/library/alpine@sha256:"+strings.Repeat("a", 64)] = true
+	root := t.TempDir()
+	ds, err := Plan(context.Background(), e, []*manifest.Manifest{p1, p2}, Roots{Files: root})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// One image (shared), the shared list once, the linux binary; never the
+	// file for another platform.
+	if len(ds) != 3 || ds[1].Kind != File || ds[1].NeededBy() != "p1, p2" || ds[2].Artifact.SHA256 != own.SHA256 || ds[1].Size != 3<<20 {
+		t.Fatalf("plan %+v", ds)
+	}
+	var out bytes.Buffer
+	Describe(&out, ds)
+	for _, want := range []string{"1. tool 1.0.0 file list.tar.gz (3 MiB download), needed by: p1, p2", "2. tool 1.0.0 file tool (2 KiB download), needed by: p1"} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("describe lacks %q:\n%s", want, out.String())
+		}
+	}
+	// Two files of one plugin are two choices.
+	missing := Missing(ds)
+	if got, ok := parseAnswer("1,2,2", missing); !ok || len(got) != 2 {
+		t.Errorf("answer: %d %v", len(got), ok)
+	}
+
+	// The shared list is declined and the binary fails: p1 keeps the first
+	// reason, p2 is skipped.
+	var fetched []string
+	FetchFile = func(_ context.Context, r string, a manifest.Artifact) error {
+		fetched = append(fetched, path.Base(a.Ref))
+		if r != root {
+			t.Errorf("root %q", r)
+		}
+		if path.Base(a.Ref) == "tool" {
+			return errors.New("SHA-256 mismatch")
+		}
+		return nil
+	}
+	un, err := Install(context.Background(), e, noRun{t}, ds, missing[1:], Roots{Files: root}, func(d Dep) string { return "declined " + d.Name() }, &out)
+	if err != nil || len(fetched) != 1 || fetched[0] != "tool" {
+		t.Fatalf("install %v fetched %v", err, fetched)
+	}
+	if un["p1"].Reason != "declined tool 1.0.0 file list.tar.gz" || un["p2"].Status != report.Skipped {
+		t.Errorf("unavailable %+v", un)
+	}
+	// All chosen, the binary fails: only p1 fails, with the reason.
+	un, err = Install(context.Background(), e, noRun{t}, ds, missing, Roots{Files: root}, nil, &out)
+	if err != nil || un["p1"].Status != report.Failed || !strings.Contains(un["p1"].Reason, "could not install tool 1.0.0 file tool: SHA-256 mismatch") {
+		t.Errorf("install %+v %v", un, err)
+	}
+	if _, ok := un["p2"]; ok {
+		t.Errorf("p2 marked: %+v", un)
+	}
+	// No directory for files.
+	if _, err := Install(context.Background(), e, noRun{t}, ds, missing, Roots{}, nil, &out); err == nil {
+		t.Error("no error without a files directory")
+	}
+	// A cancelled download is the context error.
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := Install(ctx, e, noRun{t}, ds, missing, Roots{Files: root}, nil, &out); !errors.Is(err, context.Canceled) {
+		t.Errorf("cancelled: %v", err)
+	}
+	// Installed only with the unpacked directory and its marker.
+	os.Mkdir(filepath.Join(root, own.SHA256), 0o755)
+	os.WriteFile(filepath.Join(root, own.SHA256+".ok"), nil, 0o600)
+	ds, _ = Plan(context.Background(), e, []*manifest.Manifest{p1, p2}, Roots{Files: root})
+	if !ds[2].Installed || ds[1].Installed {
+		t.Errorf("installed: %+v", ds)
+	}
+	if ds, _ = Plan(context.Background(), e, []*manifest.Manifest{p1}, Roots{}); ds[2].Installed {
+		t.Error("installed without a files directory")
 	}
 }

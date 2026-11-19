@@ -53,6 +53,8 @@ func ToolIdentity(uid, gid int) (int, int) {
 	return uid, gid
 }
 
+var reFilesMount = regexp.MustCompile(`^/siegekit/files/[a-z0-9][a-z0-9._-]*$`)
+
 var reDataMount = regexp.MustCompile(`^/(tmp|data)(/[a-z0-9_-][a-z0-9._-]*)+$`)
 
 var reImage = regexp.MustCompile(`^[a-z0-9.-]+(:[0-9]+)?/[^@\s]+@sha256:[a-f0-9]{64}$`)
@@ -76,16 +78,26 @@ type Spec struct {
 	DataDir      string // host directory with the tool's data; empty for none
 	DataMount    string // where DataDir is mounted; read-only unless DataWritable
 	DataWritable bool   // only for update runs
-	CPUs         int
-	MemoryMiB    int
-	PidsLimit    int // 0 means 256
-	Timeout      time.Duration
-	OutputLimit  int64 // bytes; 0 means DefaultOutputLimit
+	// Files are pinned downloads (ADR 0024), each a host directory mounted
+	// read-only under FilesMount.
+	Files       []FileMount
+	CPUs        int
+	MemoryMiB   int
+	PidsLimit   int // 0 means 256
+	Timeout     time.Duration
+	OutputLimit int64 // bytes; 0 means DefaultOutputLimit
 	// Env is extra environment for the tool; see CheckEnv.
 	Env map[string]string
 	// TmpMiB is the size of the in-memory /tmp; 0 means 256. Its pages count
 	// against MemoryMiB, so it cannot exceed the memory limit.
 	TmpMiB int
+}
+
+// FileMount is a host directory mounted read-only at Mount, which must be
+// FilesMount + "/" + a name.
+type FileMount struct {
+	Host  string
+	Mount string
 }
 
 // Status of a finished run.
@@ -173,6 +185,16 @@ func (s *Spec) validate() error {
 	if s.DataMount != "" {
 		if !reDataMount.MatchString(s.DataMount) || s.DataMount == WorkDir || strings.HasPrefix(s.DataMount, WorkDir+"/") {
 			return fmt.Errorf("data mount %q must be a path under /tmp or /data", s.DataMount)
+		}
+	}
+	seen := map[string]bool{}
+	for _, f := range s.Files {
+		if !reFilesMount.MatchString(f.Mount) || seen[f.Mount] {
+			return fmt.Errorf("file mount %q must be a distinct path %s/NAME", f.Mount, FilesMount)
+		}
+		seen[f.Mount] = true
+		if err := checkMountPath(f.Host); err != nil {
+			return fmt.Errorf("file directory: %w", err)
 		}
 	}
 	if s.CPUs < 1 || s.MemoryMiB < 64 || s.Timeout <= 0 {
@@ -301,6 +323,9 @@ func (s *Spec) EngineArgs(name string, uid, gid int) ([]string, error) {
 			m += ",readonly"
 		}
 		args = append(args, "--mount", m)
+	}
+	for _, f := range s.Files {
+		args = append(args, "--mount", "type=bind,source="+f.Host+",target="+f.Mount+",readonly")
 	}
 	args = append(args, s.Image)
 	args = append(args, s.Args...)
@@ -547,6 +572,8 @@ const (
 	CAMount     = "/siegekit/ca.pem"
 	// ConfigMount is where Spec.ConfigFile is mounted (ADR 0023).
 	ConfigMount = "/siegekit/config.json"
+	// FilesMount holds the pinned downloads of a plugin (ADR 0024).
+	FilesMount = "/siegekit/files"
 )
 
 var (

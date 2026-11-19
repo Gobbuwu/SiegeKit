@@ -10,7 +10,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
+	"path"
 	"regexp"
 	"slices"
 	"sort"
@@ -23,6 +25,9 @@ import (
 const MaxFileSize = 64 * 1024
 
 // Allowed enum values. Tests check these against the JSON Schema.
+// MaxFileDownload caps an archive or binary download (ADR 0024).
+const MaxFileDownload = 1 << 30
+
 var (
 	Families   = []string{"sast", "sca", "secrets", "iac", "dast", "fuzz", "credential-audit"}
 	Modes      = []string{"passive", "active", "offline"}
@@ -42,6 +47,7 @@ var (
 	reID           = regexp.MustCompile(`^[a-z][a-z0-9-]{1,39}$`)
 	reSemver       = regexp.MustCompile(`^[0-9]+\.[0-9]+\.[0-9]+$`)
 	reHTTPS        = regexp.MustCompile(`^https://[^\s]+$`)
+	reFilesMount   = regexp.MustCompile(`^/siegekit/files/[a-z0-9][a-z0-9._-]*$`)
 	reOCI          = regexp.MustCompile(`^[a-z0-9.-]+(:[0-9]+)?/[^@\s]+@sha256:[a-f0-9]{64}$`)
 	reSHA256       = regexp.MustCompile(`^[a-f0-9]{64}$`)
 	reArg          = regexp.MustCompile(`^([^{}]|\{(` + strings.Join(Placeholds, "|") + `)\})*$`)
@@ -124,6 +130,11 @@ type Artifact struct {
 	Kind     string `json:"kind"`
 	Ref      string `json:"ref"`
 	SHA256   string `json:"sha256"`
+	// Size is the exact download size in bytes, and Mount the directory under
+	// /siegekit/files where the unpacked file is mounted read-only. Both are
+	// required for archives and binaries (ADR 0024).
+	Size  int64  `json:"size,omitempty"`
+	Mount string `json:"mount,omitempty"`
 }
 
 // Resources are the limits a plugin runs under.
@@ -399,8 +410,16 @@ func (m *Manifest) validateTool(p *[]string) {
 	if len(t.Artifacts) == 0 {
 		*p = append(*p, "tool.artifacts must list at least one artifact")
 	}
+	hasImage, hasFile := false, false
+	mounts := map[string]string{}
 	for i, a := range t.Artifacts {
 		f := fmt.Sprintf("tool.artifacts[%d]", i)
+		if a.Mount != "" {
+			if prev, ok := mounts[a.Platform+" "+a.Mount]; ok {
+				*p = append(*p, fmt.Sprintf("%s.mount %s is also used by %s", f, a.Mount, prev))
+			}
+			mounts[a.Platform+" "+a.Mount] = f
+		}
 		checkEnum(p, f+".platform", a.Platform, Platforms)
 		checkEnum(p, f+".kind", a.Kind, Kinds)
 		switch a.Kind {
@@ -411,13 +430,35 @@ func (m *Manifest) validateTool(p *[]string) {
 				*p = append(*p, fmt.Sprintf("%s.sha256 must equal the image digest in ref", f))
 			}
 		case "archive", "binary":
-			if !reHTTPS.MatchString(a.Ref) {
-				*p = append(*p, fmt.Sprintf("%s.ref must be an https:// URL", f))
+			// ADR 0024: pinned files come from the publisher's GitHub
+			// releases, with an exact size, and are mounted read-only.
+			u, err := url.Parse(a.Ref)
+			if !reHTTPS.MatchString(a.Ref) || err != nil || u.Host != "github.com" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
+				*p = append(*p, fmt.Sprintf("%s.ref must be an https://github.com/ URL with no query", f))
+			} else if base := path.Base(u.Path); a.Kind == "archive" && !strings.HasSuffix(base, ".tar.gz") && !strings.HasSuffix(base, ".tgz") && !strings.HasSuffix(base, ".zip") {
+				*p = append(*p, fmt.Sprintf("%s.ref must name a .tar.gz, .tgz or .zip archive", f))
+			}
+			if a.Size < 1 || a.Size > MaxFileDownload {
+				*p = append(*p, fmt.Sprintf("%s.size must be 1 to %d bytes", f, MaxFileDownload))
+			}
+			if !reFilesMount.MatchString(a.Mount) {
+				*p = append(*p, fmt.Sprintf("%s.mount must be /siegekit/files/NAME", f))
+			}
+			hasFile = true
+		}
+		if a.Kind == "oci-image" {
+			hasImage = true
+			if a.Size != 0 || a.Mount != "" {
+				*p = append(*p, fmt.Sprintf("%s: size and mount are only for archives and binaries", f))
 			}
 		}
 		if !reSHA256.MatchString(a.SHA256) {
 			*p = append(*p, fmt.Sprintf("%s.sha256 must be 64 lowercase hex characters", f))
 		}
+	}
+	if hasFile && !hasImage {
+		// A downloaded binary runs inside a pinned image (ADR 0024).
+		*p = append(*p, "tool.artifacts: archives and binaries need an oci-image to run in")
 	}
 }
 

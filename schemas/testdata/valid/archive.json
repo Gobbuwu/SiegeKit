@@ -18,9 +18,25 @@
     "artifacts": [
       {
         "platform": "linux/arm64",
-        "kind": "archive",
-        "ref": "https://example.invalid/tool.tar.gz",
+        "kind": "oci-image",
+        "ref": "registry.example.invalid/runtime@sha256:0000000000000000000000000000000000000000000000000000000000000000",
         "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+      },
+      {
+        "platform": "linux/arm64",
+        "kind": "archive",
+        "ref": "https://github.com/example/tool/releases/download/v1.0.0/tool_linux_arm64.tar.gz",
+        "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+        "size": 4367536,
+        "mount": "/siegekit/files/tool"
+      },
+      {
+        "platform": "linux/arm64",
+        "kind": "binary",
+        "ref": "https://github.com/example/tool/releases/download/v1.0.0/tool-helper",
+        "sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+        "size": 1000,
+        "mount": "/siegekit/files/helper"
       }
     ]
   },

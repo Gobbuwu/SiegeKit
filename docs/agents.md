@@ -7,12 +7,12 @@ SiegeKit runs security checks on code and apps the person owns. The person stays
 ## Rules for assistants
 
 1. **Only scan what the person owns or is authorized to test.** Scan their own project directory, or a URL they gave you for their own app. Never pick a target on your own.
-2. **Ask before downloading.** Missing tool images and data can take gigabytes. Run without `--yes` first: with no terminal, nothing is installed, and the affected checks are reported as skipped. Tell the person what is missing and how big it is. Pass `--yes` only after they say yes, or use `--no-install`.
+2. **Ask before downloading.** Missing tool images, tool files and data can take gigabytes. Run without `--yes` first: with no terminal, nothing is installed, and the affected checks are reported as skipped. Tell the person what is missing and how big it is. Pass `--yes` only after they say yes, or use `--no-install`.
 3. **Never confirm a target for the person.**
    - A private network address (for example `192.168.x.x` or `nas.lan`) needs the host name typed in a terminal. In a terminal you cannot answer, `--authorized-host HOST` does the same, but use it only when the person told you, in this conversation, to scan that exact host.
    - A deployed (public) target with `--deployed` always needs the person to type the host name in their own terminal. SiegeKit refuses `--authorized-host` and runs without a terminal for deployed targets. Ask the person to run that command themselves.
 4. **Proof of control is the person's step.** For `--deployed`, SiegeKit prints a token to publish on the site or in DNS. Help publish it only when the person asks you to, and only for a host they told you they control. Never publish it on a host they did not name.
-5. **Do not edit SiegeKit's own data.** Leave `~/.local/share/siegekit` (tokens, the audit log, saved runs and tool data) alone.
+5. **Do not edit SiegeKit's own data.** Leave `~/.local/share/siegekit` (tokens, the audit log, saved runs, tool data and downloaded tool files) alone.
 6. **Never say the app is "secure".** No findings means the checks that ran found nothing. Tell the person which checks ran and which were skipped. Also point them to the "Not tested" list in `report.html` and the pre-deploy checklist (`docs/pre-deploy-checklist.md` in the SiegeKit repository).
 
 ## Commands

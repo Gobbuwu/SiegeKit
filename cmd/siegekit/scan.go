@@ -176,15 +176,16 @@ func scan(args []string, stdout, stderr io.Writer) int {
 	if err != nil {
 		return fail(err)
 	}
-	dataRoot := ""
+	var roots deps.Roots
 	if dir, err := dataDir(); err == nil {
-		dataRoot = filepath.Join(dir, "data")
+		roots = rootsIn(dir)
 	} else if !*noSave {
 		return fail(fmt.Errorf("%w (or use --no-save)", err))
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	ex, unavailable, fetched, err := prepare(ctx, selected, dataRoot, consent{yes: *yes, none: *noInstall}, stdout)
+	dataRoot := roots.Data
+	ex, unavailable, fetched, err := prepare(ctx, selected, roots, consent{yes: *yes, none: *noInstall}, stdout)
 	if err != nil {
 		return fail(err)
 	}
@@ -213,7 +214,7 @@ func scan(args []string, stdout, stderr io.Writer) int {
 		}
 	}
 	fmt.Fprintf(stdout, "Scanning %s with %d check(s).\n", target, len(selected)+len(builtins))
-	run, err := runner.Run(ctx, ex, selected, runner.Options{Version: version, TargetDir: target, DataRoot: dataRoot, Checks: builtins, Unavailable: unavailable})
+	run, err := runner.Run(ctx, ex, selected, runner.Options{Version: version, TargetDir: target, DataRoot: dataRoot, FilesRoot: roots.Files, Checks: builtins, Unavailable: unavailable})
 	if errors.Is(err, context.Canceled) {
 		return fail(errors.New("interrupted; no report written"))
 	}
@@ -314,7 +315,7 @@ type consent struct{ yes, none, data bool }
 // before installing missing ones (ADR 0016), and returns the plugins that
 // cannot run and those whose data was downloaded now. ex is nil when there
 // is no working engine.
-func prepare(ctx context.Context, selected []*manifest.Manifest, dataRoot string, c consent, out io.Writer) (ex engine, un map[string]runner.Unavailable, fetched map[string]bool, err error) {
+func prepare(ctx context.Context, selected []*manifest.Manifest, roots deps.Roots, c consent, out io.Writer) (ex engine, un map[string]runner.Unavailable, fetched map[string]bool, err error) {
 	if len(selected) == 0 {
 		return nil, nil, nil, nil
 	}
@@ -323,7 +324,7 @@ func prepare(ctx context.Context, selected []*manifest.Manifest, dataRoot string
 		fmt.Fprintln(out, deps.EngineHelp(runtime.GOOS))
 		return nil, deps.NoEngine(selected, "no container engine (Docker or Podman) found"), nil, nil
 	}
-	all, err := deps.Plan(ctx, eng, selected, dataRoot)
+	all, err := deps.Plan(ctx, eng, selected, roots)
 	if err != nil {
 		if ctx.Err() != nil {
 			return nil, nil, nil, ctx.Err()
@@ -380,7 +381,7 @@ func prepare(ctx context.Context, selected []*manifest.Manifest, dataRoot string
 		chosen = deps.Ask(stdin, out, missing)
 	}
 	chosen = append(chosen, auto...)
-	un, err = deps.Install(ctx, eng, eng, all, chosen, dataRoot, notChosen, out)
+	un, err = deps.Install(ctx, eng, eng, all, chosen, roots, notChosen, out)
 	if err != nil {
 		return nil, nil, nil, err
 	}
@@ -431,6 +432,12 @@ func splitList(s string) []string {
 		}
 	}
 	return out
+}
+
+// rootsIn returns where downloaded data and pinned files are kept under
+// SiegeKit's data directory dir.
+func rootsIn(dir string) deps.Roots {
+	return deps.Roots{Data: filepath.Join(dir, "data"), Files: filepath.Join(dir, "files")}
 }
 
 // dataDir is $XDG_DATA_HOME/siegekit, or ~/.local/share/siegekit.

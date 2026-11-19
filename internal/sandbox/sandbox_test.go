@@ -590,3 +590,77 @@ func TestRelayStartStop(t *testing.T) {
 		t.Errorf("second start in the same directory: %v", err)
 	}
 }
+
+func TestFileMounts(t *testing.T) {
+	s := spec(t, "true")
+	a, b := t.TempDir(), t.TempDir()
+	s.Files = []FileMount{{Host: a, Mount: "/siegekit/files/tool"}, {Host: b, Mount: "/siegekit/files/list"}}
+	args, err := s.EngineArgs("n", 1000, 1000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	joined := strings.Join(args, "|")
+	for _, want := range []string{
+		"type=bind,source=" + a + ",target=/siegekit/files/tool,readonly",
+		"type=bind,source=" + b + ",target=/siegekit/files/list,readonly",
+	} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("mount %q missing: %v", want, args)
+		}
+	}
+	for name, f := range map[string][]FileMount{
+		"same mount":    {{Host: a, Mount: "/siegekit/files/x"}, {Host: b, Mount: "/siegekit/files/x"}},
+		"outside files": {{Host: a, Mount: "/tmp/x"}},
+		"files itself":  {{Host: a, Mount: "/siegekit/files"}},
+		"nested":        {{Host: a, Mount: "/siegekit/files/x/y"}},
+		"traversal":     {{Host: a, Mount: "/siegekit/files/.."}},
+		"mount comma":   {{Host: a, Mount: "/siegekit/files/x,readonly=false"}},
+		"host comma":    {{Host: a + ",readonly=false", Mount: "/siegekit/files/x"}},
+		"host relative": {{Host: "files", Mount: "/siegekit/files/x"}},
+		"host missing":  {{Host: filepath.Join(a, "none"), Mount: "/siegekit/files/x"}},
+		"host unclean":  {{Host: a + "/../x", Mount: "/siegekit/files/x"}},
+	} {
+		bad := s
+		bad.Files = f
+		if _, err := bad.EngineArgs("n", 1000, 1000); err == nil {
+			t.Errorf("%s: %+v accepted", name, f)
+		}
+	}
+}
+
+// TestContainerFileMount checks that a pinned file runs and reads in the
+// container as its non-root user, and cannot be changed (ADR 0024). Fetch
+// leaves the unpacked directory at mode 0755, as here.
+func TestContainerFileMount(t *testing.T) {
+	e := engine(t)
+	dir := t.TempDir()
+	if err := os.Chmod(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "tool"), []byte("#!/bin/sh\necho tool-ran\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "words.txt"), []byte("admin\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	script := `
+/siegekit/files/tool/tool
+cat /siegekit/files/tool/words.txt
+(echo x > /siegekit/files/tool/words.txt) 2>/dev/null && echo "FILE-WRITABLE" || echo "file-readonly"
+(echo x > /siegekit/files/tool/new) 2>/dev/null && echo "DIR-WRITABLE" || echo "dir-readonly"
+`
+	s := spec(t, "sh", "-c", script)
+	s.Files = []FileMount{{Host: dir, Mount: "/siegekit/files/tool"}}
+	r := run(t, e, s)
+	if r.Status != Completed || r.ExitCode != 0 {
+		t.Fatalf("status %s exit %d: %s", r.Status, r.ExitCode, r.Stderr)
+	}
+	for _, want := range []string{"tool-ran", "admin", "file-readonly", "dir-readonly"} {
+		if !strings.Contains(r.Stderr, want) {
+			t.Errorf("missing %q in output:\n%s", want, r.Stderr)
+		}
+	}
+	if b, _ := os.ReadFile(filepath.Join(dir, "words.txt")); string(b) != "admin\n" {
+		t.Errorf("file changed: %q", b)
+	}
+}
