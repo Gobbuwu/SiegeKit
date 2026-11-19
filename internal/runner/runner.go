@@ -184,7 +184,7 @@ func Run(ctx context.Context, ex Executor, selected []*manifest.Manifest, opt Op
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		pr := report.PluginResult{ID: c.ID, Family: c.Family, Tool: "siegekit", Version: c.Version}
+		pr := report.PluginResult{ID: c.ID, Family: c.Family, Tool: "siegekit", Version: opt.Version}
 		fs, err := c.Run(ctx, opt.TargetDir)
 		if ctx.Err() != nil {
 			return nil, ctx.Err()

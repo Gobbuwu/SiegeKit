@@ -17,6 +17,7 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"net/netip"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -52,10 +53,17 @@ type Config struct {
 
 // Stats counts what the proxy did.
 type Stats struct {
-	Requests     int // forwarded to the target
+	Requests     int // answered by the target
 	Refused      int // refused requests and connections
 	ServerErrors int // 5xx answers and failed upstream connections
+	// RefusedTo lists what was refused, such as "CONNECT other.test:443"
+	// or "POST app.test:8080 (only GET and HEAD)", each once, at most
+	// MaxRefusedTo entries.
+	RefusedTo []string
 }
+
+// MaxRefusedTo caps Stats.RefusedTo.
+const MaxRefusedTo = 20
 
 // Proxy is a running egress proxy.
 type Proxy struct {
@@ -112,12 +120,38 @@ func New(cfg Config) (*Proxy, error) {
 		}
 		p.ca, p.leaf = ca, leaf
 	}
+	p.transport = newTransport(cfg)
+	return p, nil
+}
+
+// CACertPEM is the certificate the tool container trusts; nil for an http
+// target. The private key never leaves this process.
+func (p *Proxy) CACertPEM() []byte {
+	if p.ca == nil {
+		return nil
+	}
+	return p.ca.certPEM
+}
+
+// Stopped is closed when the proxy stops forwarding after repeated errors.
+func (p *Proxy) Stopped() <-chan struct{} { return p.stop }
+
+// StopReason says why the proxy stopped, or "".
+func (p *Proxy) StopReason() string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.stopReason
+}
+
+// newTransport sends every upstream request to a pinned address of the
+// target, whatever the request named.
+func newTransport(cfg Config) *http.Transport {
 	dial := cfg.Dial
 	if dial == nil {
 		dial = (&net.Dialer{Timeout: 10 * time.Second}).DialContext
 	}
 	port := strconv.Itoa(cfg.Target.Port)
-	p.transport = &http.Transport{
+	return &http.Transport{
 		Proxy: nil,
 		// Every upstream connection goes to a pinned address, whatever the
 		// request named.
@@ -148,33 +182,36 @@ func New(cfg Config) (*Proxy, error) {
 		ResponseHeaderTimeout: 60 * time.Second,
 		TLSHandshakeTimeout:   10 * time.Second,
 	}
-	return p, nil
 }
 
-// CACertPEM is the certificate the tool container trusts; nil for an http
-// target. The private key never leaves this process.
-func (p *Proxy) CACertPEM() []byte {
-	if p.ca == nil {
-		return nil
+// Reachable sends one GET for the target URL from the host, through the
+// same pinned transport as the proxy, and returns nil if the target
+// answered with any HTTP status. It is the check before the first plugin
+// of a run, so that a target that is down is not sent a full scan.
+func Reachable(ctx context.Context, cfg Config) error {
+	tr := newTransport(cfg)
+	defer tr.CloseIdleConnections()
+	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, cfg.Target.String(), nil)
+	if err != nil {
+		return err
 	}
-	return p.ca.certPEM
-}
-
-// Stopped is closed when the proxy stops forwarding after repeated errors.
-func (p *Proxy) Stopped() <-chan struct{} { return p.stop }
-
-// StopReason says why the proxy stopped, or "".
-func (p *Proxy) StopReason() string {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	return p.stopReason
+	req.Header.Set("User-Agent", "SiegeKit/"+cfg.Version)
+	resp, err := tr.RoundTrip(req)
+	if err != nil {
+		return fmt.Errorf("the target did not answer: %w", err)
+	}
+	return resp.Body.Close()
 }
 
 // Stats returns a copy of the counters.
 func (p *Proxy) Stats() Stats {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	return p.stats
+	s := p.stats
+	s.RefusedTo = append([]string(nil), p.stats.RefusedTo...)
+	return s
 }
 
 // Serve accepts client connections on l until Close.
@@ -217,11 +254,38 @@ func (p *Proxy) Close() error {
 	return nil
 }
 
-func (p *Proxy) refuse(w http.ResponseWriter, format string, a ...any) {
+// refuse answers 403 and records what was refused: the method and
+// destination, plus a note when the destination itself was allowed.
+func (p *Proxy) refuse(w http.ResponseWriter, what, format string, a ...any) {
 	p.mu.Lock()
-	p.stats.Refused++
+	p.countRefused(what)
 	p.mu.Unlock()
 	http.Error(w, "SiegeKit egress proxy: "+fmt.Sprintf(format, a...), http.StatusForbidden)
+}
+
+// countRefused counts one refusal. The caller holds p.mu.
+func (p *Proxy) countRefused(what string) {
+	p.stats.Refused++
+	if len(p.stats.RefusedTo) < MaxRefusedTo && !slices.Contains(p.stats.RefusedTo, what) {
+		p.stats.RefusedTo = append(p.stats.RefusedTo, what)
+	}
+}
+
+// destination names where a request was going, for Stats.RefusedTo. The
+// host comes from the client and is cut to keep reports readable.
+func destination(r *http.Request) string {
+	host := r.Host
+	if r.URL.IsAbs() {
+		host = r.URL.Scheme + "://" + r.URL.Host
+	}
+	return named(r.Method, host)
+}
+
+func named(method, host string) string {
+	if len(host) > 100 {
+		host = host[:100] + "..."
+	}
+	return strings.ToValidUTF8(method, "?") + " " + strings.ToValidUTF8(host, "?")
 }
 
 // serveClient handles requests on a client connection: CONNECT tunnels for
@@ -230,14 +294,14 @@ func (p *Proxy) serveClient(w http.ResponseWriter, r *http.Request) {
 	t := p.cfg.Target
 	if r.Method == http.MethodConnect {
 		if t.Scheme != "https" || !p.sameOrigin(r.Host) {
-			p.refuse(w, "only %s is allowed", t)
+			p.refuse(w, destination(r), "only %s is allowed", t)
 			return
 		}
 		p.tunnel(w)
 		return
 	}
 	if !r.URL.IsAbs() || r.URL.Scheme != t.Scheme || !p.sameOrigin(r.URL.Host) {
-		p.refuse(w, "only %s is allowed", t)
+		p.refuse(w, destination(r), "only %s is allowed", t)
 		return
 	}
 	p.forward(w, r)
@@ -274,7 +338,7 @@ func (p *Proxy) tunnel(w http.ResponseWriter) {
 	inner := &http.Server{
 		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if r.URL.IsAbs() && (r.URL.Scheme != "https" || !p.sameOrigin(r.URL.Host)) {
-				p.refuse(w, "only %s is allowed", p.cfg.Target)
+				p.refuse(w, destination(r), "only %s is allowed", p.cfg.Target)
 				return
 			}
 			p.forward(w, r)
@@ -290,11 +354,11 @@ func (p *Proxy) tunnel(w http.ResponseWriter) {
 // forward sends one request to the target and copies the answer back.
 func (p *Proxy) forward(w http.ResponseWriter, r *http.Request) {
 	if !p.sameOrigin(r.Host) {
-		p.refuse(w, "the Host header must name %s", p.authority)
+		p.refuse(w, named(r.Method, "Host: "+r.Host), "the Host header must name %s", p.authority)
 		return
 	}
 	if p.cfg.ReadOnly && r.Method != http.MethodGet && r.Method != http.MethodHead {
-		p.refuse(w, "only GET and HEAD requests are allowed for this check on a deployed target")
+		p.refuse(w, destination(r)+" (only GET and HEAD)", "only GET and HEAD requests are allowed for this check on a deployed target")
 		return
 	}
 	select {
@@ -306,9 +370,6 @@ func (p *Proxy) forward(w http.ResponseWriter, r *http.Request) {
 	if err := p.bucket.wait(r.Context()); err != nil {
 		return
 	}
-	p.mu.Lock()
-	p.stats.Requests++
-	p.mu.Unlock()
 	t := p.cfg.Target
 	rp := &httputil.ReverseProxy{
 		Rewrite: func(pr *httputil.ProxyRequest) {
@@ -320,6 +381,11 @@ func (p *Proxy) forward(w http.ResponseWriter, r *http.Request) {
 		},
 		Transport: p.transport,
 		ModifyResponse: func(resp *http.Response) error {
+			// Count only requests the target answered (an unreachable
+			// target counts none, so the plugin is reported as failed).
+			p.mu.Lock()
+			p.stats.Requests++
+			p.mu.Unlock()
 			p.result(resp.StatusCode >= 500, fmt.Sprintf("the target answered %s", resp.Status))
 			return nil
 		},
@@ -424,7 +490,7 @@ func (l *filterListener) Accept() (net.Conn, error) {
 		}
 		if !allowed {
 			l.p.mu.Lock()
-			l.p.stats.Refused++
+			l.p.countRefused("connection from outside the tool's network")
 			l.p.mu.Unlock()
 			_ = c.Close()
 			continue

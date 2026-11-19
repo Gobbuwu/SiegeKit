@@ -25,7 +25,6 @@ var backendRules = Check{
 	ID:      backendRulesID,
 	Name:    "Hosted backend access rules",
 	Family:  backendRulesFamily,
-	Version: "1.0.0",
 	Targets: []string{"repo"},
 	Run:     runBackendRules,
 }

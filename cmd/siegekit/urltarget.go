@@ -12,6 +12,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"syscall"
 	"time"
@@ -38,6 +39,10 @@ var hostOS = runtime.GOOS
 // *sandbox.Engine; tests set it.
 var activeRunner runner.ActiveRunner
 
+// reachable checks that the target answers before the first plugin runs;
+// tests replace it.
+var reachable = egress.Reachable
+
 // prover checks deployed-mode proof of control; tests replace it.
 var prover interface {
 	Check(ctx context.Context, u *target.URL, addrs []netip.Addr, token string) (string, error)
@@ -46,6 +51,21 @@ var prover interface {
 func isURL(s string) bool {
 	l := strings.ToLower(s)
 	return strings.HasPrefix(l, "http://") || strings.HasPrefix(l, "https://")
+}
+
+// otherScheme returns the scheme of a URL that SiegeKit cannot scan, such
+// as ftp://, or "" if s does not start with "scheme://".
+func otherScheme(s string) string {
+	scheme, _, ok := strings.Cut(s, "://")
+	if !ok || scheme == "" || isURL(s) {
+		return ""
+	}
+	for i, c := range scheme {
+		if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || i > 0 && (c >= '0' && c <= '9' || c == '+' || c == '-' || c == '.')) {
+			return ""
+		}
+	}
+	return scheme
 }
 
 // urlScan holds the scan flags that apply to a URL target.
@@ -217,12 +237,51 @@ func runURL(ctx context.Context, u *target.URL, addrs []netip.Addr, mode target.
 	if mode == "deployed" {
 		fmt.Fprintln(stdout, "Only GET and HEAD requests are allowed: no check may change data on a deployed target.")
 	}
+	// ADR 0005: destructive checks run only after a person confirmed the
+	// run. Private and deployed targets were confirmed above; a loopback
+	// target was not, so ask now (owner decision, 2026-11-19). --yes does
+	// not count.
+	if verification == "loopback" {
+		var destructive []string
+		for _, m := range selected {
+			if slices.Contains(planned, m.ID) && *m.Destructive {
+				destructive = append(destructive, m.ID)
+			}
+		}
+		reason := ""
+		switch {
+		case len(destructive) == 0:
+		case o.authorizedHost != "": // matched the target above
+			verification, confirmed = "loopback + --authorized-host", u.Host
+		case stdinIsTerminal():
+			fmt.Fprintf(stdout, "%s send(s) attack payloads that can change or delete data in the app at %s. Type yes to run them: ", strings.Join(destructive, ", "), u)
+			line, _ := bufio.NewReader(stdin).ReadString('\n')
+			if strings.TrimSpace(line) == "yes" {
+				verification, confirmed = "loopback + typed yes", u.Host
+			} else {
+				reason = "not confirmed: \"yes\" was not typed"
+			}
+		default:
+			reason = fmt.Sprintf("can change data, so it needs a person's confirmation: run this command in a terminal and type yes, or pass --authorized-host %s if you (the person, not an AI assistant on its own) authorize it", u.Host)
+		}
+		if reason != "" {
+			for _, id := range destructive {
+				unavailable[id] = runner.Unavailable{Status: report.Skipped, Reason: reason}
+				planned = slices.DeleteFunc(planned, func(p string) bool { return p == id })
+				fmt.Fprintf(stdout, "  %-12s not run - %s\n", id, reason)
+			}
+		}
+	}
 	if len(planned) > 0 {
 		if err := audit.Append(filepath.Join(dir, "audit.log"), audit.Entry{
 			Time: time.Now().UTC(), Version: version, Target: u.String(), Addresses: addrStrings(addrs),
 			Mode: string(mode), Verification: verification, Confirmed: confirmed, Plugins: planned,
 		}); err != nil {
 			return fail(fmt.Errorf("no test was sent: %w", err))
+		}
+		// One GET first, so a target that is down is not sent a full scan.
+		if err := reachable(ctx, egress.Config{Target: u, Addrs: addrs, VerifyTLS: o.deployed, Version: version}); err != nil {
+			return fail(fmt.Errorf("%s: %w; no test was sent. Check that the app is running at this address", u, err))
 		}
 	}
 	var active runner.ActiveRunner

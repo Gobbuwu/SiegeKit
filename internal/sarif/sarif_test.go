@@ -59,7 +59,7 @@ func TestToFindings(t *testing.T) {
 
 func TestSecretsAreMasked(t *testing.T) {
 	doc := `{"version":"2.1.0","runs":[{"tool":{"driver":{"name":"gitleaks"}},"results":[
-	{"ruleId":"aws","message":{"text":"secret"},"locations":[{"physicalLocation":{"artifactLocation":{"uri":".env"},"region":{"startLine":1,"snippet":{"text":"AKIAABCDEFGHIJKLMNOP"}}}}]}]}]}`
+	{"ruleId":"aws","message":{"text":"secret"},"locations":[{"physicalLocation":{"artifactLocation":{"uri":".env"},"region":{"startLine":1,"snippet":{"text":"AKIAABCDEFGHIJKLMNOP"}}}}]}]}]}` // gitleaks:allow (fake key, test data)
 	l, err := Read(strings.NewReader(doc))
 	if err != nil {
 		t.Fatal(err)
@@ -85,13 +85,25 @@ func TestRejects(t *testing.T) {
 func FuzzSARIF(f *testing.F) {
 	f.Add([]byte(sample))
 	f.Add([]byte(`{"version":"2.1.0","runs":[{"results":[{"ruleIndex":-5}]}]}`))
+	// ZAP's shape: no helpUri, links in the rule's "references" property.
+	f.Add([]byte(`{"version":"2.1.0","runs":[{"tool":{"driver":{"name":"ZAP","rules":[{"id":"10038","properties":{"references":["javascript:x",7,"https://example.com/csp"]},"relationships":[{"target":{"id":"693","toolComponent":{"name":"CWE"}}}]}]}},"results":[{"ruleId":"10038","ruleIndex":0,"level":"warning","message":{"text":"m"},"locations":[{"physicalLocation":{"artifactLocation":{"uri":"http://app.test/"}}}]}]}]}`))
 	f.Fuzz(func(t *testing.T, data []byte) {
 		l, err := Read(bytes.NewReader(data))
 		if err != nil {
 			return
 		}
-		if _, err := ToFindings(l, Options{Plugin: "p", Family: "secrets"}); err != nil {
-			t.Fatal(err)
+		// Every parser, so tool-specific paths such as ZAP's help links
+		// are fuzzed too.
+		for _, p := range Parsers {
+			fs, err := ToFindings(l, Options{Plugin: "p", Family: "secrets", Parser: p})
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, f := range fs {
+				if f.HelpURI != "" && findings.SafeHelpURI(f.HelpURI) == "" {
+					t.Fatalf("%s: unsafe help link %q", p, f.HelpURI)
+				}
+			}
 		}
 	})
 }

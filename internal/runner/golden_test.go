@@ -22,10 +22,13 @@ func TestRecordedToolOutput(t *testing.T) {
 		"gitleaks-history": "gitleaks-history.sarif",
 		"gosec":            "gosec.sarif",
 		"trivy":            "trivy.sarif",
+		// Both ZAP plugins write zap.json.
+		"zap":        "zap/zap.json",
+		"zap-active": "zap-active/zap.json",
 	} {
 		t.Run(id, func(t *testing.T) {
 			m := builtin(t, id)
-			if m.Output.File != file {
+			if m.Output.File != filepath.Base(file) {
 				t.Fatalf("manifest writes %s, recording is %s", m.Output.File, file)
 			}
 			fs, err := readReport(filepath.Join("testdata", "recorded", file), m, new(int))

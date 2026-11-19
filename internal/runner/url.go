@@ -164,7 +164,7 @@ func runActive(ctx context.Context, run ActiveRunner, m *manifest.Manifest, opt 
 	if err != nil {
 		return fail(report.Failed, "%v", err)
 	}
-	pr.Requests, pr.Refused = res.Stats.Requests, res.Stats.Refused
+	pr.Requests, pr.Refused, pr.RefusedTo = res.Stats.Requests, res.Stats.Refused, res.Stats.RefusedTo
 	switch {
 	case res.Stopped != "":
 		return fail(report.Failed, "stopped by SiegeKit: %s", res.Stopped)
@@ -177,7 +177,7 @@ func runActive(ctx context.Context, run ActiveRunner, m *manifest.Manifest, opt 
 	case res.Stats.Requests == 0:
 		// A tool that never reached the target found nothing because it
 		// tested nothing (ADR 0009).
-		return fail(report.Failed, "the tool sent no request to the target")
+		return fail(report.Failed, "the target answered no request from the tool")
 	}
 	fs, err := readReport(filepath.Join(outDir, m.Output.File), m, nil)
 	if err != nil {

@@ -19,7 +19,6 @@ var dotenv = Check{
 	ID:      dotenvID,
 	Name:    "Environment files left out of git",
 	Family:  "secrets",
-	Version: "1.0.0",
 	Targets: []string{"repo"},
 	Run:     runDotenv,
 }

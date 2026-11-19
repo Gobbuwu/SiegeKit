@@ -46,7 +46,7 @@ func TestMaskSecret(t *testing.T) {
 	for in, want := range map[string]string{
 		"":                     "",
 		"abc":                  "***",
-		"AKIAABCDEFGHIJKLMNOP": "AKIA****************",
+		"AKIAABCDEFGHIJKLMNOP": "AKIA****************", // gitleaks:allow (AWS's documented fake key format, test data)
 		"sk-1234567890abcdefghijklmnopqrstuvwxyz": "sk-1****************",
 	} {
 		if got := MaskSecret(in); got != want {
