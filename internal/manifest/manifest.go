@@ -246,6 +246,8 @@ func (m *Manifest) validateTool(p *[]string) {
 		case "oci-image":
 			if !reOCI.MatchString(a.Ref) {
 				*p = append(*p, fmt.Sprintf("%s.ref must be an image reference pinned by @sha256 digest", f))
+			} else if !strings.HasSuffix(a.Ref, "@sha256:"+a.SHA256) {
+				*p = append(*p, fmt.Sprintf("%s.sha256 must equal the image digest in ref", f))
 			}
 		case "archive", "binary":
 			if !reHTTPS.MatchString(a.Ref) {
