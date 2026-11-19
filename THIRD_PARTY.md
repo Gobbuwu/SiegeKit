@@ -25,8 +25,9 @@ Trivy's vulnerability database is not pinned: `siegekit update` lets Trivy downl
 
 | Tool | Purpose | Latest version seen | License | Status |
 | --- | --- | --- | --- | --- |
-| [Semgrep CE](https://github.com/semgrep/semgrep) | SAST | 1.186.0 | LGPL-2.1 | Later; its rules need a license decision |
+| [Semgrep CE](https://github.com/semgrep/semgrep) | SAST | 1.186.0 | LGPL-2.1 | Not planned; Opengrep chosen instead (its rules allow only internal business use) |
 | [Semgrep community rules](https://github.com/semgrep/semgrep-rules) | SAST rules | n/a | [Semgrep Rules License v1.0](https://semgrep.dev/legal/rules-license): "only for your own internal business purposes", no distribution | Not bundled; needs a decision before any download |
+| [Opengrep](https://github.com/opengrep/opengrep) and [opengrep-rules](https://github.com/opengrep/opengrep-rules) | SAST, many languages | 1.33.1 | Engine LGPL-2.1; rules LGPL-2.1 with Commons Clause | Planned (M2); rules downloaded by the user after accepting their license |
 | [Bandit](https://github.com/PyCQA/bandit) | SAST, Python | 1.9.4 | Apache-2.0 | Pinned (M1) |
 | [gosec](https://github.com/securego/gosec) | SAST, Go | 2.30.0 | Apache-2.0 | Pinned (M1) |
 | [OSV-Scanner](https://github.com/google/osv-scanner) | Dependency vulnerabilities | 2.7.1 | Apache-2.0 | Planned (M1) |
