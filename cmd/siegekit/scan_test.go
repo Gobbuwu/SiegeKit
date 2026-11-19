@@ -244,7 +244,7 @@ func TestScanDependencyConsent(t *testing.T) {
 				"trivy was found on your system at /usr/local/bin/trivy, but SiegeKit uses its own sandboxed, pinned copy.",
 				"bandit             ran", "gitleaks           skipped    0 finding(s) - you declined gitleaks 8.30.1 container image",
 				"trivy              skipped    0 finding(s) - you declined trivy 0.76.2 container image",
-				"Skipped because a dependency is not installed: checkov, gitleaks, gitleaks-history, gosec, trivy."},
+				"Skipped because a dependency is not installed: checkov, gitleaks, gitleaks-history, gosec, trivy.", "3. gitleaks 8.30.1 container image (42 MiB download), needed by: gitleaks, gitleaks-history\n  4. gosec"},
 		},
 		{
 			name: "invalid answers then none", answer: "9\nx\nq\n",
