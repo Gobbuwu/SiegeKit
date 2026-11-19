@@ -179,6 +179,14 @@ func runPlugin(ctx context.Context, ex Executor, m *manifest.Manifest, opt Optio
 			return fail(report.Skipped, "no files matching %s", strings.Join(m.AppliesTo, ", "))
 		}
 	}
+	if m.RequiresGit {
+		// A .git file (worktree or submodule) points outside the target, so
+		// only a .git directory counts.
+		st, err := os.Lstat(filepath.Join(opt.TargetDir, ".git"))
+		if err != nil || !st.IsDir() {
+			return fail(report.Skipped, "not a git repository (no .git directory at the top level)")
+		}
+	}
 	image, ok := ImageFor(m)
 	if !ok {
 		return fail(report.Skipped, "no container image for linux/%s", runtime.GOARCH)
@@ -202,7 +210,7 @@ func runPlugin(ctx context.Context, ex Executor, m *manifest.Manifest, opt Optio
 		return fail(report.Failed, "create output directory: %v", err)
 	}
 	res, err := ex.Run(ctx, sandbox.Spec{
-		Image: image, Args: args, TargetDir: opt.TargetDir, OutDir: out, Network: m.Network,
+		Image: image, Args: args, Env: m.Run.Env, TargetDir: opt.TargetDir, OutDir: out, Network: m.Network,
 		DataDir: dataDir, DataMount: dataMount,
 		CPUs: cpus, MemoryMiB: m.Resources.MemoryMiB,
 		Timeout: time.Duration(m.Resources.TimeoutSeconds) * time.Second,

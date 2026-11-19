@@ -244,6 +244,21 @@
             "pattern": "^([^{}]|\\{(target|outdir|workdir|threads|ratelimit|data)\\})*$"
           },
           "description": "Argument vector passed directly to the tool, never through a shell. Only the listed placeholders are allowed; {data} needs a data section."
+        },
+        "env": {
+          "type": "object",
+          "maxProperties": 16,
+          "propertyNames": {
+            "pattern": "^[A-Z][A-Z0-9_]{0,63}$",
+            "not": {
+              "pattern": "^(PATH|HOME)$|^(LD_|DYLD_|SSL_|SIEGEKIT_)|PROXY"
+            }
+          },
+          "additionalProperties": {
+            "type": "string",
+            "maxLength": 16384
+          },
+          "description": "Extra environment variables for the tool. Values are passed as written (no placeholders). Names that change how programs load code or reach the network, or that SiegeKit sets itself, are refused."
         }
       }
     },
@@ -320,6 +335,10 @@
           "description": "Name of the report file the tool writes inside {outdir}."
         }
       }
+    },
+    "requiresGit": {
+      "type": "boolean",
+      "description": "If true, the plugin is skipped (and the report says why) when the target has no .git at its top level."
     }
   },
   "allOf": [

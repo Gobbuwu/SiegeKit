@@ -93,10 +93,10 @@ func list(stdout, stderr io.Writer) int {
 		return exitInvalid
 	}
 	for _, m := range all {
-		fmt.Fprintf(stdout, "%-14s %-8s %-8s %s %s (%s)\n", m.ID, m.Family, m.Mode, m.Tool.Name, m.Tool.Version, m.Tool.License)
+		fmt.Fprintf(stdout, "%-18s %-8s %-8s %s %s (%s)\n", m.ID, m.Family, m.Mode, m.Tool.Name, m.Tool.Version, m.Tool.License)
 	}
 	for _, c := range checks.Builtin() {
-		fmt.Fprintf(stdout, "%-14s %-8s %-8s built into SiegeKit %s\n", c.ID, c.Family, "passive", c.Version)
+		fmt.Fprintf(stdout, "%-18s %-8s %-8s built into SiegeKit %s\n", c.ID, c.Family, "passive", c.Version)
 	}
 	return exitOK
 }

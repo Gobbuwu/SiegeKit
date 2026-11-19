@@ -189,7 +189,7 @@ func scan(args []string, stdout, stderr io.Writer) int {
 			for _, r := range results {
 				if r.Err != nil {
 					// Keep going: the scan uses the older data.
-					fmt.Fprintf(stdout, "  %-10s update failed - %v\n", r.ID, r.Err)
+					fmt.Fprintf(stdout, "  %-18s update failed - %v\n", r.ID, r.Err)
 				}
 			}
 		}
@@ -213,7 +213,7 @@ func scan(args []string, stdout, stderr io.Writer) int {
 	}
 	fmt.Fprintln(stdout)
 	for _, p := range run.Plugins {
-		line := fmt.Sprintf("  %-10s %-10s %d finding(s)", p.ID, p.Status, p.Findings)
+		line := fmt.Sprintf("  %-18s %-10s %d finding(s)", p.ID, p.Status, p.Findings)
 		if p.Reason != "" {
 			line += " - " + p.Reason
 		}

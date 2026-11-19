@@ -1,0 +1,39 @@
+[
+  {
+    "ruleId": "env-file-committed",
+    "title": "Environment file (.env) committed to git",
+    "message": "env-file-committed has detected secret for file .env at commit e0d0ef73bbf150cbbb5e60e572d126db46726f54.",
+    "severity": "high",
+    "location": {
+      "uri": ".env"
+    },
+    "snippet": "REDA****",
+    "family": "secrets",
+    "sources": [
+      {
+        "plugin": "gitleaks-history",
+        "ruleId": "env-file-committed"
+      }
+    ],
+    "fingerprint": "803a57fac7971ec3c1693880d03b14b9"
+  },
+  {
+    "ruleId": "aws-access-token",
+    "title": "Identified a pattern that may indicate AWS credentials, risking unauthorized cloud resource access and data breaches on AWS platforms.",
+    "message": "aws-access-token has detected secret for file conf.py at commit 2e026f728cb63c33baca9b2ed298da681d8164b9.",
+    "severity": "high",
+    "location": {
+      "uri": "conf.py",
+      "startLine": 1
+    },
+    "snippet": "REDA****",
+    "family": "secrets",
+    "sources": [
+      {
+        "plugin": "gitleaks-history",
+        "ruleId": "aws-access-token"
+      }
+    ],
+    "fingerprint": "92a3fb015e19f1d8810c8b6cf8894611"
+  }
+]

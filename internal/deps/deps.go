@@ -47,6 +47,25 @@ type Dep struct {
 	Installed bool
 	Size      int64  // download size in bytes; -1 if not known
 	HostPath  string // a tool of the same name on PATH, which SiegeKit never uses
+	// Users are all the plugins that need this image (Plugin is the first);
+	// one image is downloaded once even when several plugins use it.
+	Users []*manifest.Manifest
+}
+
+func (d Dep) users() []*manifest.Manifest {
+	if len(d.Users) == 0 {
+		return []*manifest.Manifest{d.Plugin}
+	}
+	return d.Users
+}
+
+// NeededBy lists the IDs of the plugins that need d.
+func (d Dep) NeededBy() string {
+	ids := make([]string, 0, len(d.users()))
+	for _, m := range d.users() {
+		ids = append(ids, m.ID)
+	}
+	return strings.Join(ids, ", ")
 }
 
 // Name is how the dependency is shown to the user.
@@ -73,17 +92,21 @@ func Plan(ctx context.Context, eng Engine, ms []*manifest.Manifest, dataRoot str
 		if !ok {
 			continue // reported by the runner as having no image for this machine
 		}
-		has, err := eng.HasImage(ctx, image)
-		if err != nil {
-			return nil, err
-		}
-		d := Dep{Kind: Image, Plugin: m, Image: image, Installed: has, Size: -1}
-		if !has {
-			if p, err := LookPath(m.Tool.Name); err == nil {
-				d.HostPath = p
+		if i := slices.IndexFunc(out, func(d Dep) bool { return d.Kind == Image && d.Image == image }); i >= 0 {
+			out[i].Users = append(out[i].Users, m)
+		} else {
+			has, err := eng.HasImage(ctx, image)
+			if err != nil {
+				return nil, err
 			}
+			d := Dep{Kind: Image, Plugin: m, Image: image, Installed: has, Size: -1, Users: []*manifest.Manifest{m}}
+			if !has {
+				if p, err := LookPath(m.Tool.Name); err == nil {
+					d.HostPath = p
+				}
+			}
+			out = append(out, d)
 		}
-		out = append(out, d)
 		if m.Data != nil {
 			out = append(out, Dep{Kind: Data, Plugin: m, Image: image, Installed: dataInstalled(dataRoot, m.ID), Size: -1})
 		}
@@ -147,7 +170,7 @@ func Describe(w io.Writer, deps []Dep) {
 		if d.Kind == Image && d.Size >= 0 {
 			size = humanSize(d.Size) + " download"
 		}
-		fmt.Fprintf(w, "  %d. %s (%s), needed by: %s\n", i+1, d.Name(), size, d.Plugin.ID)
+		fmt.Fprintf(w, "  %d. %s (%s), needed by: %s\n", i+1, d.Name(), size, d.NeededBy())
 		if d.HostPath != "" {
 			fmt.Fprintf(w, "     %s was found on your system at %s, but SiegeKit uses its own sandboxed, pinned copy.\n", d.Plugin.Tool.Name, d.HostPath)
 		}
@@ -225,19 +248,27 @@ func Install(ctx context.Context, eng Engine, ex runner.Executor, deps, chosen [
 		}
 		switch {
 		case d.Installed:
-			hasImage[d.Plugin.ID] = true
+			for _, m := range d.users() {
+				hasImage[m.ID] = true
+			}
 		case !pick(d):
-			un[d.Plugin.ID] = runner.Unavailable{Status: report.Skipped, Reason: notChosen(d)}
+			for _, m := range d.users() {
+				un[m.ID] = runner.Unavailable{Status: report.Skipped, Reason: notChosen(d)}
+			}
 		default:
 			fmt.Fprintf(out, "Downloading %s...\n", d.Name())
 			if err := eng.Pull(ctx, d.Image); err != nil {
 				if ctx.Err() != nil {
 					return nil, ctx.Err()
 				}
-				un[d.Plugin.ID] = runner.Unavailable{Status: report.Failed, Reason: fmt.Sprintf("could not install %s: %v", d.Name(), err)}
+				for _, m := range d.users() {
+					un[m.ID] = runner.Unavailable{Status: report.Failed, Reason: fmt.Sprintf("could not install %s: %v", d.Name(), err)}
+				}
 				continue
 			}
-			hasImage[d.Plugin.ID] = true
+			for _, m := range d.users() {
+				hasImage[m.ID] = true
+			}
 		}
 	}
 	var update []*manifest.Manifest
