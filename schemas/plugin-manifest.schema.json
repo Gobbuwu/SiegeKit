@@ -98,7 +98,8 @@
         },
         "license": {
           "type": "string",
-          "description": "SPDX license expression, or LicenseRef-* for non-SPDX terms."
+          "description": "SPDX license expression, or LicenseRef-* for non-SPDX terms.",
+          "minLength": 1
         },
         "homepage": {
           "type": "string",
