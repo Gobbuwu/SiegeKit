@@ -5,6 +5,7 @@
 package checks
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io"
@@ -138,4 +139,29 @@ func readFile(p string) ([]byte, error) {
 		return nil, err
 	}
 	return data, nil
+}
+
+// CountMarker counts the lines under root that contain marker, such as an
+// inline "gitleaks:allow" comment. It uses the same limits and skipped
+// directories as the checks; a tree too large to search returns the count so
+// far with ErrTooManyFiles.
+func CountMarker(ctx context.Context, root, marker string) (int, error) {
+	if marker == "" {
+		return 0, nil
+	}
+	m := []byte(marker)
+	n := 0
+	err := walkTree(ctx, root, func(p, _ string) error {
+		data, err := readFile(p)
+		if err != nil || data == nil {
+			return nil // unreadable or too large: not counted
+		}
+		for _, line := range bytes.Split(data, []byte("\n")) {
+			if bytes.Contains(line, m) {
+				n++
+			}
+		}
+		return nil
+	})
+	return n, err
 }

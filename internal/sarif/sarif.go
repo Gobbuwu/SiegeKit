@@ -64,6 +64,27 @@ type Result struct {
 	Message    Message        `json:"message"`
 	Locations  []Location     `json:"locations"`
 	Properties map[string]any `json:"properties"`
+	// Suppressions are set when the scanned code asked the tool to ignore
+	// this result (for example a "#nosec" or "checkov:skip" comment).
+	Suppressions []Suppression `json:"suppressions"`
+}
+
+// Suppression is a SARIF suppression object.
+type Suppression struct {
+	Kind   string `json:"kind"`
+	Status string `json:"status"`
+}
+
+// suppressed reports whether a result is suppressed: it has a suppression
+// that is accepted (no status means accepted). One under review or rejected
+// does not hide the result.
+func (r *Result) suppressed() bool {
+	for _, s := range r.Suppressions {
+		if s.Status == "" || s.Status == "accepted" {
+			return true
+		}
+	}
+	return false
 }
 
 // Location is a SARIF location (physical only).
@@ -111,6 +132,9 @@ type Options struct {
 	// "/target"). It is removed from the start of URIs so locations are
 	// relative to the target directory.
 	MountPath string
+	// Suppressed, if set, is increased by one for each result the scanned
+	// code suppressed. Such results are not returned as findings.
+	Suppressed *int
 }
 
 // Parsers lists the accepted Options.Parser values.
@@ -136,6 +160,12 @@ func ToFindings(l *Log, opt Options) ([]findings.Finding, error) {
 			rules[r.ID] = r
 		}
 		for _, res := range run.Results {
+			if res.suppressed() {
+				if opt.Suppressed != nil {
+					*opt.Suppressed++
+				}
+				continue
+			}
 			rule, ok := rules[res.RuleID]
 			if !ok && res.RuleIndex != nil && *res.RuleIndex >= 0 && *res.RuleIndex < len(run.Tool.Driver.Rules) {
 				rule = run.Tool.Driver.Rules[*res.RuleIndex]

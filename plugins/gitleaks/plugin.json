@@ -50,5 +50,12 @@
     "format": "sarif",
     "parser": "sarif-gitleaks",
     "file": "gitleaks.sarif"
+  },
+  "repoIgnores": {
+    "files": [
+      ".gitleaks.toml",
+      ".gitleaksignore"
+    ],
+    "marker": "gitleaks:allow"
   }
 }

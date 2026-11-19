@@ -10,6 +10,7 @@ import (
 	"html/template"
 	"io"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/Gobbuwu/SiegeKit/internal/findings"
@@ -35,6 +36,31 @@ type PluginResult struct {
 	Status   Status `json:"status"`
 	Reason   string `json:"reason,omitempty"`
 	Findings int    `json:"findings"`
+	// What the scanned repository told the tool to ignore (owner decision,
+	// 2026-11-19: obey it, but show it). Suppressed counts findings the tool
+	// reported as suppressed by comments in the code; RepoSettings lists the
+	// repository's own settings files the tool read; IgnoreMarkers counts
+	// lines carrying the tool's ignore comment, for tools that do not report
+	// what they suppressed.
+	Suppressed    int      `json:"suppressed,omitempty"`
+	RepoSettings  []string `json:"repoSettings,omitempty"`
+	IgnoreMarkers int      `json:"ignoreMarkers,omitempty"`
+}
+
+// IgnoreNote says in one line what the repository told the tool to ignore,
+// or "" if nothing.
+func (p PluginResult) IgnoreNote() string {
+	var parts []string
+	if p.Suppressed > 0 {
+		parts = append(parts, fmt.Sprintf("%d finding(s) suppressed by comments in the code", p.Suppressed))
+	}
+	if len(p.RepoSettings) > 0 {
+		parts = append(parts, "obeys the repository's "+strings.Join(p.RepoSettings, ", ")+", which can hide findings")
+	}
+	if p.IgnoreMarkers > 0 {
+		parts = append(parts, fmt.Sprintf("%d line(s) carry an ignore comment", p.IgnoreMarkers))
+	}
+	return strings.Join(parts, "; ")
 }
 
 // Run is everything a report shows.
@@ -276,7 +302,7 @@ code,pre{font:13px ui-monospace,monospace;white-space:pre-wrap;word-break:break-
 <h2>What was tested</h2>
 <table>
 <tr><th>Check</th><th>Family</th><th>Tool</th><th>Status</th><th>Findings</th></tr>
-{{range .Plugins}}<tr><td>{{.ID}}</td><td>{{.Family}}</td><td>{{.Tool}} {{.Version}}</td><td>{{.Status}}{{if .Reason}}: {{.Reason}}{{end}}</td><td>{{.Findings}}</td></tr>
+{{range .Plugins}}<tr><td>{{.ID}}</td><td>{{.Family}}</td><td>{{.Tool}} {{.Version}}</td><td>{{.Status}}{{if .Reason}}: {{.Reason}}{{end}}{{with .IgnoreNote}}<br>Repository ignores: {{.}}{{end}}</td><td>{{.Findings}}</td></tr>
 {{else}}<tr><td colspan="5">No checks were selected.</td></tr>{{end}}
 </table>
 

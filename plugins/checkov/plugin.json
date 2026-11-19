@@ -53,5 +53,11 @@
     "format": "sarif",
     "parser": "sarif-checkov",
     "file": "results_sarif.sarif"
+  },
+  "repoIgnores": {
+    "files": [
+      ".checkov.yaml",
+      ".checkov.yml"
+    ]
   }
 }

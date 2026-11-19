@@ -42,6 +42,7 @@
       "-out",
       "{outdir}/gosec.sarif",
       "-no-fail",
+      "-track-suppressions",
       "{target}/..."
     ]
   },

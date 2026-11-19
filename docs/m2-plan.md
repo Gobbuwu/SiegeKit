@@ -18,6 +18,22 @@ Status: in progress (started 2026-11-19, after the M1 sign-off). This splits the
 
 Added at the owner's request on 2026-11-19, outside the numbered PRs: a check for environment files. The `gitleaks-history` plugin scans every commit for secrets and committed `.env` files, and the built-in `dotenv-gitignore` check warns when `.gitignore` does not exclude them. Manifests gain `run.env` and `requiresGit` for this.
 
+## Follow-ups from the re-check of 2026-11-19
+
+The [re-check](recheck-2026-11-19.md) found items that earlier ADRs decided but no plan scheduled. The owner placed each one on 2026-11-19:
+
+| Item | Decision |
+| --- | --- |
+| Pick checks by family (`--only secrets`) and `--profile` (ADR 0004) | M2, with M2.5. ADR 0022 changes ADR 0004 so that only URL scans ask before running; directory scans print the plan without asking. |
+| Compare runs: "new" and "fixed" since the last scan (ADR 0007, 0013) | M2, a small PR. |
+| OSV-Scanner and OpenSSF Scorecard in CI; image signature checks (ADR 0008) | M2: OSV-Scanner and Scorecard in CI with M2.8; image signature checks as their own PR, after checking which publishers sign their images. |
+| Warning when the container engine is not rootless (ADR 0006) | No change until rootless engines are tested. |
+| Restrict update containers to the publisher's hosts through the egress proxy (ADR 0014, threat model T19) | M2. |
+| Container-image targets (secrets in images, base-image packages) | M3. |
+| End-of-life runtime check | Declined: not a security issue in itself, and no data source has been confirmed. |
+| Report the languages found in the target (ADR 0009) | M2, with M2.9. |
+| Unit test coverage of 80% or more in every core package | M2, one test-only PR (deps, audit, registry and plugins are below 80%). |
+
 Every PR that adds a command, flag or report field also updates `docs/agents.md`.
 
 Every new dependency (tool image, binary, fixture image) goes through the ADR 0016 consent prompt and ADR 0008 pinning (digest, at least 7 days old).

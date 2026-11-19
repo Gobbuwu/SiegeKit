@@ -342,6 +342,34 @@ func TestRunSkipsGitPluginOutsideRepository(t *testing.T) {
 	}
 }
 
+// The repository's own ignore settings are obeyed by the tool, and reported
+// (owner decision, 2026-11-19).
+func TestRunReportsRepoIgnores(t *testing.T) {
+	const suppressedSARIF = `{"version":"2.1.0","runs":[{"tool":{"driver":{"name":"gitleaks"}},"results":[
+{"ruleId":"github-pat","message":{"text":"found"},"locations":[{"physicalLocation":{"artifactLocation":{"uri":"/target/a.py"},"region":{"startLine":1}}}],"suppressions":[{"kind":"inSource"}]}]}]}`
+	f := &fake{act: func(s sandbox.Spec) (*sandbox.Result, error) {
+		write(t, s.OutDir, "gitleaks.sarif", suppressedSARIF)
+		return &sandbox.Result{Status: sandbox.Completed}, nil
+	}}
+	o := opts(t)
+	write(t, o.TargetDir, ".gitleaksignore", "x\n")
+	write(t, o.TargetDir, "a.py", "k = 1  # gitleaks:allow\n")
+	if err := os.Mkdir(filepath.Join(o.TargetDir, ".gitleaks.toml"), 0o755); err != nil { // not a file: not listed
+		t.Fatal(err)
+	}
+	r, err := Run(context.Background(), f, []*manifest.Manifest{builtin(t, "gitleaks")}, o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := r.Plugins[0]
+	if p.Status != report.Ran || p.Findings != 0 || p.Suppressed != 1 || !slices.Equal(p.RepoSettings, []string{".gitleaksignore"}) || p.IgnoreMarkers != 1 {
+		t.Errorf("plugin %+v", p)
+	}
+	if note := p.IgnoreNote(); !strings.Contains(note, "1 finding(s) suppressed") || !strings.Contains(note, ".gitleaksignore") || !strings.Contains(note, "1 line(s)") {
+		t.Errorf("note %q", note)
+	}
+}
+
 // As root, tools run as a fixed non-root user. Files that user cannot read
 // make the checks that need them incomplete (owner decision, 2026-11-19).
 func TestRunMarksUnreadableFilesIncomplete(t *testing.T) {

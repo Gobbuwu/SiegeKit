@@ -2,6 +2,7 @@
 
 - Status: Accepted
 - Date: 2026-11-18
+- Amended by: [0020](0020-repository-suppressions.md) (suppressions in the scanned repository are counted)
 
 ## Context
 

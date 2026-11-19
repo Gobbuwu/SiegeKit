@@ -51,5 +51,10 @@
     "format": "json",
     "parser": "bandit-json",
     "file": "bandit.json"
+  },
+  "repoIgnores": {
+    "files": [
+      ".bandit"
+    ]
   }
 }
