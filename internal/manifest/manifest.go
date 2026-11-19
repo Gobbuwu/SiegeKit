@@ -13,8 +13,6 @@ import (
 	"os"
 	"regexp"
 	"strings"
-
-	"github.com/Gobbuwu/SiegeKit/internal/sarif"
 )
 
 // MaxFileSize is the largest manifest accepted, in bytes.
@@ -31,7 +29,7 @@ var (
 	Networks   = []string{"none", "target-only"}
 	Formats    = []string{"sarif", "json", "jsonl", "xml", "text"}
 	Placeholds = []string{"target", "outdir", "workdir", "threads", "ratelimit", "data"}
-	Parsers    = sarif.Parsers
+	Parsers    = []string{"sarif", "sarif-gitleaks", "sarif-checkov", "bandit-json"}
 )
 
 var (
@@ -239,6 +237,9 @@ func (m *Manifest) Validate() error {
 		}
 		if strings.HasPrefix(m.Output.Parser, "sarif") && m.Output.Format != "sarif" {
 			add("output.parser %q needs output.format \"sarif\"", m.Output.Parser)
+		}
+		if m.Output.Parser == "bandit-json" && m.Output.Format != "json" {
+			add("output.parser \"bandit-json\" needs output.format \"json\"")
 		}
 	}
 

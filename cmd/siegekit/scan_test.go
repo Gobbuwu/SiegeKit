@@ -30,11 +30,14 @@ var emptySARIF = fakeExec(func(s sandbox.Spec) (*sandbox.Result, error) {
 	if s.DataWritable { // an update run
 		return &sandbox.Result{Status: sandbox.Completed}, os.WriteFile(filepath.Join(s.DataDir, "db"), []byte("x"), 0o644)
 	}
-	for _, name := range []string{"gitleaks.sarif", "results_sarif.sarif", "trivy.sarif", "bandit.sarif", "gosec.sarif"} {
+	for _, name := range []string{"gitleaks.sarif", "results_sarif.sarif", "trivy.sarif", "gosec.sarif"} {
 		doc := `{"version":"2.1.0","runs":[{"tool":{"driver":{"name":"x"}},"results":[]}]}`
 		if err := os.WriteFile(filepath.Join(s.OutDir, name), []byte(doc), 0o644); err != nil {
 			return nil, err
 		}
+	}
+	if err := os.WriteFile(filepath.Join(s.OutDir, "bandit.json"), []byte(`{"results":[]}`), 0o644); err != nil {
+		return nil, err
 	}
 	return &sandbox.Result{Status: sandbox.Completed}, nil
 })

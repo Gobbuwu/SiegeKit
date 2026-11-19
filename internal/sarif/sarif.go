@@ -112,7 +112,7 @@ type Options struct {
 	MountPath string
 }
 
-// Parsers lists the accepted Options.Parser values (manifest output.parser).
+// Parsers lists the accepted Options.Parser values.
 var Parsers = []string{"sarif", "sarif-gitleaks", "sarif-checkov"}
 
 var reCWE = regexp.MustCompile(`(?i)\bCWE-([0-9]{1,5})\b`)
@@ -154,7 +154,7 @@ func ToFindings(l *Log, opt Options) ([]findings.Finding, error) {
 			}
 			if len(res.Locations) > 0 {
 				pl := res.Locations[0].PhysicalLocation
-				f.Location = findings.Location{URI: relURI(pl.ArtifactLocation.URI, opt.MountPath), StartLine: pl.Region.StartLine}
+				f.Location = findings.Location{URI: RelURI(pl.ArtifactLocation.URI, opt.MountPath), StartLine: pl.Region.StartLine}
 				if pl.Region.Snippet != nil {
 					f.Snippet = pl.Region.Snippet.Text
 				}
@@ -186,9 +186,9 @@ func adjust(parser string, s findings.Severity) findings.Severity {
 	return s
 }
 
-// relURI removes the container mount path from the start of a URI. Tools
+// RelURI removes the container mount path from the start of a URI. Tools
 // report it as "/target/x", "file:///target/x" or "target/x".
-func relURI(uri, mount string) string {
+func RelURI(uri, mount string) string {
 	mount = strings.Trim(mount, "/")
 	if mount == "" {
 		return uri

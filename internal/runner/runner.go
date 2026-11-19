@@ -16,6 +16,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/Gobbuwu/SiegeKit/internal/bandit"
 	"github.com/Gobbuwu/SiegeKit/internal/findings"
 	"github.com/Gobbuwu/SiegeKit/internal/manifest"
 	"github.com/Gobbuwu/SiegeKit/internal/report"
@@ -163,13 +164,7 @@ func runPlugin(ctx context.Context, ex Executor, m *manifest.Manifest, opt Optio
 		// any other exit code means the tool itself failed.
 		return fail(report.Failed, "tool exited with code %d: %s", res.ExitCode, lastLine(res.Stderr))
 	}
-	log, err := readReport(filepath.Join(out, m.Output.File))
-	if err != nil {
-		return fail(report.Failed, "%v", err)
-	}
-	fs, err := sarif.ToFindings(log, sarif.Options{
-		Plugin: m.ID, Family: m.Family, Parser: m.Output.Parser, MountPath: sandbox.TargetMount,
-	})
+	fs, err := readReport(filepath.Join(out, m.Output.File), m)
 	if err != nil {
 		return fail(report.Failed, "%v", err)
 	}
@@ -215,7 +210,7 @@ func substitute(args []string, cpus int, dataMount string) ([]string, error) {
 
 // readReport opens the tool's report without following symlinks, because the
 // output directory was writable by the tool (threat model T7).
-func readReport(path string) (*sarif.Log, error) {
+func readReport(path string, m *manifest.Manifest) ([]findings.Finding, error) {
 	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, fmt.Errorf("tool wrote no report %q", filepath.Base(path))
@@ -231,7 +226,16 @@ func readReport(path string) (*sarif.Log, error) {
 	if !st.Mode().IsRegular() {
 		return nil, fmt.Errorf("report %q is not a regular file", filepath.Base(path))
 	}
-	return sarif.Read(f)
+	if m.Output.Parser == "bandit-json" {
+		return bandit.ToFindings(f, bandit.Options{Plugin: m.ID, Family: m.Family, MountPath: sandbox.TargetMount})
+	}
+	log, err := sarif.Read(f)
+	if err != nil {
+		return nil, err
+	}
+	return sarif.ToFindings(log, sarif.Options{
+		Plugin: m.ID, Family: m.Family, Parser: m.Output.Parser, MountPath: sandbox.TargetMount,
+	})
 }
 
 // lastLine returns the last non-empty line of a tool's output for the

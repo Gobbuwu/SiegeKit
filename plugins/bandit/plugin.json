@@ -37,15 +37,15 @@
       "-r",
       "{target}",
       "-f",
-      "sarif",
+      "json",
       "-o",
-      "{outdir}/bandit.sarif",
+      "{outdir}/bandit.json",
       "--exit-zero"
     ]
   },
   "output": {
-    "format": "sarif",
-    "parser": "sarif",
-    "file": "bandit.sarif"
+    "format": "json",
+    "parser": "bandit-json",
+    "file": "bandit.json"
   }
 }

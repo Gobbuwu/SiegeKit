@@ -49,6 +49,7 @@ jobs:
         run: |
           go test -run='^$' -fuzz=FuzzParse -fuzztime=60s ./internal/manifest
           go test -run='^$' -fuzz=FuzzSARIF -fuzztime=60s ./internal/sarif
+          go test -run='^$' -fuzz=FuzzBandit -fuzztime=30s ./internal/bandit
       - name: Vulnerability check
         if: runner.os == 'Linux'
         run: go run golang.org/x/vuln/cmd/govulncheck@${GOVULNCHECK_VERSION} ./...

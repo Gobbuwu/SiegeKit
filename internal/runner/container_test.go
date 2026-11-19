@@ -3,6 +3,7 @@ package runner
 import (
 	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -136,7 +137,8 @@ func TestPinnedImageVersions(t *testing.T) {
 			t.Fatalf("%s: %v", m.ID, err)
 		}
 		if !strings.Contains(r.Stderr, m.Tool.Version) {
-			t.Errorf("%s: image does not report version %s (exit %d):\n%s", m.ID, m.Tool.Version, r.ExitCode, r.Stderr)
+			cfg, _ := exec.Command(e.Bin, "image", "inspect", "--format", "{{json .Config.Entrypoint}} {{json .Config.Cmd}}", image).CombinedOutput()
+			t.Errorf("%s: image does not report version %s (exit %d, entrypoint/cmd %s):\n%s", m.ID, m.Tool.Version, r.ExitCode, cfg, r.Stderr)
 		}
 	}
 }
