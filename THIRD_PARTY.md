@@ -6,7 +6,7 @@ Versions are the latest published versions checked on 2026-11-18. Rows marked "P
 
 ## Pinned images
 
-These are the publishers' official Docker Hub images. Each tag was resolved to its multi-architecture index digest with `docker buildx imagetools inspect` on 2026-11-19 (linux/amd64 and linux/arm64), and the plugin manifest refers to the image only by that digest. Publisher image signatures are not verified yet (planned for M1.5).
+These are the publishers' official images on Docker Hub or the GitHub Container Registry. Each tag was resolved to its multi-architecture index digest with `docker buildx imagetools inspect` on 2026-11-19 (linux/amd64 and linux/arm64), and the plugin manifest refers to the image only by that digest. Publisher image signatures are not verified yet (planned for M1.5).
 
 | Plugin | Image | Tag resolved |
 | --- | --- | --- |
@@ -14,16 +14,21 @@ These are the publishers' official Docker Hub images. Each tag was resolved to i
 | [checkov](plugins/checkov/plugin.json) | `docker.io/bridgecrew/checkov@sha256:122602cf32cc72286155d39f1f234b7b594818f7b8d7fdf490701620e521368b` | `3.4.5` |
 | [trivy](plugins/trivy/plugin.json) | `docker.io/aquasec/trivy@sha256:8f6bb947dbc528902e11f2f5be52f7b519f6a39d5d148f41166f2040499768fb` | `0.76.2` (released 2026-11-05, after the [March 2026 compromise](https://www.docker.com/blog/trivy-supply-chain-compromise-what-docker-hub-users-should-know/) of Docker Hub tags 0.69.4 to 0.69.6) |
 
+| [bandit](plugins/bandit/plugin.json) | `ghcr.io/pycqa/bandit/bandit@sha256:b405a808f5d50156aee921a77fb17c044d69d90ecef6499447a037678967c936` | `latest` (the publisher tags no versions; CI checks that the image reports 1.9.4) |
+| [gosec](plugins/gosec/plugin.json) | `ghcr.io/securego/gosec@sha256:7bcf1edbab3e80d8006a28d53e7031a9c9775be8eec30679e4adc1f51d272121` | `2.30.0` (released 2026-10-23) |
+
+The two GitHub Container Registry digests were resolved on 2026-11-19. Every pinned image's reported version is checked by `TestPinnedImageVersions` in CI.
+
 Trivy's vulnerability database is not pinned: `siegekit update` lets Trivy download it from its publisher (ADR 0014).
 
 ## All tools
 
 | Tool | Purpose | Latest version seen | License | Status |
 | --- | --- | --- | --- | --- |
-| [Semgrep CE](https://github.com/semgrep/semgrep) | SAST | 1.186.0 | LGPL-2.1 | Planned (M1) |
-| [Semgrep community rules](https://github.com/semgrep/semgrep-rules) | SAST rules | n/a | LGPL-2.1 with Commons Clause | Not bundled; user opts in to download |
-| [Bandit](https://github.com/PyCQA/bandit) | SAST, Python | 1.9.4 | Apache-2.0 | Planned (M1) |
-| [gosec](https://github.com/securego/gosec) | SAST, Go | 2.30.0 | Apache-2.0 | Planned (M1) |
+| [Semgrep CE](https://github.com/semgrep/semgrep) | SAST | 1.186.0 | LGPL-2.1 | Later; its rules need a license decision |
+| [Semgrep community rules](https://github.com/semgrep/semgrep-rules) | SAST rules | n/a | [Semgrep Rules License v1.0](https://semgrep.dev/legal/rules-license): "only for your own internal business purposes", no distribution | Not bundled; needs a decision before any download |
+| [Bandit](https://github.com/PyCQA/bandit) | SAST, Python | 1.9.4 | Apache-2.0 | Pinned (M1) |
+| [gosec](https://github.com/securego/gosec) | SAST, Go | 2.30.0 | Apache-2.0 | Pinned (M1) |
 | [OSV-Scanner](https://github.com/google/osv-scanner) | Dependency vulnerabilities | 2.7.1 | Apache-2.0 | Planned (M1) |
 | [Syft](https://github.com/anchore/syft) | SBOM | 1.57.2 | Apache-2.0 | Planned (M1) |
 | [Grype](https://github.com/anchore/grype) | Vulnerabilities, images | 0.122.1 | Apache-2.0 | Planned (M1) |
