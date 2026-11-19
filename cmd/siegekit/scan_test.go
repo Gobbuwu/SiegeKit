@@ -10,10 +10,14 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Gobbuwu/SiegeKit/internal/deps"
+	"github.com/Gobbuwu/SiegeKit/internal/findings"
+	"github.com/Gobbuwu/SiegeKit/internal/report"
 	"github.com/Gobbuwu/SiegeKit/internal/runner"
 	"github.com/Gobbuwu/SiegeKit/internal/sandbox"
+	"github.com/Gobbuwu/SiegeKit/internal/store"
 	"github.com/Gobbuwu/SiegeKit/plugins"
 )
 
@@ -318,5 +322,46 @@ func TestUpdateAsksForMissingImage(t *testing.T) {
 	out.Reset()
 	if code := run([]string{"update", "--yes"}, &out, &errb); code != exitOK || !strings.Contains(out.String(), "trivy      updated") {
 		t.Fatalf("--yes: exit %d: %s", code, out.String())
+	}
+}
+
+// A saved run of the same target is compared with the new one (ADR 0013),
+// also with --no-save.
+func TestScanComparesWithLastRun(t *testing.T) {
+	data := t.TempDir()
+	t.Setenv("XDG_DATA_HOME", data)
+	target, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	gone := findings.Finding{RuleID: "aws-key", Title: "AWS key", Severity: findings.High, Location: findings.Location{URI: "a.env", StartLine: 1}, Sources: []findings.Source{{Plugin: "gitleaks", RuleID: "aws-key"}}}
+	gone.ComputeFingerprint()
+	st := &store.Store{Dir: filepath.Join(data, "siegekit", "runs")}
+	if _, err := st.Save(&report.Run{SiegeKitVersion: "old", Target: target, Started: time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC), Findings: []findings.Finding{gone}}, "t"); err != nil {
+		t.Fatal(err)
+	}
+	reports := filepath.Join(t.TempDir(), "rep")
+	useExecutor(t, emptySARIF, nil)
+	var out, errb bytes.Buffer
+	if code := run([]string{"scan", target, "--no-save", "--report-dir", reports}, &out, &errb); code != exitOK {
+		t.Fatalf("exit %d: %s %s", code, out.String(), errb.String())
+	}
+	if !strings.Contains(out.String(), "Since the last scan of this target (2026-11-01 00:00 UTC): 0 new, 1 fixed, 0 still present.") ||
+		!strings.Contains(out.String(), "The previous run used SiegeKit old") {
+		t.Errorf("output: %s", out.String())
+	}
+	var r report.Run
+	b, _ := os.ReadFile(filepath.Join(reports, "report.json"))
+	if err := json.Unmarshal(b, &r); err != nil || r.Comparison == nil || len(r.Comparison.Fixed) != 1 || r.Comparison.Fixed[0].Fingerprint != gone.Fingerprint {
+		t.Fatalf("comparison in report.json: %s %v", b, err)
+	}
+	h, _ := os.ReadFile(filepath.Join(reports, "report.html"))
+	if !strings.Contains(string(h), "Since the last scan") || !strings.Contains(string(h), "AWS key") {
+		t.Errorf("HTML report has no comparison")
+	}
+	// Another target is not compared.
+	out.Reset()
+	if code := run([]string{"scan", t.TempDir(), "--no-save", "--report-dir", reports}, &out, &errb); code != exitOK || strings.Contains(out.String(), "Since the last scan") {
+		t.Errorf("exit %d: %s", code, out.String())
 	}
 }

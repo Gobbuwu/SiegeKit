@@ -77,6 +77,41 @@ type Run struct {
 	Finished        time.Time          `json:"finished"`
 	Plugins         []PluginResult     `json:"plugins"`
 	Findings        []findings.Finding `json:"findings"`
+	// Comparison is set when a saved run of the same target exists.
+	Comparison *Comparison `json:"comparison,omitempty"`
+}
+
+// Comparison says what changed since the last saved run of the same target
+// (ADR 0013). A finding that disappeared counts as fixed only if a plugin
+// that reported it ran to completion in this run; otherwise it is listed as
+// not checked again, so a failed check cannot make problems look fixed.
+type Comparison struct {
+	PreviousRun     string             `json:"previousRun"`
+	PreviousStarted time.Time          `json:"previousStarted"`
+	PreviousVersion string             `json:"previousVersion"`
+	New             []string           `json:"new"` // fingerprints of findings the previous run did not report
+	Fixed           []findings.Finding `json:"fixed"`
+	NotRechecked    []findings.Finding `json:"notRechecked"` // gone from this run, but no plugin that reported them completed
+	StillPresent    int                `json:"stillPresent"` // reported by both runs
+}
+
+// Summary is one line for the terminal and the HTML report.
+func (c *Comparison) Summary() string {
+	s := fmt.Sprintf("Since the last scan of this target (%s): %d new, %d fixed, %d still present",
+		c.PreviousStarted.UTC().Format("2006-01-02 15:04 UTC"), len(c.New), len(c.Fixed), c.StillPresent)
+	if n := len(c.NotRechecked); n > 0 {
+		s += fmt.Sprintf(", %d not checked again because their check did not complete", n)
+	}
+	return s + "."
+}
+
+// VersionNote warns when the previous run used another SiegeKit version:
+// tool and parser changes can make findings look new or fixed.
+func (c *Comparison) VersionNote(current string) string {
+	if c.PreviousVersion == current {
+		return ""
+	}
+	return fmt.Sprintf("The previous run used SiegeKit %s, this one %s: some changes may come from the upgrade, not from the target.", c.PreviousVersion, current)
 }
 
 // NotTested lists what automated checks cannot cover (ADR 0009 item 3).
@@ -263,12 +298,22 @@ func WriteHTML(w io.Writer, r *Run) error {
 	plugins := append([]PluginResult(nil), r.Plugins...)
 	sort.SliceStable(plugins, func(i, j int) bool { return plugins[i].Family < plugins[j].Family })
 	counts := r.Counts()
+	isNew := map[string]bool{}
+	versionNote := ""
+	if r.Comparison != nil {
+		for _, fp := range r.Comparison.New {
+			isNew[fp] = true
+		}
+		versionNote = r.Comparison.VersionNote(r.SiegeKitVersion)
+	}
 	return page.Execute(w, map[string]any{
-		"Run":       r,
-		"Headline":  r.Headline(),
-		"Complete":  r.Complete(),
-		"Plugins":   plugins,
-		"NotTested": NotTested,
+		"Run":         r,
+		"New":         isNew,
+		"VersionNote": versionNote,
+		"Headline":    r.Headline(),
+		"Complete":    r.Complete(),
+		"Plugins":     plugins,
+		"NotTested":   NotTested,
 		"Counts": []struct {
 			Name string
 			N    int
@@ -305,6 +350,14 @@ code,pre{font:13px ui-monospace,monospace;white-space:pre-wrap;word-break:break-
 {{if not .Complete}}<p class="warn">This run is incomplete: at least one check failed or timed out. Missing checks may hide issues.</p>{{end}}
 <p>Target: <code>{{.Run.Target}}</code> · Mode: {{.Run.Mode}} · SiegeKit {{.Run.SiegeKitVersion}} · {{.Run.Started.Format "2006-01-02 15:04 MST"}}</p>
 
+{{with .Run.Comparison}}<h2>Since the last scan</h2>
+<p>{{.Summary}} Previous run: <code>{{.PreviousRun}}</code>.</p>
+{{with $.VersionNote}}<p class="warn">{{.}}</p>{{end}}
+{{if .Fixed}}<p>Fixed (the check that reported each one ran to completion and did not report it again):</p>
+<ul>{{range .Fixed}}<li>[{{.Severity}}] {{.Title}} · <code>{{.Location.URI}}{{if .Location.StartLine}}:{{.Location.StartLine}}{{end}}</code></li>{{end}}</ul>{{end}}
+{{if .NotRechecked}}<p class="warn">Not checked again, because their check did not complete in this run:</p>
+<ul>{{range .NotRechecked}}<li>[{{.Severity}}] {{.Title}} · <code>{{.Location.URI}}{{if .Location.StartLine}}:{{.Location.StartLine}}{{end}}</code></li>{{end}}</ul>{{end}}
+{{end}}
 <h2>What was tested</h2>
 <table>
 <tr><th>Check</th><th>Family</th><th>Tool</th><th>Status</th><th>Findings</th></tr>
@@ -319,7 +372,7 @@ code,pre{font:13px ui-monospace,monospace;white-space:pre-wrap;word-break:break-
 <h2>Findings</h2>
 <p>{{range $i, $c := .Counts}}{{if $i}} · {{end}}{{$c.Name}}: {{$c.N}}{{end}}</p>
 {{range .Run.Findings}}
-<h3 class="sev-{{.Severity}}">[{{.Severity}}] {{.Title}}</h3>
+<h3 class="sev-{{.Severity}}">{{if index $.New .Fingerprint}}New: {{end}}[{{.Severity}}] {{.Title}}</h3>
 <p>{{.Message}}</p>
 <p><code>{{.Location.URI}}{{if .Location.StartLine}}:{{.Location.StartLine}}{{end}}</code>{{if .CWEs}} · {{range $i, $c := .CWEs}}{{if $i}}, {{end}}{{$c}}{{end}}{{end}}</p>
 {{if .Snippet}}<pre>{{.Snippet}}</pre>{{end}}

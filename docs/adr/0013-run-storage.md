@@ -10,7 +10,7 @@ ADR 0007 planned a local SQLite database for comparing runs. A SQLite driver for
 
 ## Decision
 
-- Each run is saved as one JSON file, `<UTC timestamp>-<target slug>.json`, in the user's SiegeKit data directory, created with permissions `0700` (directory) and `0600` (files).
+- Each run is saved as one JSON file, `<UTC timestamp>-<target slug>.json` (a second run of the same target in the same second ends in `-2` to `-9`; added 2026-11-19 with run comparison), in the user's SiegeKit data directory, created with permissions `0700` (directory) and `0600` (files).
 - Writes go to a temporary file that is renamed into place, so an interrupted run never leaves a partial file. Existing runs are never overwritten.
 - Comparison ("new", "fixed", "still present") uses finding fingerprints. A finding counts as fixed only if the plugin that reported it ran to completion in the newer run; otherwise it stays listed, so a failed check cannot make problems look fixed.
 

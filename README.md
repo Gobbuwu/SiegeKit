@@ -19,7 +19,7 @@ Nothing is downloaded without asking. Before a scan or update installs a missing
 
 When you scan a directory, downloads are the only steps that use the network, and they run without access to your files. A URL target is resolved with DNS, and `--deployed` also fetches the proof-of-control file or DNS record. Run `siegekit update` at least weekly; reports say when the data is old.
 
-The scan writes `report.html`, `report.json` and `report.sarif` to `./siegekit-report` and saves a copy of the run under `~/.local/share/siegekit/runs`. Each tool runs in a container with no network and read-only access to your directory. Exit codes: 0 no findings at or above `--fail-on` (default high), 3 findings, 4 a check failed or timed out, 1 an error, 2 a usage error.
+The scan writes `report.html`, `report.json` and `report.sarif` to `./siegekit-report` and saves a copy of the run under `~/.local/share/siegekit/runs`. The next scan of the same target says what is new and what was fixed since then. Each tool runs in a container with no network and read-only access to your directory. Exit codes: 0 no findings at or above `--fail-on` (default high), 3 findings, 4 a check failed or timed out, 1 an error, 2 a usage error.
 
 ## Using SiegeKit with an AI coding assistant
 

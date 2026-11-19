@@ -69,6 +69,12 @@ Top level:
   - `requests`: how many requests reached the target through the egress proxy. A check that sent none is reported as `failed`, because it tested nothing.
   - `refused`: how many requests the proxy blocked because they went to another host, address or port.
 - `findings`: the deduplicated findings, most severe first.
+- `comparison`: present when a saved run of the same `target` exists (runs are saved unless `--no-save` is given). It compares this run with the most recent one:
+  - `previousRun`, `previousStarted`, `previousVersion`: that run's ID, start time and SiegeKit version. If the version differs, some changes may come from the upgrade.
+  - `new`: the `fingerprint` of each finding in this run that the previous run did not report.
+  - `fixed`: findings the previous run reported that are gone, and whose check ran to completion in this run.
+  - `notRechecked`: findings the previous run reported that are gone, but whose check did not complete in this run. Do not treat these as fixed.
+  - `stillPresent`: how many findings both runs reported.
 
 Each finding:
 - `ruleId`, `title`, `message`.
