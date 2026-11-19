@@ -267,7 +267,9 @@ env | grep -q SIEGEKIT_TEST_SECRET && echo "ENV-LEAKED" || echo "env-clean"
 
 func TestContainerTimeoutKillsContainer(t *testing.T) {
 	e := engine(t)
-	s := spec(t, "sleep", "300")
+	// 299 marks this test's container: other packages' tests run containers
+	// of the same image, with the same name prefix, at the same time.
+	s := spec(t, "sleep", "299")
 	s.Timeout = 3 * time.Second
 	start := time.Now()
 	r := run(t, e, s)
@@ -277,14 +279,12 @@ func TestContainerTimeoutKillsContainer(t *testing.T) {
 	if time.Since(start) > 45*time.Second {
 		t.Fatalf("timeout took %v", time.Since(start))
 	}
-	// Only containers of the test image: other packages' tests run tool
-	// containers named siegekit-* at the same time.
-	out, err := exec.Command(e.Bin, "ps", "--all", "--filter", "name=siegekit-", "--filter", "ancestor="+testImage, "--format", "{{.Names}}").Output()
+	out, err := exec.Command(e.Bin, "ps", "--all", "--no-trunc", "--filter", "name=siegekit-", "--filter", "ancestor="+testImage, "--format", "{{.Names}} {{.Command}}").Output()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.TrimSpace(string(out)) != "" {
-		t.Fatalf("containers left behind: %s", out)
+	if strings.Contains(string(out), "sleep 299") {
+		t.Fatalf("container left behind: %s", out)
 	}
 }
 
