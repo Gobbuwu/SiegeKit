@@ -94,3 +94,56 @@ func FuzzSARIF(f *testing.F) {
 		}
 	})
 }
+
+// Shapes below are copied from real gitleaks 8.30.1 and checkov 3.4.5 output.
+func TestParserVariants(t *testing.T) {
+	gitleaks := `{"version":"2.1.0","runs":[{"tool":{"driver":{"name":"gitleaks","rules":[{"id":"github-pat","shortDescription":{"text":"GitHub token"}}]}},"results":[
+	{"ruleId":"github-pat","message":{"text":"found"},"locations":[{"physicalLocation":{"artifactLocation":{"uri":"/target/config.py"},"region":{"startLine":1,"snippet":{"text":"REDACTED"}}}}]}]}]}`
+	checkov := `{"version":"2.1.0","runs":[{"tool":{"driver":{"name":"Checkov","rules":[{"id":"CKV_DOCKER_8","name":"Ensure the last USER is not root"}]}},"results":[
+	{"ruleId":"CKV_DOCKER_8","ruleIndex":0,"level":"error","message":{"text":"root"},"locations":[{"physicalLocation":{"artifactLocation":{"uri":"target/Dockerfile"},"region":{"startLine":3}}}]}]}]}`
+	for _, tc := range []struct {
+		doc, parser, family, uri string
+		want                     findings.Severity
+	}{
+		{gitleaks, "sarif-gitleaks", "secrets", "config.py", findings.High},
+		{checkov, "sarif-checkov", "iac", "Dockerfile", findings.Medium},
+		{checkov, "sarif", "iac", "Dockerfile", findings.High},
+	} {
+		l, err := Read(strings.NewReader(tc.doc))
+		if err != nil {
+			t.Fatal(err)
+		}
+		fs, err := ToFindings(l, Options{Plugin: "p", Family: tc.family, Parser: tc.parser, MountPath: "/target"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(fs) != 1 || fs[0].Severity != tc.want || fs[0].Location.URI != tc.uri {
+			t.Errorf("%s: got %+v", tc.parser, fs)
+		}
+	}
+}
+
+func TestRelURI(t *testing.T) {
+	for in, want := range map[string]string{
+		"/target/a/b.go":        "a/b.go",
+		"file:///target/a.go":   "a.go",
+		"target/Dockerfile":     "Dockerfile",
+		"/target/":              "/target/",
+		"/targetx/a.go":         "/targetx/a.go",
+		"app/main.go":           "app/main.go",
+		"https://example.test/": "https://example.test/",
+	} {
+		if got := relURI(in, "/target"); got != want {
+			t.Errorf("relURI(%q) = %q, want %q", in, got, want)
+		}
+	}
+	if got := relURI("/target/a", ""); got != "/target/a" {
+		t.Errorf("empty mount changed URI: %q", got)
+	}
+}
+
+func TestUnknownParser(t *testing.T) {
+	if _, err := ToFindings(&Log{}, Options{Plugin: "p", Family: "iac", Parser: "x"}); err == nil {
+		t.Fatal("expected rejection")
+	}
+}

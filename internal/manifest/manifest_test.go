@@ -82,6 +82,7 @@ func TestSchemaEnumsMatch(t *testing.T) {
 		{"gpu", get("properties", "resources", "properties", "gpu", "enum"), GPUModes},
 		{"network", get("properties", "network", "enum"), Networks},
 		{"format", get("properties", "output", "properties", "format", "enum"), Formats},
+		{"parser", get("properties", "output", "properties", "parser", "enum"), Parsers},
 	} {
 		if !slices.Equal(c.schema, c.goVals) {
 			t.Errorf("%s: schema %v != Go %v", c.name, c.schema, c.goVals)
@@ -126,6 +127,11 @@ func TestRejections(t *testing.T) {
 			a := m["tool"].(map[string]any)["artifacts"].([]any)[0].(map[string]any)
 			a["sha256"] = strings.Repeat("1", 64)
 		},
+		"output file traversal": func(m map[string]any) { m["output"].(map[string]any)["file"] = "../x" },
+		"output file dotdot":    func(m map[string]any) { m["output"].(map[string]any)["file"] = ".." },
+		"output file missing":   func(m map[string]any) { delete(m["output"].(map[string]any), "file") },
+		"unknown parser":        func(m map[string]any) { m["output"].(map[string]any)["parser"] = "custom" },
+		"sarif parser on json":  func(m map[string]any) { m["output"].(map[string]any)["format"] = "json" },
 		"unknown nested field": func(m map[string]any) {
 			m["run"].(map[string]any)["shell"] = "/bin/sh"
 		},

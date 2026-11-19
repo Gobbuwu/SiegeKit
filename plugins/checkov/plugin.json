@@ -1,0 +1,57 @@
+{
+  "schemaVersion": 1,
+  "id": "checkov",
+  "name": "Checkov infrastructure-as-code scan",
+  "version": "1.0.0",
+  "description": "Checks Dockerfiles, Kubernetes, Terraform, CloudFormation, Helm and GitHub Actions files for insecure settings. Runs offline; secret scanning is left to gitleaks.",
+  "family": "iac",
+  "mode": "passive",
+  "destructive": false,
+  "targets": [
+    "repo"
+  ],
+  "tool": {
+    "name": "checkov",
+    "version": "3.4.5",
+    "license": "Apache-2.0",
+    "homepage": "https://github.com/bridgecrewio/checkov",
+    "artifacts": [
+      {
+        "platform": "any",
+        "kind": "oci-image",
+        "ref": "docker.io/bridgecrew/checkov@sha256:122602cf32cc72286155d39f1f234b7b594818f7b8d7fdf490701620e521368b",
+        "sha256": "122602cf32cc72286155d39f1f234b7b594818f7b8d7fdf490701620e521368b"
+      }
+    ]
+  },
+  "resources": {
+    "cpus": 2,
+    "memoryMiB": 2048,
+    "gpu": "none",
+    "timeoutSeconds": 900,
+    "maxTimeoutSeconds": 3600
+  },
+  "network": "none",
+  "run": {
+    "args": [
+      "--directory",
+      "{target}",
+      "--skip-framework",
+      "secrets",
+      "sca_package",
+      "sca_image",
+      "--skip-download",
+      "--soft-fail",
+      "--compact",
+      "--output",
+      "sarif",
+      "--output-file-path",
+      "{outdir}"
+    ]
+  },
+  "output": {
+    "format": "sarif",
+    "parser": "sarif-checkov",
+    "file": "results_sarif.sarif"
+  }
+}

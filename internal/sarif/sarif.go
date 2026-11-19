@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -102,7 +103,17 @@ func Read(r io.Reader) (*Log, error) {
 type Options struct {
 	Plugin string // plugin id recorded as the source
 	Family string // test family, e.g. "secrets"
+	// Parser selects tool-specific severity rules: "sarif" (or empty) for
+	// plain SARIF, "sarif-gitleaks" or "sarif-checkov".
+	Parser string
+	// MountPath is where the target was mounted in the container (for example
+	// "/target"). It is removed from the start of URIs so locations are
+	// relative to the target directory.
+	MountPath string
 }
+
+// Parsers lists the accepted Options.Parser values (manifest output.parser).
+var Parsers = []string{"sarif", "sarif-gitleaks", "sarif-checkov"}
 
 var reCWE = regexp.MustCompile(`(?i)\bCWE-([0-9]{1,5})\b`)
 
@@ -110,6 +121,12 @@ var reCWE = regexp.MustCompile(`(?i)\bCWE-([0-9]{1,5})\b`)
 func ToFindings(l *Log, opt Options) ([]findings.Finding, error) {
 	if opt.Plugin == "" || opt.Family == "" {
 		return nil, errors.New("plugin and family are required")
+	}
+	if opt.Parser == "" {
+		opt.Parser = "sarif"
+	}
+	if !slices.Contains(Parsers, opt.Parser) {
+		return nil, fmt.Errorf("unknown parser %q", opt.Parser)
 	}
 	var out []findings.Finding
 	for _, run := range l.Runs {
@@ -130,14 +147,14 @@ func ToFindings(l *Log, opt Options) ([]findings.Finding, error) {
 				RuleID:   ruleID,
 				Title:    title(rule, ruleID),
 				Message:  res.Message.Text,
-				Severity: severity(res, rule),
+				Severity: adjust(opt.Parser, severity(res, rule)),
 				CWEs:     cwes(rule),
 				Family:   opt.Family,
 				Sources:  []findings.Source{{Plugin: opt.Plugin, RuleID: ruleID}},
 			}
 			if len(res.Locations) > 0 {
 				pl := res.Locations[0].PhysicalLocation
-				f.Location = findings.Location{URI: pl.ArtifactLocation.URI, StartLine: pl.Region.StartLine}
+				f.Location = findings.Location{URI: relURI(pl.ArtifactLocation.URI, opt.MountPath), StartLine: pl.Region.StartLine}
 				if pl.Region.Snippet != nil {
 					f.Snippet = pl.Region.Snippet.Text
 				}
@@ -151,6 +168,37 @@ func ToFindings(l *Log, opt Options) ([]findings.Finding, error) {
 		}
 	}
 	return out, nil
+}
+
+// adjust applies tool-specific severity rules.
+//
+// Gitleaks results carry no level or score, but every one is a credential in
+// the code, so they are high. Checkov's open-source edition marks every failed
+// check "error" and has no severity data, so its results are capped at medium
+// rather than all being reported as high.
+func adjust(parser string, s findings.Severity) findings.Severity {
+	switch parser {
+	case "sarif-gitleaks":
+		return findings.High
+	case "sarif-checkov":
+		return min(s, findings.Medium)
+	}
+	return s
+}
+
+// relURI removes the container mount path from the start of a URI. Tools
+// report it as "/target/x", "file:///target/x" or "target/x".
+func relURI(uri, mount string) string {
+	mount = strings.Trim(mount, "/")
+	if mount == "" {
+		return uri
+	}
+	for _, p := range []string{"file:///" + mount + "/", "/" + mount + "/", mount + "/"} {
+		if rest, ok := strings.CutPrefix(uri, p); ok && rest != "" {
+			return rest
+		}
+	}
+	return uri
 }
 
 func title(r Rule, id string) string {
