@@ -40,6 +40,10 @@ type Config struct {
 	MaxConns        int // open client connections
 	MaxServerErrors int // consecutive 5xx or upstream failures before stopping
 	Version         string
+	// ReadOnly allows only GET and HEAD requests. Non-destructive plugins
+	// get it on deployed targets, so a tool default that submits forms
+	// cannot change data there (owner decision 2026-11-19, ADR 0023).
+	ReadOnly bool
 
 	// Dial and RootCAs replace the network and system roots in tests.
 	Dial    func(ctx context.Context, network, addr string) (net.Conn, error)
@@ -287,6 +291,10 @@ func (p *Proxy) tunnel(w http.ResponseWriter) {
 func (p *Proxy) forward(w http.ResponseWriter, r *http.Request) {
 	if !p.sameOrigin(r.Host) {
 		p.refuse(w, "the Host header must name %s", p.authority)
+		return
+	}
+	if p.cfg.ReadOnly && r.Method != http.MethodGet && r.Method != http.MethodHead {
+		p.refuse(w, "only GET and HEAD requests are allowed for this check on a deployed target")
 		return
 	}
 	select {

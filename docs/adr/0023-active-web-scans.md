@@ -39,7 +39,8 @@ Facts checked before this ADR, with the pinned image `zaproxy/zap-stable:2.17.0`
 
 - `siegekit scan URL` now sends traffic. Everything before the first request (target rules, proof, typed confirmation, plan, audit entry) is unchanged or stricter.
 - ZAP's image is about 1.1 GB, and the consent prompt says so.
-- The `zap` spider still follows every in-scope link with GET. A site whose links change data (a "delete" or "log out" link, for example) can be changed by the crawl. Staging is recommended for deployed scans (threat model T13), and restricting the proxy to GET and HEAD for non-destructive plugins is an open question for the owner.
+- The `zap` spider still follows every in-scope link with GET. A site whose links change data (a "delete" or "log out" link, for example) can be changed by the crawl. Staging is recommended for deployed scans (threat model T13).
+- On deployed targets the egress proxy allows only GET and HEAD from plugins that are not destructive (owner decision, 2026-11-19), so a tool's default cannot submit data there. `TestReadOnly` checks that POST, PUT, DELETE, PATCH, OPTIONS and other methods are refused over HTTP and HTTPS.
 - On deployed targets, ZAP checks only what the crawled responses show. Injection flaws on a deployed target are not tested until M2.10, which the report's "Not tested" list says.
 - Requests go through the relay one connection at a time per ZAP thread. Measured in the container test: the spider and passive checks on the fixture took about 20 seconds, and the attack scan sent 773 requests in under 30 seconds.
 
