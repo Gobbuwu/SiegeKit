@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -68,5 +69,18 @@ func TestAppendSizeLimit(t *testing.T) {
 	}
 	if err := Append(p, Entry{Time: time.Now()}); err == nil {
 		t.Error("appended past the size limit")
+	}
+}
+
+func TestAppendRefusesZeroTimeAndDevices(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "audit.log")
+	if err := Append(p, Entry{}); err == nil {
+		t.Error("entry without a time accepted")
+	}
+	if _, err := os.Stat(p); err == nil {
+		t.Error("log created for a refused entry")
+	}
+	if err := Append(os.DevNull, Entry{Time: time.Now()}); err == nil || !strings.Contains(err.Error(), "not a regular file") {
+		t.Errorf("device: %v", err)
 	}
 }

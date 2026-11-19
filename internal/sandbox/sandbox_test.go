@@ -469,3 +469,91 @@ func TestCheckStatic(t *testing.T) {
 		t.Error("missing file accepted")
 	}
 }
+
+func TestCopyExecutable(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "src")
+	if err := os.WriteFile(src, []byte("binary"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	dst := filepath.Join(dir, "dst")
+	if err := copyExecutable(src, dst); err != nil {
+		t.Fatal(err)
+	}
+	if b, err := os.ReadFile(dst); err != nil || string(b) != "binary" {
+		t.Errorf("copy: %q %v", b, err)
+	}
+	if st, err := os.Stat(dst); err != nil || st.Mode().Perm() != 0o755 {
+		t.Errorf("mode: %v %v", st.Mode(), err)
+	}
+	// An existing destination is never overwritten.
+	if err := copyExecutable(src, dst); err == nil {
+		t.Error("overwrote an existing file")
+	}
+	link := filepath.Join(dir, "link")
+	if err := os.Symlink(src, link); err != nil {
+		t.Fatal(err)
+	}
+	if err := copyExecutable(link, filepath.Join(dir, "d2")); err == nil {
+		t.Error("followed a symlinked source")
+	}
+	if err := copyExecutable(dir, filepath.Join(dir, "d3")); err == nil {
+		t.Error("copied a directory")
+	}
+	if err := copyExecutable(filepath.Join(dir, "missing"), filepath.Join(dir, "d4")); err == nil {
+		t.Error("copied a missing file")
+	}
+}
+
+// TestRelayStartStop starts the relay with a static SiegeKit build and
+// checks that StopRelay removes it. The relay's traffic is tested in the
+// runner's active tests.
+func TestRelayStartStop(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("the relay runs only on Linux")
+	}
+	e := engine(t)
+	if ok, err := e.HasImage(context.Background(), RelayImage); err != nil {
+		t.Fatal(err)
+	} else if !ok {
+		if err := e.Pull(context.Background(), RelayImage); err != nil {
+			t.Fatal(err)
+		}
+	}
+	bin := filepath.Join(t.TempDir(), "siegekit")
+	build := exec.Command("go", "build", "-o", bin, "../../cmd/siegekit")
+	build.Env = append(os.Environ(), "CGO_ENABLED=0")
+	if out, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("go build: %v\n%s", err, out)
+	}
+	dir := t.TempDir()
+	if err := os.Chmod(dir, 0o711); err != nil { // the relay's user must reach its binary
+		t.Fatal(err)
+	}
+	name, err := e.StartRelay(context.Background(), dir, bin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	running := func() string {
+		out, err := exec.Command(e.Bin, "ps", "--all", "--filter", "name="+name, "--format", "{{.Names}}").Output()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return strings.TrimSpace(string(out))
+	}
+	if running() != name {
+		t.Fatalf("relay %s not running", name)
+	}
+	e.StopRelay("not-a-relay") // ignored
+	if running() != name {
+		t.Fatal("StopRelay acted on a name that is not a relay's")
+	}
+	e.StopRelay(name)
+	if got := running(); got != "" {
+		t.Errorf("relay left behind: %s", got)
+	}
+	// The relay directory holds a fresh copy for each run.
+	if _, err := e.StartRelay(context.Background(), dir, bin); err == nil || !strings.Contains(err.Error(), "copy relay binary") {
+		t.Errorf("second start in the same directory: %v", err)
+	}
+}
