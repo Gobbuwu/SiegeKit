@@ -1,8 +1,10 @@
 package plugins
 
 import (
+	"io/fs"
 	"strings"
 	"testing"
+	"testing/fstest"
 )
 
 func TestBuiltin(t *testing.T) {
@@ -27,5 +29,28 @@ func TestBuiltin(t *testing.T) {
 		if *m.Destructive || m.Mode != "passive" || m.Network != "none" {
 			t.Errorf("%s: M1 built-ins must be passive, non-destructive and offline", m.ID)
 		}
+	}
+}
+
+func TestLoadRefusesBrokenManifests(t *testing.T) {
+	good, err := files.ReadFile("gitleaks/plugin.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, tc := range map[string]struct {
+		fsys fstest.MapFS
+		want string
+	}{
+		"invalid":         {fstest.MapFS{"x/plugin.json": {Data: []byte(`{}`)}}, "x/plugin.json"},
+		"wrong directory": {fstest.MapFS{"other/plugin.json": {Data: good}}, `does not match directory "other"`},
+		"unreadable":      {fstest.MapFS{"gitleaks/plugin.json": {Mode: fs.ModeDir}}, "gitleaks/plugin.json"},
+	} {
+		if _, err := load(tc.fsys); err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("%s: got %v, want %q", name, err, tc.want)
+		}
+	}
+	ms, err := load(fstest.MapFS{"gitleaks/plugin.json": {Data: good}})
+	if err != nil || len(ms) != 1 || ms[0].ID != "gitleaks" {
+		t.Errorf("good manifest: %v %v", ms, err)
 	}
 }
