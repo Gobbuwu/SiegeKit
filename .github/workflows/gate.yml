@@ -78,9 +78,9 @@ jobs:
           git -C "$dir" -c advice.detachedHead=false checkout -q FETCH_HEAD
           test "$(git -C "$dir" rev-parse HEAD)" = "$SHA"
       - name: Scan
-        # Exit 0 (no findings at the threshold) and 3 (findings) both mean
-        # every check ran. 4 means a check failed or timed out; anything else
-        # is an error or a crash.
+        # Exit 0 (clean) or 3 (findings); 4 means a check failed or timed
+        # out, anything else is an error or a crash. Exit 3 wins over 4, so
+        # the report is checked too.
         run: |
           set +e
           "$RUNNER_TEMP/siegekit" scan --update --no-save --report-dir "$RUNNER_TEMP/report" "$RUNNER_TEMP/target"
@@ -88,5 +88,6 @@ jobs:
           set -e
           echo "exit code $code"
           if [ "$code" -ne 0 ] && [ "$code" -ne 3 ]; then exit 1; fi
-          # Belt and braces: every plugin in the report must have run.
-          jq -e '[.plugins[] | select(.status != "ran")] | length == 0' "$RUNNER_TEMP/report/report.json"
+          # Belt and braces: every plugin ran, or was skipped because the
+          # repository has no files of its language.
+          jq -e '[.plugins[] | select(.status != "ran" and (.status != "skipped" or (.reason | startswith("no files matching") | not)))] | length == 0' "$RUNNER_TEMP/report/report.json"

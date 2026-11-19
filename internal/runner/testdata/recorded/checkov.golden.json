@@ -1,0 +1,78 @@
+[
+  {
+    "ruleId": "CKV_DOCKER_7",
+    "title": "Ensure the base image uses a non latest version tag",
+    "message": "Ensure the base image uses a non latest version tag",
+    "severity": "medium",
+    "location": {
+      "uri": "Dockerfile",
+      "startLine": 1
+    },
+    "snippet": "FROM ubuntu:latest\n",
+    "family": "iac",
+    "sources": [
+      {
+        "plugin": "checkov",
+        "ruleId": "CKV_DOCKER_7"
+      }
+    ],
+    "fingerprint": "f301e065e656b3cbb7969e7a0e946f57"
+  },
+  {
+    "ruleId": "CKV_DOCKER_5",
+    "title": "Ensure update instructions are not use alone in the Dockerfile",
+    "message": "Ensure update instructions are not use alone in the Dockerfile",
+    "severity": "medium",
+    "location": {
+      "uri": "Dockerfile",
+      "startLine": 2
+    },
+    "snippet": "RUN apt-get update\n",
+    "family": "iac",
+    "sources": [
+      {
+        "plugin": "checkov",
+        "ruleId": "CKV_DOCKER_5"
+      }
+    ],
+    "fingerprint": "cb5ad30cd32d0bdbfb2c875b42c39bf8"
+  },
+  {
+    "ruleId": "CKV_DOCKER_8",
+    "title": "Ensure the last USER is not root",
+    "message": "Ensure the last USER is not root",
+    "severity": "medium",
+    "location": {
+      "uri": "Dockerfile",
+      "startLine": 3
+    },
+    "snippet": "USER root",
+    "family": "iac",
+    "sources": [
+      {
+        "plugin": "checkov",
+        "ruleId": "CKV_DOCKER_8"
+      }
+    ],
+    "fingerprint": "672560ca93a5b8d95ae8efe812fd9a6d"
+  },
+  {
+    "ruleId": "CKV_DOCKER_2",
+    "title": "Ensure that HEALTHCHECK instructions have been added to container images",
+    "message": "Ensure that HEALTHCHECK instructions have been added to container images",
+    "severity": "medium",
+    "location": {
+      "uri": "Dockerfile",
+      "startLine": 1
+    },
+    "snippet": "FROM ubuntu:latest\nRUN apt-get update\nUSER root",
+    "family": "iac",
+    "sources": [
+      {
+        "plugin": "checkov",
+        "ruleId": "CKV_DOCKER_2"
+      }
+    ],
+    "fingerprint": "de8b3ce6be3fe938eb530213b0c70330"
+  }
+]

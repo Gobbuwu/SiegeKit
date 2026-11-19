@@ -1,0 +1,21 @@
+[
+  {
+    "ruleId": "github-pat",
+    "title": "Uncovered a GitHub Personal Access Token, potentially leading to unauthorized repository access and sensitive content exposure.",
+    "message": "github-pat has detected secret for file /target/config.py.",
+    "severity": "high",
+    "location": {
+      "uri": "config.py",
+      "startLine": 1
+    },
+    "snippet": "REDA****",
+    "family": "secrets",
+    "sources": [
+      {
+        "plugin": "gitleaks",
+        "ruleId": "github-pat"
+      }
+    ],
+    "fingerprint": "eb93908857100c6e6d04c520b1b2c782"
+  }
+]
