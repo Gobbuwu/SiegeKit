@@ -3,6 +3,7 @@
 - Status: Accepted
 - Date: 2026-11-19
 - Amends: [0006](0006-sandbox.md)
+- Amended by: [0019](0019-egress-relay.md) (relay container instead of an internal network; items 2 and 7)
 
 ## Context
 

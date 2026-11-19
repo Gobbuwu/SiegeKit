@@ -299,7 +299,6 @@ func TestNewRefusesBadConfig(t *testing.T) {
 	for name, edit := range map[string]func(*Config){
 		"metadata":  func(c *Config) { c.Addrs = []netip.Addr{netip.MustParseAddr("169.254.169.254")} },
 		"no addrs":  func(c *Config) { c.Addrs = nil },
-		"no client": func(c *Config) { c.Client = netip.Prefix{} },
 		"zero rate": func(c *Config) { c.Rate = 0 },
 		"no target": func(c *Config) { c.Target = nil },
 		"no errors": func(c *Config) { c.MaxServerErrors = 0 },
