@@ -44,11 +44,11 @@ func (s *Store) Save(r *report.Run, targetSlug string) (string, error) {
 	}
 	defer os.Remove(tmp.Name())
 	if err := tmp.Chmod(0o600); err != nil {
-		tmp.Close()
+		tmp.Close() // #nosec G104 -- the chmod error is returned instead
 		return "", err
 	}
 	if _, err := tmp.Write(data); err != nil {
-		tmp.Close()
+		tmp.Close() // #nosec G104 -- the write error is returned instead
 		return "", err
 	}
 	if err := tmp.Close(); err != nil {
@@ -69,7 +69,7 @@ func (s *Store) Load(id string) (*report.Run, error) {
 	if !reRunID.MatchString(id) {
 		return nil, fmt.Errorf("invalid run id %q", id)
 	}
-	data, err := os.ReadFile(filepath.Join(s.Dir, id+".json"))
+	data, err := os.ReadFile(filepath.Join(s.Dir, id+".json")) // #nosec G304 -- id is checked against reRunID above
 	if err != nil {
 		return nil, err
 	}

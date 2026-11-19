@@ -121,7 +121,7 @@ func HasFile(ctx context.Context, root string, patterns []string) (bool, error) 
 // readFile reads a regular file without following symlinks. Files larger
 // than MaxFileSize are skipped (nil, nil).
 func readFile(p string) ([]byte, error) {
-	f, err := os.OpenFile(p, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
+	f, err := os.OpenFile(p, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0) // #nosec G304 -- reading the target is the check's job; symlinks refused, size limited
 	if err != nil {
 		return nil, err
 	}

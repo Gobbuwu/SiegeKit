@@ -109,3 +109,23 @@ func TestScanMountsDataReadOnly(t *testing.T) {
 		t.Fatalf("%+v %v", r.Plugins, err)
 	}
 }
+
+func TestRemoveLeftovers(t *testing.T) {
+	root := t.TempDir()
+	for _, d := range []string{".trivy-new-abc", ".trivy-old-xyz", "trivy", ".other-new-1"} {
+		if err := os.MkdirAll(filepath.Join(root, d, "sub"), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := removeLeftovers(root, "trivy"); err != nil {
+		t.Fatal(err)
+	}
+	entries, _ := os.ReadDir(root)
+	var names []string
+	for _, e := range entries {
+		names = append(names, e.Name())
+	}
+	if strings.Join(names, ",") != ".other-new-1,trivy" {
+		t.Errorf("left %v", names)
+	}
+}

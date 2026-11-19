@@ -73,7 +73,7 @@ func Update(ctx context.Context, ex Executor, selected []*manifest.Manifest, roo
 	}
 	// The sandbox opens each new data directory to any container user, which
 	// is only safe while the parent is private.
-	if err := os.Chmod(root, 0o700); err != nil {
+	if err := os.Chmod(root, 0o700); err != nil { // #nosec G302 -- a directory: owner-only is the strictest useful mode
 		return nil, err
 	}
 	work, err := os.MkdirTemp(workDir, "siegekit-update-")
@@ -95,6 +95,9 @@ func Update(ctx context.Context, ex Executor, selected []*manifest.Manifest, roo
 }
 
 func updateOne(ctx context.Context, ex Executor, m *manifest.Manifest, root, work string) error {
+	if err := removeLeftovers(root, m.ID); err != nil {
+		return err
+	}
 	image, ok := ImageFor(m)
 	if !ok {
 		return fmt.Errorf("no container image for linux/%s", runtime.GOARCH)
@@ -112,7 +115,7 @@ func updateOne(ctx context.Context, ex Executor, m *manifest.Manifest, root, wor
 	keep := false
 	defer func() {
 		if !keep {
-			os.RemoveAll(fresh)
+			os.RemoveAll(fresh) // #nosec G104 -- best effort; removeLeftovers retries next time
 		}
 	}()
 	out, err := os.MkdirTemp(work, m.ID+"-")
@@ -159,15 +162,36 @@ func updateOne(ctx context.Context, ex Executor, m *manifest.Manifest, root, wor
 	}
 	if err := os.Rename(fresh, dir); err != nil {
 		if old != "" {
-			os.Rename(old, dir)
+			if rerr := os.Rename(old, dir); rerr != nil {
+				return fmt.Errorf("%w; the previous data is in %s and could not be moved back: %v", err, old, rerr)
+			}
 		}
 		return err
 	}
 	keep = true
 	if old != "" {
-		os.RemoveAll(old)
+		// A failure leaves the old copy behind; the next update removes it.
+		os.RemoveAll(old) // #nosec G104 -- cleaned up by removeLeftovers
 	}
 	return writeStamp(root, m.ID, time.Now().UTC())
+}
+
+// removeLeftovers deletes the new and old data directories that an
+// interrupted or partly failed update left in root, which can be large.
+func removeLeftovers(root, id string) error {
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		return err
+	}
+	for _, e := range entries {
+		n := e.Name()
+		if e.IsDir() && (strings.HasPrefix(n, "."+id+"-new-") || strings.HasPrefix(n, "."+id+"-old-")) {
+			if err := os.RemoveAll(filepath.Join(root, n)); err != nil {
+				return fmt.Errorf("remove leftover %s: %w", n, err)
+			}
+		}
+	}
+	return nil
 }
 
 func writeStamp(root, id string, t time.Time) error {
@@ -177,7 +201,7 @@ func writeStamp(root, id string, t time.Time) error {
 	}
 	defer os.Remove(tmp.Name())
 	if _, err := tmp.WriteString(t.Format(time.RFC3339) + "\n"); err != nil {
-		tmp.Close()
+		tmp.Close() // #nosec G104 -- the write error is returned instead
 		return err
 	}
 	if err := tmp.Close(); err != nil {

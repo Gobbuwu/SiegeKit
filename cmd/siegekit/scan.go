@@ -370,7 +370,7 @@ func writeReports(dir string, run *report.Run) ([]string, error) {
 		{"report.sarif", report.WriteSARIF},
 	} {
 		p := filepath.Join(dir, r.name)
-		f, err := os.OpenFile(p, os.O_WRONLY|os.O_CREATE|os.O_TRUNC|syscall.O_NOFOLLOW, 0o600)
+		f, err := os.OpenFile(p, os.O_WRONLY|os.O_CREATE|os.O_TRUNC|syscall.O_NOFOLLOW, 0o600) // #nosec G304 -- the report directory the user chose; symlinks refused
 		if err != nil {
 			return nil, err
 		}
