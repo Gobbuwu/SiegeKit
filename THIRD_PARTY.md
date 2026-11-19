@@ -21,6 +21,14 @@ These are the publishers' official images on Docker Hub or the GitHub Container 
 
 The two GitHub Container Registry digests were resolved on 2026-11-19. Every pinned image's reported version is checked by `TestPinnedImageVersions` in CI.
 
+## Test fixtures (CI only)
+
+These run only in SiegeKit's own CI. They are not shipped or downloaded by SiegeKit.
+
+| Fixture | Image | Tag resolved | License |
+| --- | --- | --- | --- |
+| [OWASP Juice Shop](https://github.com/juice-shop/juice-shop), scanned by URL in the [real-repo gate](.github/workflows/gate.yml) (M2.4b) | `docker.io/bkimminich/juice-shop@sha256:9bbaecc41791f00b002bc65931cc5ff355fbdb941fa72b06558c18dace43197b` (published under the maintainer's Docker Hub account; image labels name OWASP as vendor and source revision `266448a`, the commit the gate's source scan pins) | `v20.4.0` (resolved 2026-11-19; the app inside reports `20.4.0-SNAPSHOT`) | MIT (image label and `package.json`) |
+
 Trivy's vulnerability database is not pinned: `siegekit update` lets Trivy download it from its publisher (ADR 0014).
 
 ## All tools
