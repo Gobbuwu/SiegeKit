@@ -217,6 +217,9 @@ func scan(args []string, stdout, stderr io.Writer) int {
 		if p.Reason != "" {
 			line += " - " + p.Reason
 		}
+		if n := p.IgnoreNote(); n != "" {
+			line += " (repository ignores: " + n + ")"
+		}
 		fmt.Fprintln(stdout, line)
 	}
 	fmt.Fprintf(stdout, "\nReports: %s\n", strings.Join(paths, ", "))

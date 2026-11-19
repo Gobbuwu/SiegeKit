@@ -28,7 +28,7 @@ func TestRecordedToolOutput(t *testing.T) {
 			if m.Output.File != file {
 				t.Fatalf("manifest writes %s, recording is %s", m.Output.File, file)
 			}
-			fs, err := readReport(filepath.Join("testdata", "recorded", file), m)
+			fs, err := readReport(filepath.Join("testdata", "recorded", file), m, new(int))
 			if err != nil {
 				t.Fatal(err)
 			}

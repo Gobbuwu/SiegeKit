@@ -60,3 +60,26 @@ func FuzzBandit(f *testing.F) {
 		ToFindings(bytes.NewReader(b), Options{Plugin: "b", Family: "sast", MountPath: "/target"})
 	})
 }
+
+// Bandit reports results hidden by "# nosec" only as totals: a bare
+// comment in "nosec", one naming the test in "skipped_tests" (checked with
+// Bandit 1.9.4).
+func TestSuppressedCount(t *testing.T) {
+	for _, tc := range []struct {
+		report string
+		want   int
+	}{
+		{`{"results":[],"metrics":{"_totals":{"nosec":1,"skipped_tests":1}}}`, 2},
+		{`{"results":[]}`, 0},
+		{`{"results":[],"metrics":{"_totals":{"nosec":-5,"skipped_tests":3}}}`, 3},
+		{`{"results":[],"metrics":{"_totals":{"nosec":9223372036854775807,"skipped_tests":9223372036854775807}}}`, 2 << 30},
+	} {
+		n := -1
+		if _, err := ToFindings(strings.NewReader(tc.report), Options{Plugin: "bandit", Family: "sast", Suppressed: &n}); err != nil {
+			t.Fatal(err)
+		}
+		if n != tc.want {
+			t.Errorf("%s: suppressed %d, want %d", tc.report, n, tc.want)
+		}
+	}
+}

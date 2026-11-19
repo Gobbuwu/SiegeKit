@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -34,13 +35,16 @@ func TestBuiltinPluginsFindPlantedIssues(t *testing.T) {
 	token := "ghp_" + strings.Repeat("1a2B3c4D5e6F", 3)
 	for name, body := range map[string]string{
 		"config.py":                         "GITHUB_TOKEN = \"" + token + "\"\n",
-		"Dockerfile":                        "FROM ubuntu:latest\nRUN apt-get update\nUSER root\n",
+		"Dockerfile":                        "FROM ubuntu:latest\nRUN apt-get update\nUSER root\n# checkov:skip=CKV_DOCKER_2: planted suppression\n",
 		"requirements.txt":                  "django==2.2.0\n",
-		"app.py":                            "import subprocess\n\ndef run(cmd):\n    return subprocess.call(cmd, shell=True)\n",
+		"app.py":                            "import subprocess\n\ndef run(cmd):\n    return subprocess.call(cmd, shell=True)\n\ndef ls():\n    return subprocess.call(\"ls\", shell=True)  # nosec\n",
 		"go.mod":                            "module example.test/app\n\ngo 1.22\n",
-		"main.go":                           "package main\n\nimport (\n\t\"crypto/md5\"\n\t\"fmt\"\n\t\"os\"\n)\n\nfunc main() {\n\tfmt.Printf(\"%x\\n\", md5.Sum([]byte(os.Args[1])))\n}\n",
+		"main.go":                           "package main\n\nimport (\n\t\"crypto/md5\"\n\t\"fmt\"\n\t\"os\"\n)\n\nfunc main() {\n\tfmt.Printf(\"%x\\n\", md5.Sum([]byte(os.Args[1])))\n}\n\nfunc sum(b []byte) [16]byte { return md5.Sum(b) } // #nosec G401 -- planted suppression\n",
 		"firestore.rules":                   "rules_version = '2';\nservice cloud.firestore {\n  match /databases/{database}/documents {\n    match /{document=**} {\n      allow read, write: if true;\n    }\n  }\n}\n",
 		"supabase/migrations/0001_init.sql": "create table profiles (id uuid primary key);\n",
+		// The repository's own ignore settings: obeyed, but reported.
+		".gitleaksignore": "# none\n",
+		"notes.txt":       "example = 1 # gitleaks:allow\n",
 	} {
 		if err := os.MkdirAll(filepath.Dir(filepath.Join(target, name)), 0o755); err != nil {
 			t.Fatal(err)
@@ -127,6 +131,22 @@ func TestBuiltinPluginsFindPlantedIssues(t *testing.T) {
 			envIgnore = true
 		case f.RuleID == "CKV_DOCKER_8" && f.Location.URI == "Dockerfile" && f.Location.StartLine == 3 && f.Severity == findings.Medium:
 			root = true
+		}
+	}
+	// Suppressions in the code are obeyed but counted (owner decision,
+	// 2026-11-19), using what each real tool reports.
+	byID := map[string]report.PluginResult{}
+	for _, p := range r.Plugins {
+		byID[p.ID] = p
+	}
+	for _, id := range []string{"bandit", "gosec", "checkov"} {
+		if byID[id].Suppressed < 1 {
+			t.Errorf("%s: planted suppression not counted: %+v", id, byID[id])
+		}
+	}
+	for _, id := range []string{"gitleaks", "gitleaks-history"} {
+		if p := byID[id]; !slices.Contains(p.RepoSettings, ".gitleaksignore") || p.IgnoreMarkers != 1 {
+			t.Errorf("%s: repository ignores not reported: %+v", id, p)
 		}
 	}
 	if !secret || !root || !vuln || !py || !gocode || !firebase || !supabase || !envHistory || !envIgnore {

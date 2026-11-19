@@ -58,5 +58,11 @@
     "format": "sarif",
     "parser": "sarif-gitleaks",
     "file": "gitleaks-history.sarif"
+  },
+  "repoIgnores": {
+    "files": [
+      ".gitleaksignore"
+    ],
+    "marker": "gitleaks:allow"
   }
 }
