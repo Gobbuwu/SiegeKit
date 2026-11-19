@@ -241,9 +241,41 @@
           "minItems": 1,
           "items": {
             "type": "string",
-            "pattern": "^([^{}]|\\{(target|outdir|workdir|threads|ratelimit)\\})*$"
+            "pattern": "^([^{}]|\\{(target|outdir|workdir|threads|ratelimit|data)\\})*$"
           },
-          "description": "Argument vector passed directly to the tool, never through a shell. Only the listed placeholders are allowed."
+          "description": "Argument vector passed directly to the tool, never through a shell. Only the listed placeholders are allowed; {data} needs a data section."
+        }
+      }
+    },
+    "data": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "mount",
+        "updateArgs",
+        "maxAgeDays"
+      ],
+      "description": "Data the tool needs but does not ship, such as a vulnerability database. 'siegekit update' downloads it in a separate container that has network access but no target (ADR 0014). Scans mount it read-only.",
+      "properties": {
+        "mount": {
+          "type": "string",
+          "pattern": "^/(tmp|data)(/[a-z0-9_-][a-z0-9._-]*)+$",
+          "description": "Absolute path inside the container where the data directory is mounted, under /tmp or /data."
+        },
+        "updateArgs": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "pattern": "^([^{}]|\\{(data|threads)\\})*$"
+          },
+          "description": "Arguments for the update run. No target or output directory is mounted."
+        },
+        "maxAgeDays": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 90,
+          "description": "Reports warn when the data is older than this."
         }
       }
     },

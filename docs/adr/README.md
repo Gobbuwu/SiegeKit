@@ -17,6 +17,7 @@ Each significant design decision is recorded as a short ADR before code is writt
 | [0011](0011-app-logic-and-ai-checks.md) | Access-control, backend-rules and AI-feature checks | Accepted |
 | [0012](0012-manifest-file-format.md) | Plugin manifest file format and validator (amends 0004) | Accepted |
 | [0013](0013-run-storage.md) | Run storage as JSON files (amends 0007) | Accepted |
+| [0014](0014-offline-tool-data.md) | Offline tool data and update containers (amends 0006) | Accepted |
 
 ADRs 0002 to 0011 were accepted at the M0 design sign-off on 2026-11-18.
 

@@ -27,7 +27,10 @@ func useExecutor(t *testing.T, ex runner.Executor, err error) {
 
 // emptySARIF makes every plugin complete with no findings.
 var emptySARIF = fakeExec(func(s sandbox.Spec) (*sandbox.Result, error) {
-	for _, name := range []string{"gitleaks.sarif", "results_sarif.sarif"} {
+	if s.DataWritable { // an update run
+		return &sandbox.Result{Status: sandbox.Completed}, os.WriteFile(filepath.Join(s.DataDir, "db"), []byte("x"), 0o644)
+	}
+	for _, name := range []string{"gitleaks.sarif", "results_sarif.sarif", "trivy.sarif"} {
 		doc := `{"version":"2.1.0","runs":[{"tool":{"driver":{"name":"x"}},"results":[]}]}`
 		if err := os.WriteFile(filepath.Join(s.OutDir, name), []byte(doc), 0o644); err != nil {
 			return nil, err
@@ -42,10 +45,15 @@ func TestScan(t *testing.T) {
 	reports := filepath.Join(t.TempDir(), "rep")
 	useExecutor(t, emptySARIF, nil)
 	var out, errb bytes.Buffer
-	if code := run([]string{"scan", target, "--report-dir", reports}, &out, &errb); code != exitOK {
+	// Without data the trivy check cannot run, so the run is incomplete.
+	if code := run([]string{"scan", target, "--no-save", "--report-dir", reports}, &out, &errb); code != 4 || !strings.Contains(out.String(), "run 'siegekit update'") {
 		t.Fatalf("exit %d: %s %s", code, out.String(), errb.String())
 	}
-	if !strings.Contains(out.String(), "No issues found by the 2 check(s) that ran.") || !strings.Contains(out.String(), "Saved run") {
+	out.Reset()
+	if code := run([]string{"scan", "--update", target, "--report-dir", reports}, &out, &errb); code != exitOK {
+		t.Fatalf("exit %d: %s %s", code, out.String(), errb.String())
+	}
+	if !strings.Contains(out.String(), "No issues found by the 3 check(s) that ran.") || !strings.Contains(out.String(), "Saved run") {
 		t.Errorf("output: %s", out.String())
 	}
 	for _, name := range []string{"report.html", "report.json", "report.sarif"} {
@@ -102,5 +110,33 @@ func TestPluginsList(t *testing.T) {
 	var out, errb bytes.Buffer
 	if code := run([]string{"plugins", "list"}, &out, &errb); code != exitOK || !strings.Contains(out.String(), "gitleaks 8.30.1") {
 		t.Fatalf("exit %d: %s", code, out.String())
+	}
+}
+
+func TestUpdate(t *testing.T) {
+	data := t.TempDir()
+	t.Setenv("XDG_DATA_HOME", data)
+	useExecutor(t, emptySARIF, nil)
+	var out, errb bytes.Buffer
+	if code := run([]string{"update"}, &out, &errb); code != exitOK || !strings.Contains(out.String(), "trivy      updated") {
+		t.Fatalf("exit %d: %s %s", code, out.String(), errb.String())
+	}
+	if _, err := os.Stat(filepath.Join(data, "siegekit", "data", "trivy", "db")); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{{"update", "--only", "gitleaks"}, {"update", "--only", "nope"}} {
+		if code := run(args, &out, &errb); code != exitInvalid {
+			t.Errorf("%v: exit %d", args, code)
+		}
+	}
+	if code := run([]string{"update", "extra"}, &out, &errb); code != exitUsage {
+		t.Errorf("extra argument: exit %d", code)
+	}
+	useExecutor(t, fakeExec(func(sandbox.Spec) (*sandbox.Result, error) {
+		return &sandbox.Result{Status: sandbox.Completed, ExitCode: 1, Stderr: "network unreachable"}, nil
+	}), nil)
+	out.Reset()
+	if code := run([]string{"update"}, &out, &errb); code != exitInvalid || !strings.Contains(out.String(), "network unreachable") {
+		t.Errorf("failed update: exit %d %s", code, out.String())
 	}
 }

@@ -196,13 +196,13 @@ func TestSelect(t *testing.T) {
 		}
 		return out
 	}
-	if got, _ := Select(all, "repo", nil, nil); !slices.Equal(ids(got), []string{"checkov", "gitleaks"}) {
+	if got, _ := Select(all, "repo", nil, nil); !slices.Equal(ids(got), []string{"checkov", "gitleaks", "trivy"}) {
 		t.Errorf("all: %v", ids(got))
 	}
 	if got, _ := Select(all, "repo", []string{"gitleaks"}, nil); !slices.Equal(ids(got), []string{"gitleaks"}) {
 		t.Errorf("only: %v", ids(got))
 	}
-	if got, _ := Select(all, "repo", nil, []string{"gitleaks"}); !slices.Equal(ids(got), []string{"checkov"}) {
+	if got, _ := Select(all, "repo", nil, []string{"gitleaks"}); !slices.Equal(ids(got), []string{"checkov", "trivy"}) {
 		t.Errorf("skip: %v", ids(got))
 	}
 	for name, c := range map[string][2][]string{
@@ -220,11 +220,14 @@ func TestSelect(t *testing.T) {
 }
 
 func TestSubstituteRejectsRateLimit(t *testing.T) {
-	if _, err := substitute([]string{"--rate", "{ratelimit}"}, 1); err == nil {
+	if _, err := substitute([]string{"--rate", "{ratelimit}"}, 1, ""); err == nil {
 		t.Fatal("expected rejection")
 	}
-	got, err := substitute([]string{"{target}", "{outdir}/x", "{workdir}", "-j{threads}"}, 3)
-	if err != nil || !slices.Equal(got, []string{"/target", "/out/x", "/tmp/work", "-j3"}) {
+	if _, err := substitute([]string{"{data}"}, 1, ""); err == nil {
+		t.Fatal("expected rejection of {data} without data")
+	}
+	got, err := substitute([]string{"{target}", "{outdir}/x", "{workdir}", "-j{threads}", "{data}"}, 3, "/tmp/db")
+	if err != nil || !slices.Equal(got, []string{"/target", "/out/x", "/tmp/work", "-j3", "/tmp/db"}) {
 		t.Fatalf("got %v %v", got, err)
 	}
 }
@@ -234,7 +237,7 @@ func TestLastLine(t *testing.T) {
 		"":                       "no error output",
 		"a\nb\n\n":               "b",
 		"x\x07y\u0085z":          "xyz",
-		strings.Repeat("é", 400): strings.Repeat("é", 300) + "…",
+		strings.Repeat("é", 400): "…" + strings.Repeat("é", 300),
 		"bad\xffutf8":            "badutf8",
 	} {
 		if got := lastLine(in); got != want {

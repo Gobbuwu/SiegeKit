@@ -52,6 +52,39 @@ func TestEngineArgsHardening(t *testing.T) {
 	}
 }
 
+func TestEngineArgsData(t *testing.T) {
+	s := spec(t, "scan")
+	s.DataDir, s.DataMount = t.TempDir(), "/tmp/tool/db"
+	args, err := s.EngineArgs("n", 1000, 1000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	joined := strings.Join(args, " ")
+	if !strings.Contains(joined, "target=/tmp/tool/db,readonly") || !strings.Contains(joined, "--network none") {
+		t.Errorf("scan data must be read-only and offline: %s", joined)
+	}
+
+	u := spec(t, "update")
+	u.TargetDir, u.Network = "", "egress"
+	u.DataDir, u.DataMount, u.DataWritable = t.TempDir(), "/tmp/tool/db", true
+	args, err = u.EngineArgs("n", 1000, 1000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	joined = strings.Join(args, " ")
+	if strings.Contains(joined, "--network") || strings.Contains(joined, "/tmp/tool/db,readonly") || strings.Contains(joined, "target=/target") {
+		t.Errorf("update run: %s", joined)
+	}
+	u.TmpMiB = 64
+	args, _ = u.EngineArgs("n", 1000, 1000)
+	joined = strings.Join(args, " ")
+	for _, want := range []string{"--cap-drop ALL", "--read-only", "--user 1000:1000", "target=/tmp/tool/db", "/tmp:rw,nosuid,nodev,size=64m"} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("update run missing %q: %s", want, joined)
+		}
+	}
+}
+
 func TestEngineArgsNeverRoot(t *testing.T) {
 	s := spec(t, "true")
 	args, err := s.EngineArgs("n", 0, 0)
@@ -74,7 +107,24 @@ func TestSpecRejections(t *testing.T) {
 		"comma injection":  func(s *Spec) { s.TargetDir = s.TargetDir + ",readonly=false" },
 		"missing out dir":  func(s *Spec) { s.OutDir = "" },
 		"zero timeout":     func(s *Spec) { s.Timeout = 0 },
+		"tmp above memory": func(s *Spec) { s.TmpMiB = s.MemoryMiB + 1 },
+		"negative tmp":     func(s *Spec) { s.TmpMiB = -1 },
 		"target not a dir": func(s *Spec) { s.TargetDir = filepath.Join(s.TargetDir, "app.txt") },
+		"egress with target": func(s *Spec) {
+			s.Network, s.DataDir, s.DataMount, s.DataWritable = "egress", s.OutDir, "/tmp/db", true
+		},
+		"egress without data": func(s *Spec) { s.TargetDir, s.Network = "", "egress" },
+		"writable data with target": func(s *Spec) {
+			s.DataDir, s.DataMount, s.DataWritable = s.OutDir, "/tmp/db", true
+		},
+		"data mount on target":   func(s *Spec) { s.DataDir, s.DataMount = s.OutDir, "/target" },
+		"data mount traversal":   func(s *Spec) { s.DataDir, s.DataMount = s.OutDir, "/tmp/../etc" },
+		"data mount in workdir":  func(s *Spec) { s.DataDir, s.DataMount = s.OutDir, "/tmp/work/x" },
+		"data mount comma":       func(s *Spec) { s.DataDir, s.DataMount = s.OutDir, "/tmp/db,readonly=false" },
+		"data dir without mount": func(s *Spec) { s.DataDir = s.OutDir },
+		"data dir comma": func(s *Spec) {
+			s.DataDir, s.DataMount = s.TargetDir+",readonly=false", "/tmp/db"
+		},
 	}
 	for name, mutate := range cases {
 		t.Run(name, func(t *testing.T) {

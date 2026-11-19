@@ -36,6 +36,7 @@ Flags:
   --report-dir DIR  where to write report.html, report.json and report.sarif
                     (default ./siegekit-report)
   --no-save         do not keep a copy of the run for later comparison
+  --update          run 'siegekit update' first (downloads vulnerability data)
 `
 
 func scan(args []string, stdout, stderr io.Writer) int {
@@ -46,6 +47,7 @@ func scan(args []string, stdout, stderr io.Writer) int {
 	failOn := fl.String("fail-on", "high", "")
 	reportDir := fl.String("report-dir", "siegekit-report", "")
 	noSave := fl.Bool("no-save", false, "")
+	doUpdate := fl.Bool("update", false, "")
 	// Allow flags before and after DIR.
 	var pos []string
 	for {
@@ -89,12 +91,14 @@ func scan(args []string, stdout, stderr io.Writer) int {
 		return fail(err)
 	}
 	var st *store.Store
-	if !*noSave {
-		dir, err := dataDir()
-		if err != nil {
-			return fail(fmt.Errorf("%w (or use --no-save)", err))
+	dataRoot := ""
+	if dir, err := dataDir(); err == nil {
+		dataRoot = filepath.Join(dir, "data")
+		if !*noSave {
+			st = &store.Store{Dir: filepath.Join(dir, "runs")}
 		}
-		st = &store.Store{Dir: filepath.Join(dir, "runs")}
+	} else if !*noSave {
+		return fail(fmt.Errorf("%w (or use --no-save)", err))
 	}
 	ex, err := newExecutor()
 	if err != nil {
@@ -103,8 +107,25 @@ func scan(args []string, stdout, stderr io.Writer) int {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	if *doUpdate {
+		if dataRoot == "" {
+			return fail(errors.New("cannot find a directory for downloaded data"))
+		}
+		fmt.Fprintln(stdout, "Updating vulnerability data (network access, none of your files).")
+		results, err := runner.Update(ctx, ex, selected, dataRoot, "")
+		if err != nil {
+			return fail(err)
+		}
+		for _, r := range results {
+			if r.Err != nil {
+				// Keep going: the scan uses older data if there is any and
+				// otherwise reports the check as failed.
+				fmt.Fprintf(stdout, "  %-10s update failed - %v\n", r.ID, r.Err)
+			}
+		}
+	}
 	fmt.Fprintf(stdout, "Scanning %s with %d check(s). Tool images are downloaded on first use.\n", target, len(selected))
-	run, err := runner.Run(ctx, ex, selected, runner.Options{Version: version, TargetDir: target})
+	run, err := runner.Run(ctx, ex, selected, runner.Options{Version: version, TargetDir: target, DataRoot: dataRoot})
 	if errors.Is(err, context.Canceled) {
 		return fail(errors.New("interrupted; no report written"))
 	}

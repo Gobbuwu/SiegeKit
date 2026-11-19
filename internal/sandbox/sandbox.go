@@ -35,20 +35,31 @@ const DefaultOutputLimit = 512 << 20
 // run as root inside the container.
 const nonRootUID, nonRootGID = 65532, 65532
 
+var reDataMount = regexp.MustCompile(`^/(tmp|data)(/[a-z0-9_-][a-z0-9._-]*)+$`)
+
 var reImage = regexp.MustCompile(`^[a-z0-9.-]+(:[0-9]+)?/[^@\s]+@sha256:[a-f0-9]{64}$`)
 
 // Spec describes one sandboxed run.
 type Spec struct {
-	Image       string   // must be pinned by digest
-	Args        []string // arguments for the image's entrypoint, placeholders already substituted
-	TargetDir   string   // mounted read-only at /target; empty for none
-	OutDir      string   // mounted read-write at /out; must exist and be empty
-	Network     string   // "none" only in M1; "target-only" arrives with the egress proxy in M2
-	CPUs        int
-	MemoryMiB   int
-	PidsLimit   int // 0 means 256
-	Timeout     time.Duration
-	OutputLimit int64 // bytes; 0 means DefaultOutputLimit
+	Image     string   // must be pinned by digest
+	Args      []string // arguments for the image's entrypoint, placeholders already substituted
+	TargetDir string   // mounted read-only at /target; empty for none
+	OutDir    string   // mounted read-write at /out; must exist and be empty
+	// Network is "none" for scans. "egress" (the engine's default network) is
+	// only for data updates (ADR 0014) and is refused when a target is mounted.
+	// "target-only" arrives with the egress proxy in M2.
+	Network      string
+	DataDir      string // host directory with the tool's data; empty for none
+	DataMount    string // where DataDir is mounted; read-only unless DataWritable
+	DataWritable bool   // only for update runs
+	CPUs         int
+	MemoryMiB    int
+	PidsLimit    int // 0 means 256
+	Timeout      time.Duration
+	OutputLimit  int64 // bytes; 0 means DefaultOutputLimit
+	// TmpMiB is the size of the in-memory /tmp; 0 means 256. Its pages count
+	// against MemoryMiB, so it cannot exceed the memory limit.
+	TmpMiB int
 }
 
 // Status of a finished run.
@@ -92,16 +103,36 @@ func (s *Spec) validate() error {
 	if len(s.Args) == 0 {
 		return errors.New("no arguments")
 	}
-	if s.Network != "none" {
-		return fmt.Errorf("network %q is not supported yet; only \"none\"", s.Network)
+	switch s.Network {
+	case "none":
+	case "egress":
+		if s.TargetDir != "" || !s.DataWritable {
+			return errors.New("network \"egress\" is only allowed for data updates, with no target mounted")
+		}
+	default:
+		return fmt.Errorf("network %q is not supported", s.Network)
+	}
+	if s.DataWritable && s.TargetDir != "" {
+		return errors.New("data can only be writable when no target is mounted")
+	}
+	if (s.DataDir == "") != (s.DataMount == "") {
+		return errors.New("data directory and data mount must be set together")
+	}
+	if s.DataMount != "" {
+		if !reDataMount.MatchString(s.DataMount) || s.DataMount == WorkDir || strings.HasPrefix(s.DataMount, WorkDir+"/") {
+			return fmt.Errorf("data mount %q must be a path under /tmp or /data", s.DataMount)
+		}
 	}
 	if s.CPUs < 1 || s.MemoryMiB < 64 || s.Timeout <= 0 {
 		return errors.New("cpus, memory and timeout must be set")
 	}
+	if s.TmpMiB < 0 || s.TmpMiB > s.MemoryMiB {
+		return errors.New("tmp size must be between 0 and the memory limit")
+	}
 	for _, d := range []struct {
 		name, path string
 		required   bool
-	}{{"target", s.TargetDir, false}, {"output", s.OutDir, true}} {
+	}{{"target", s.TargetDir, false}, {"output", s.OutDir, true}, {"data", s.DataDir, false}} {
 		if d.path == "" {
 			if d.required {
 				return fmt.Errorf("%s directory is required", d.name)
@@ -156,26 +187,42 @@ func (s *Spec) EngineArgs(name string, uid, gid int) ([]string, error) {
 	if pids == 0 {
 		pids = 256
 	}
+	tmp := s.TmpMiB
+	if tmp == 0 {
+		tmp = 256
+	}
 	args := []string{
 		"run", "--rm",
 		"--name", name,
 		"--pull", "missing",
-		"--network", "none",
+	}
+	// "egress" uses the engine's default network, so no flag is passed.
+	if s.Network == "none" {
+		args = append(args, "--network", "none")
+	}
+	args = append(args,
 		"--user", fmt.Sprintf("%d:%d", uid, gid),
 		"--cap-drop", "ALL",
 		"--security-opt", "no-new-privileges",
 		"--read-only",
-		"--tmpfs", "/tmp:rw,nosuid,nodev,size=256m",
+		"--tmpfs", fmt.Sprintf("/tmp:rw,nosuid,nodev,size=%dm", tmp),
 		"--pids-limit", strconv.Itoa(pids),
 		"--memory", fmt.Sprintf("%dm", s.MemoryMiB),
 		"--memory-swap", fmt.Sprintf("%dm", s.MemoryMiB),
 		"--cpus", strconv.Itoa(s.CPUs),
 		"--env", "HOME=/tmp",
 		"--workdir", "/tmp",
-		"--mount", "type=bind,source=" + s.OutDir + ",target=" + OutMount,
-	}
+		"--mount", "type=bind,source="+s.OutDir+",target="+OutMount,
+	)
 	if s.TargetDir != "" {
 		args = append(args, "--mount", "type=bind,source="+s.TargetDir+",target="+TargetMount+",readonly")
+	}
+	if s.DataDir != "" {
+		m := "type=bind,source=" + s.DataDir + ",target=" + s.DataMount
+		if !s.DataWritable {
+			m += ",readonly"
+		}
+		args = append(args, "--mount", m)
 	}
 	args = append(args, s.Image)
 	args = append(args, s.Args...)
@@ -204,6 +251,17 @@ func (e *Engine) Run(ctx context.Context, s Spec) (*Result, error) {
 		return nil, err
 	}
 	defer os.Chmod(s.OutDir, 0o700)
+	if s.DataWritable {
+		// Same reasoning for a data update; afterwards the data stays
+		// readable (not writable) so scans can use it as any container user.
+		if err := requirePrivateParent(s.DataDir); err != nil {
+			return nil, err
+		}
+		if err := os.Chmod(s.DataDir, 0o777); err != nil {
+			return nil, err
+		}
+		defer os.Chmod(s.DataDir, 0o755)
+	}
 	runCtx, cancel := context.WithTimeout(ctx, s.Timeout)
 	defer cancel()
 	cmd := exec.CommandContext(runCtx, e.Bin, args...)

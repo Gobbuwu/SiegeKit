@@ -132,6 +132,22 @@ func TestRejections(t *testing.T) {
 		"output file missing":   func(m map[string]any) { delete(m["output"].(map[string]any), "file") },
 		"unknown parser":        func(m map[string]any) { m["output"].(map[string]any)["parser"] = "custom" },
 		"sarif parser on json":  func(m map[string]any) { m["output"].(map[string]any)["format"] = "json" },
+		"data without section": func(m map[string]any) {
+			m["run"].(map[string]any)["args"] = []string{"--db", "{data}"}
+		},
+		"data mount traversal":  func(m map[string]any) { m["data"] = dataSection("/tmp/../etc") },
+		"data mount on target":  func(m map[string]any) { m["data"] = dataSection("/target/db") },
+		"data mount in workdir": func(m map[string]any) { m["data"] = dataSection("/tmp/work/db") },
+		"data update uses target": func(m map[string]any) {
+			d := dataSection("/tmp/db")
+			d["updateArgs"] = []string{"{target}"}
+			m["data"] = d
+		},
+		"data max age zero": func(m map[string]any) {
+			d := dataSection("/tmp/db")
+			d["maxAgeDays"] = 0
+			m["data"] = d
+		},
 		"unknown nested field": func(m map[string]any) {
 			m["run"].(map[string]any)["shell"] = "/bin/sh"
 		},
@@ -202,4 +218,17 @@ func FuzzParse(f *testing.F) {
 			}
 		}
 	})
+}
+
+func dataSection(mount string) map[string]any {
+	return map[string]any{"mount": mount, "updateArgs": []string{"update", "--dir", "{data}"}, "maxAgeDays": 7}
+}
+
+func TestAcceptsDataSection(t *testing.T) {
+	m := validJSON(t)
+	m["data"] = dataSection("/tmp/tool/db")
+	m["run"].(map[string]any)["args"] = []string{"scan", "--db", "{data}", "{target}"}
+	if _, err := Parse(mustMarshal(t, m)); err != nil {
+		t.Fatal(err)
+	}
 }
