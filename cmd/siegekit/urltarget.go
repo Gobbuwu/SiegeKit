@@ -63,6 +63,14 @@ func scanURL(raw string, deployed bool, authorizedHost string, stdout, stderr io
 	verification := "loopback"
 	proof := ""
 	if d.NeedsProof {
+		// ADR 0005: a person types the host name. A flag would let a script
+		// or an AI assistant confirm a live system on its own.
+		if authorizedHost != "" {
+			return refuse("--authorized-host is not accepted for deployed targets; the person running SiegeKit types the host name in a terminal")
+		}
+		if !stdinIsTerminal() {
+			return refuse("deployed targets need the host name typed in a terminal; run this command yourself in a terminal (an AI assistant should ask you to)")
+		}
 		dir, err := dataDir()
 		if err != nil {
 			return refuse("%v", err)

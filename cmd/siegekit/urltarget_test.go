@@ -68,7 +68,7 @@ func TestScanURL(t *testing.T) {
 		{"private typed wrong", []string{"http://nas.lan"}, true, "nas\n", exitInvalid, "did not match"},
 		{"loopback flag mismatch", []string{"--authorized-host", "x", "http://localhost"}, false, "", exitInvalid, "does not match"},
 		{"public in local mode", []string{"https://shop.example"}, false, "", exitInvalid, "--deployed"},
-		{"public deployed", []string{"--deployed", "https://shop.example"}, false, "", exitInvalid, "siegekit-verify="},
+		{"public deployed", []string{"--deployed", "https://shop.example"}, true, "", exitInvalid, "siegekit-verify="},
 		{"metadata", []string{"http://meta.example"}, false, "", exitInvalid, "never tests"},
 		{"bad url", []string{"http://user:pw@localhost"}, false, "", exitInvalid, "user name or password"},
 		{"unresolvable", []string{"http://nowhere.example"}, false, "", exitInvalid, "no such host"},
@@ -111,7 +111,7 @@ func TestScanURLDeployed(t *testing.T) {
 	useProver(t, p)
 
 	// No proof yet: refused, with instructions naming this host's token.
-	code, out := scan(false, "", "--authorized-host", "shop.example", "https://shop.example")
+	code, out := scan(true, "shop.example\n", "https://shop.example")
 	if code != exitInvalid || !strings.Contains(out, verify.Value(tokenOf("shop.example"))) || !strings.Contains(out, "_siegekit-verify.shop.example") {
 		t.Fatalf("no proof: exit %d\n%s", code, out)
 	}
@@ -128,11 +128,10 @@ func TestScanURLDeployed(t *testing.T) {
 		code  int
 		want  string
 	}{
-		{"flag", false, "", []string{"--authorized-host", "Shop.Example.", "https://shop.example"}, exitOK, "Target allowed (well-known file + --authorized-host)"},
-		{"typed", true, "shop.example\n", []string{"https://shop.example/app"}, exitOK, "Target allowed (well-known file + typed confirmation)"},
+		{"typed", true, "Shop.Example.\n", []string{"https://shop.example/app"}, exitOK, "Target allowed (well-known file + typed confirmation)"},
 		{"typed wrong", true, "api.shop.example\n", []string{"https://shop.example"}, exitInvalid, "did not match"},
-		{"no terminal, no flag", false, "", []string{"https://shop.example"}, exitInvalid, "pass --authorized-host shop.example"},
-		{"flag for another host", false, "", []string{"--authorized-host", "api.shop.example", "https://shop.example"}, exitInvalid, "does not match"},
+		{"no terminal", false, "", []string{"https://shop.example"}, exitInvalid, "typed in a terminal"},
+		{"flag refused", true, "shop.example\n", []string{"--authorized-host", "shop.example", "https://shop.example"}, exitInvalid, "not accepted for deployed targets"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			code, out := scan(tc.tty, tc.input, tc.args...)
@@ -145,9 +144,17 @@ func TestScanURLDeployed(t *testing.T) {
 		})
 	}
 
+	// Without a terminal, or with the flag, nothing is sent to the target.
+	n0 := len(p.calls)
+	scan(false, "", "https://shop.example")
+	scan(true, "shop.example\n", "--authorized-host", "shop.example", "https://shop.example")
+	if len(p.calls) != n0 {
+		t.Errorf("proof checked although confirmation cannot be given")
+	}
+
 	// A subdomain has its own token: the parent's value does not prove it.
 	p.published["api.shop.example"] = p.published["shop.example"]
-	if code, out := scan(false, "", "--authorized-host", "api.shop.example", "https://api.shop.example"); code != exitInvalid {
+	if code, out := scan(true, "api.shop.example\n", "https://api.shop.example"); code != exitInvalid {
 		t.Errorf("parent's token accepted for a subdomain: %s", out)
 	}
 
@@ -155,7 +162,7 @@ func TestScanURLDeployed(t *testing.T) {
 	if err := os.Remove(filepath.Join(data, "siegekit", "verify", "shop.example.token")); err != nil {
 		t.Fatal(err)
 	}
-	if code, out := scan(false, "", "--authorized-host", "shop.example", "https://shop.example"); code != exitInvalid || !strings.Contains(out, verify.Value(tokenOf("shop.example"))) {
+	if code, out := scan(true, "shop.example\n", "https://shop.example"); code != exitInvalid || !strings.Contains(out, verify.Value(tokenOf("shop.example"))) {
 		t.Errorf("stale token accepted: exit %d\n%s", code, out)
 	}
 
@@ -163,7 +170,7 @@ func TestScanURLDeployed(t *testing.T) {
 	// request, even with a valid-looking proof.
 	p.published["rebind.example"] = verify.Value(tokenOf("rebind.example"))
 	n := len(p.calls)
-	if code, out := scan(false, "", "--authorized-host", "rebind.example", "https://rebind.example"); code != exitInvalid || !strings.Contains(out, "not a public address") || len(p.calls) != n {
+	if code, out := scan(true, "rebind.example\n", "https://rebind.example"); code != exitInvalid || !strings.Contains(out, "not a public address") || len(p.calls) != n {
 		t.Errorf("private address in deployed mode: exit %d, %d checks\n%s", code, len(p.calls)-n, out)
 	}
 }
