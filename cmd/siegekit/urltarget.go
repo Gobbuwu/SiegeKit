@@ -39,6 +39,11 @@ func scanURL(raw string, deployed bool, authorizedHost string, stdout, stderr io
 		fmt.Fprintf(stderr, "siegekit scan: refused: "+format+"\n", a...)
 		return exitInvalid
 	}
+	// Refused before any DNS lookup or request: --deployed only ever accepts
+	// a host name typed by the person (ADR 0005, owner decision 2026-11-19).
+	if deployed && authorizedHost != "" {
+		return refuse("--authorized-host is not accepted for deployed targets; the person running SiegeKit types the host name in a terminal")
+	}
 	u, err := target.Parse(raw)
 	if err != nil {
 		return refuse("%v", err)

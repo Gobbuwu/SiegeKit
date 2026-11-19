@@ -147,3 +147,23 @@ func TestUnknownParser(t *testing.T) {
 		t.Fatal("expected rejection")
 	}
 }
+
+func TestStripMount(t *testing.T) {
+	cases := map[string]string{
+		"aws-access-token has detected secret for file /target/cfg.py.": "aws-access-token has detected secret for file cfg.py.",
+		"/target/a.py is bad":          "a.py is bad",
+		"see file:///target/a.py":      "see a.py",
+		`quoted "/target/x/y.go" path`: `quoted "x/y.go" path`,
+		"src/target/x.py stays":        "src/target/x.py stays",
+		"no path here":                 "no path here",
+		"/targets/x.py is another dir": "/targets/x.py is another dir",
+	}
+	for in, want := range cases {
+		if got := stripMount(in, "/target"); got != want {
+			t.Errorf("stripMount(%q) = %q, want %q", in, got, want)
+		}
+	}
+	if got := stripMount("/target/a", ""); got != "/target/a" {
+		t.Errorf("empty mount changed the message: %q", got)
+	}
+}

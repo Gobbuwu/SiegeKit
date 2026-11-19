@@ -51,7 +51,12 @@ type Run struct {
 // NotTested lists what automated checks cannot cover (ADR 0009 item 3).
 // Every report shows it.
 var NotTested = []string{
-	"Access control beyond the automated two-account test: whether every request checks that this user may access this record.",
+	// Keep this list true for the current version. Update the language and
+	// access-control lines when Opengrep (M2.9) and the two-account test
+	// (M2.7) land.
+	"The running application, unless you scanned its URL: a directory scan only reads files. Active web and API tests are not available yet (planned for M2).",
+	"Code in languages without an analyzer: Python (bandit) and Go (gosec) code is analyzed; JavaScript, TypeScript and other languages are not yet (planned for M2). Secrets, dependencies and configuration files are checked in any language.",
+	"Access control: whether every request checks that this user may access this record. SiegeKit has no access-control test yet; a partial two-account test is planned for M2.",
 	"Business logic: skipping steps, replaying actions, tampering with prices or limits.",
 	"Authentication and session design decisions that need human judgement.",
 	"Code paths the tools did not reach: pages behind logins that were not configured, endpoints missing from specs, code without fuzz harnesses.",
