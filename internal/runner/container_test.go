@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Gobbuwu/SiegeKit/internal/checks"
 	"github.com/Gobbuwu/SiegeKit/internal/findings"
 	"github.com/Gobbuwu/SiegeKit/internal/report"
 	"github.com/Gobbuwu/SiegeKit/internal/sandbox"
@@ -31,13 +32,18 @@ func TestBuiltinPluginsFindPlantedIssues(t *testing.T) {
 	// a string that secret scanners would flag.
 	token := "ghp_" + strings.Repeat("1a2B3c4D5e6F", 3)
 	for name, body := range map[string]string{
-		"config.py":        "GITHUB_TOKEN = \"" + token + "\"\n",
-		"Dockerfile":       "FROM ubuntu:latest\nRUN apt-get update\nUSER root\n",
-		"requirements.txt": "django==2.2.0\n",
-		"app.py":           "import subprocess\n\ndef run(cmd):\n    return subprocess.call(cmd, shell=True)\n",
-		"go.mod":           "module example.test/app\n\ngo 1.22\n",
-		"main.go":          "package main\n\nimport (\n\t\"crypto/md5\"\n\t\"fmt\"\n\t\"os\"\n)\n\nfunc main() {\n\tfmt.Printf(\"%x\\n\", md5.Sum([]byte(os.Args[1])))\n}\n",
+		"config.py":                         "GITHUB_TOKEN = \"" + token + "\"\n",
+		"Dockerfile":                        "FROM ubuntu:latest\nRUN apt-get update\nUSER root\n",
+		"requirements.txt":                  "django==2.2.0\n",
+		"app.py":                            "import subprocess\n\ndef run(cmd):\n    return subprocess.call(cmd, shell=True)\n",
+		"go.mod":                            "module example.test/app\n\ngo 1.22\n",
+		"main.go":                           "package main\n\nimport (\n\t\"crypto/md5\"\n\t\"fmt\"\n\t\"os\"\n)\n\nfunc main() {\n\tfmt.Printf(\"%x\\n\", md5.Sum([]byte(os.Args[1])))\n}\n",
+		"firestore.rules":                   "rules_version = '2';\nservice cloud.firestore {\n  match /databases/{database}/documents {\n    match /{document=**} {\n      allow read, write: if true;\n    }\n  }\n}\n",
+		"supabase/migrations/0001_init.sql": "create table profiles (id uuid primary key);\n",
 	} {
+		if err := os.MkdirAll(filepath.Dir(filepath.Join(target, name)), 0o755); err != nil {
+			t.Fatal(err)
+		}
 		if err := os.WriteFile(filepath.Join(target, name), []byte(body), 0o644); err != nil {
 			t.Fatal(err)
 		}
@@ -67,7 +73,7 @@ func TestBuiltinPluginsFindPlantedIssues(t *testing.T) {
 			}
 		}
 	}
-	r, err := Run(context.Background(), e, all, Options{Version: "test", TargetDir: target, DataRoot: dataRoot})
+	r, err := Run(context.Background(), e, all, Options{Version: "test", TargetDir: target, DataRoot: dataRoot, Checks: checks.Builtin()})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -76,7 +82,7 @@ func TestBuiltinPluginsFindPlantedIssues(t *testing.T) {
 			t.Fatalf("%s: %s %s", p.ID, p.Status, p.Reason)
 		}
 	}
-	var secret, root, vuln, py, gocode bool
+	var secret, root, vuln, py, gocode, firebase, supabase bool
 	for _, f := range r.Findings {
 		t.Logf("%s %s %s:%d", f.Severity, f.RuleID, f.Location.URI, f.Location.StartLine)
 		if strings.Contains(f.Snippet+f.Message, token[4:12]) {
@@ -91,12 +97,16 @@ func TestBuiltinPluginsFindPlantedIssues(t *testing.T) {
 			py = true
 		case f.Sources[0].Plugin == "gosec" && f.Location.URI == "main.go":
 			gocode = true
+		case f.RuleID == "firebase-public-access" && f.Location.URI == "firestore.rules" && f.Location.StartLine == 5 && f.Severity == findings.Critical:
+			firebase = true
+		case f.RuleID == "supabase-table-without-rls" && f.Location.URI == "supabase/migrations/0001_init.sql" && f.Location.StartLine == 1:
+			supabase = true
 		case f.RuleID == "CKV_DOCKER_8" && f.Location.URI == "Dockerfile" && f.Location.StartLine == 3 && f.Severity == findings.Medium:
 			root = true
 		}
 	}
-	if !secret || !root || !vuln || !py || !gocode {
-		t.Errorf("planted issues not found: secret=%v root-user=%v vulnerable-dependency=%v python=%v go=%v", secret, root, vuln, py, gocode)
+	if !secret || !root || !vuln || !py || !gocode || !firebase || !supabase {
+		t.Errorf("planted issues not found: secret=%v root-user=%v vulnerable-dependency=%v python=%v go=%v firebase=%v supabase=%v", secret, root, vuln, py, gocode, firebase, supabase)
 	}
 }
 
