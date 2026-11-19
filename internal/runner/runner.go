@@ -269,7 +269,7 @@ func substitute(args []string, cpus int, dataMount string) ([]string, error) {
 // readReport opens the tool's report without following symlinks, because the
 // output directory was writable by the tool (threat model T7).
 func readReport(path string, m *manifest.Manifest) ([]findings.Finding, error) {
-	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
+	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0) // #nosec G304 -- the report the tool wrote in our private output directory; symlinks refused
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, fmt.Errorf("tool wrote no report %q", filepath.Base(path))
 	}

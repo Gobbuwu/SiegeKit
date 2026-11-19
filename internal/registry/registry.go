@@ -105,7 +105,7 @@ func (c *Client) get(ctx context.Context, host, name, digest string, token *stri
 	}
 	if resp.StatusCode == http.StatusUnauthorized && *token == "" {
 		challenge := resp.Header.Get("WWW-Authenticate")
-		resp.Body.Close()
+		resp.Body.Close() // #nosec G104 -- the body is discarded before retrying
 		if *token, err = c.fetchToken(ctx, challenge); err != nil {
 			return nil, err
 		}

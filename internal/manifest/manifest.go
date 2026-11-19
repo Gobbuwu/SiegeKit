@@ -127,7 +127,7 @@ func (e *ValidationError) Error() string {
 
 // Load reads and validates a manifest file.
 func Load(path string) (*Manifest, error) {
-	f, err := os.Open(path)
+	f, err := os.Open(path) // #nosec G304 -- the manifest file the user named
 	if err != nil {
 		return nil, err
 	}
