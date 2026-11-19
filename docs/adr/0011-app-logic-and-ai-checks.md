@@ -2,6 +2,7 @@
 
 - Status: Accepted
 - Date: 2026-11-18
+- Amended by: [0015](0015-built-in-checks.md) (static backend-rules check written in Go)
 
 ## Context
 

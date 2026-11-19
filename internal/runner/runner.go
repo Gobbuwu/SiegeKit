@@ -17,6 +17,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/Gobbuwu/SiegeKit/internal/bandit"
+	"github.com/Gobbuwu/SiegeKit/internal/checks"
 	"github.com/Gobbuwu/SiegeKit/internal/findings"
 	"github.com/Gobbuwu/SiegeKit/internal/manifest"
 	"github.com/Gobbuwu/SiegeKit/internal/report"
@@ -29,45 +30,55 @@ type Executor interface {
 	Run(ctx context.Context, s sandbox.Spec) (*sandbox.Result, error)
 }
 
-// Select returns the plugins that scan targetKind, filtered by only (if not
-// empty) and skip. Naming a plugin that does not exist, or one that cannot
-// scan targetKind, is an error so a typo never silently drops a check.
-func Select(all []*manifest.Manifest, targetKind string, only, skip []string) ([]*manifest.Manifest, error) {
-	byID := map[string]*manifest.Manifest{}
+// Select returns the plugins and built-in checks that scan targetKind,
+// filtered by only (if not empty) and skip. Naming one that does not exist,
+// or one that cannot scan targetKind, is an error so a typo never silently
+// drops a check.
+func Select(all []*manifest.Manifest, builtins []checks.Check, targetKind string, only, skip []string) ([]*manifest.Manifest, []checks.Check, error) {
+	targets := map[string][]string{}
 	for _, m := range all {
-		byID[m.ID] = m
+		targets[m.ID] = m.Targets
+	}
+	for _, c := range builtins {
+		targets[c.ID] = c.Targets
 	}
 	for _, id := range slices.Concat(only, skip) {
-		m, ok := byID[id]
+		t, ok := targets[id]
 		if !ok {
-			return nil, fmt.Errorf("unknown plugin %q", id)
+			return nil, nil, fmt.Errorf("unknown plugin %q", id)
 		}
-		if !slices.Contains(m.Targets, targetKind) {
-			return nil, fmt.Errorf("plugin %q cannot scan a %s target", id, targetKind)
+		if !slices.Contains(t, targetKind) {
+			return nil, nil, fmt.Errorf("plugin %q cannot scan a %s target", id, targetKind)
 		}
 	}
-	var out []*manifest.Manifest
+	want := func(id string, t []string) bool {
+		return slices.Contains(t, targetKind) && !slices.Contains(skip, id) && (len(only) == 0 || slices.Contains(only, id))
+	}
+	var ms []*manifest.Manifest
 	for _, m := range all {
-		if !slices.Contains(m.Targets, targetKind) || slices.Contains(skip, m.ID) {
-			continue
+		if want(m.ID, m.Targets) {
+			ms = append(ms, m)
 		}
-		if len(only) > 0 && !slices.Contains(only, m.ID) {
-			continue
+	}
+	var cs []checks.Check
+	for _, c := range builtins {
+		if want(c.ID, c.Targets) {
+			cs = append(cs, c)
 		}
-		out = append(out, m)
 	}
-	if len(out) == 0 {
-		return nil, errors.New("no plugins selected")
+	if len(ms)+len(cs) == 0 {
+		return nil, nil, errors.New("no plugins selected")
 	}
-	return out, nil
+	return ms, cs, nil
 }
 
 // Options for one run.
 type Options struct {
-	Version   string // SiegeKit version recorded in the report
-	TargetDir string // absolute path of the source directory to scan
-	WorkDir   string // parent for the private temporary directory; "" means the OS default
-	DataRoot  string // where 'siegekit update' keeps tool data (ADR 0014)
+	Version   string         // SiegeKit version recorded in the report
+	TargetDir string         // absolute path of the source directory to scan
+	WorkDir   string         // parent for the private temporary directory; "" means the OS default
+	DataRoot  string         // where 'siegekit update' keeps tool data (ADR 0014)
+	Checks    []checks.Check // built-in checks to run (ADR 0015)
 }
 
 // MaxReportSize is the largest tool report read, matching the SARIF limit.
@@ -95,6 +106,23 @@ func Run(ctx context.Context, ex Executor, selected []*manifest.Manifest, opt Op
 		Started:         time.Now().UTC(),
 	}
 	var all []findings.Finding
+	for _, c := range opt.Checks {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		pr := report.PluginResult{ID: c.ID, Family: c.Family, Tool: "siegekit", Version: c.Version}
+		fs, err := c.Run(ctx, opt.TargetDir)
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		if err != nil {
+			pr.Status, pr.Reason = report.Failed, err.Error()
+		} else {
+			pr.Status, pr.Findings = report.Ran, len(fs)
+			all = append(all, fs...)
+		}
+		run.Plugins = append(run.Plugins, pr)
+	}
 	for _, m := range selected {
 		if err := ctx.Err(); err != nil {
 			return nil, err

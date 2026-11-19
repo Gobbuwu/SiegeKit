@@ -12,6 +12,7 @@ import (
 	"strings"
 	"syscall"
 
+	"github.com/Gobbuwu/SiegeKit/internal/checks"
 	"github.com/Gobbuwu/SiegeKit/internal/findings"
 	"github.com/Gobbuwu/SiegeKit/internal/report"
 	"github.com/Gobbuwu/SiegeKit/internal/runner"
@@ -86,7 +87,7 @@ func scan(args []string, stdout, stderr io.Writer) int {
 	if err != nil {
 		return fail(err)
 	}
-	selected, err := runner.Select(all, "repo", splitList(*only), splitList(*skip))
+	selected, builtins, err := runner.Select(all, checks.Builtin(), "repo", splitList(*only), splitList(*skip))
 	if err != nil {
 		return fail(err)
 	}
@@ -124,8 +125,8 @@ func scan(args []string, stdout, stderr io.Writer) int {
 			}
 		}
 	}
-	fmt.Fprintf(stdout, "Scanning %s with %d check(s). Tool images are downloaded on first use.\n", target, len(selected))
-	run, err := runner.Run(ctx, ex, selected, runner.Options{Version: version, TargetDir: target, DataRoot: dataRoot})
+	fmt.Fprintf(stdout, "Scanning %s with %d check(s). Tool images are downloaded on first use.\n", target, len(selected)+len(builtins))
+	run, err := runner.Run(ctx, ex, selected, runner.Options{Version: version, TargetDir: target, DataRoot: dataRoot, Checks: builtins})
 	if errors.Is(err, context.Canceled) {
 		return fail(errors.New("interrupted; no report written"))
 	}
