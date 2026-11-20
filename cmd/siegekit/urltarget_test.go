@@ -303,7 +303,7 @@ func TestScanURLRunsActivePlugins(t *testing.T) {
 	}
 	for _, want := range []string{
 		"Plan: http://localhost:3000/app, local mode, addresses 127.0.0.1.",
-		"zap-active   zap 2.17.0: ZAP attack scan (local targets only)",
+		"zap-active           zap 2.17.0: ZAP attack scan (local targets only)",
 		"only http://localhost:3000 is reachable",
 		"(3 request(s) answered by the target, 0 refused by SiegeKit)",
 	} {
@@ -311,10 +311,10 @@ func TestScanURLRunsActivePlugins(t *testing.T) {
 			t.Errorf("output lacks %q:\n%s", want, out.String())
 		}
 	}
-	// All six plugins ran through the egress proxy with the local limits;
+	// All seven plugins ran through the egress proxy with the local limits;
 	// the ZAP plugins got their configuration naming the target as a JSON
 	// string.
-	if len(f.specs) != 6 {
+	if len(f.specs) != 7 {
 		t.Fatalf("%d active runs", len(f.specs))
 	}
 	for i, s := range f.specs {
@@ -332,7 +332,7 @@ func TestScanURLRunsActivePlugins(t *testing.T) {
 		t.Fatal(err)
 	}
 	var e audit.Entry
-	if err := json.Unmarshal(b, &e); err != nil || e.Target != "http://localhost:3000/app" || e.Mode != "local" || e.Verification != "loopback + --authorized-host" || e.Confirmed != "localhost" || !slices.Equal(e.Plugins, []string{"ffuf", "nuclei", "nuclei-intrusive", "schemathesis", "zap", "zap-active"}) {
+	if err := json.Unmarshal(b, &e); err != nil || e.Target != "http://localhost:3000/app" || e.Mode != "local" || e.Verification != "loopback + --authorized-host" || e.Confirmed != "localhost" || !slices.Equal(e.Plugins, []string{"ffuf", "nuclei", "nuclei-default-login", "nuclei-intrusive", "schemathesis", "zap", "zap-active"}) {
 		t.Errorf("audit entry %+v %v", e, err)
 	}
 	// The report names the URL and the request counts.
@@ -368,9 +368,9 @@ func TestScanURLDestructiveNeedsConfirmation(t *testing.T) {
 	}{
 		{"no terminal", nil, false, "", 3, "loopback", "pass --authorized-host localhost if you"},
 		{"--yes does not count", []string{"--yes"}, false, "", 3, "loopback", "needs a person's confirmation"},
-		{"typed yes", nil, true, "yes\n", 6, "loopback + typed yes", "Type yes to run them"},
+		{"typed yes", nil, true, "yes\n", 7, "loopback + typed yes", "Type yes to run them"},
 		{"typed no", nil, true, "no\n", 3, "loopback", `"yes" was not typed`},
-		{"flag", []string{"--authorized-host", "LOCALHOST"}, false, "", 6, "loopback + --authorized-host", "zap-active"},
+		{"flag", []string{"--authorized-host", "LOCALHOST"}, false, "", 7, "loopback + --authorized-host", "zap-active"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f := useActive(t)
@@ -388,14 +388,15 @@ func TestScanURLDestructiveNeedsConfirmation(t *testing.T) {
 			if err != nil || json.Unmarshal(b, &e) != nil || e.Verification != tc.verification || len(e.Plugins) != tc.runs {
 				t.Errorf("audit entry %+v %v", e, err)
 			}
-			if tc.runs == 3 { // the three destructive plugins were skipped
+			if tc.runs == 3 { // the four destructive plugins were skipped
 				b, err := os.ReadFile(filepath.Join("siegekit-report", "report.json"))
 				var r report.Run
-				if err != nil || json.Unmarshal(b, &r) != nil || len(r.Plugins) != 7 {
+				if err != nil || json.Unmarshal(b, &r) != nil || len(r.Plugins) != 8 {
 					t.Fatalf("report %+v %v", r.Plugins, err)
 				}
-				for i, id := range []string{"nuclei-intrusive", "schemathesis", "zap-active"} {
-					if p := r.Plugins[3+i+i/2]; p.ID != id || p.Status != report.Skipped {
+				for _, p := range r.Plugins {
+					destructive := slices.Contains([]string{"nuclei-default-login", "nuclei-intrusive", "schemathesis", "zap-active"}, p.ID)
+					if destructive && (p.Status != report.Skipped || p.Reason == "") || !destructive && p.ID != "login-throttle" && p.Status != report.Ran {
 						t.Errorf("plugin %+v", p)
 					}
 				}
@@ -580,7 +581,7 @@ func TestScanURLProfile(t *testing.T) {
 	}
 	b, err := os.ReadFile(filepath.Join("siegekit-report", "report.json"))
 	var r report.Run
-	if err != nil || json.Unmarshal(b, &r) != nil || len(r.Plugins) != 7 {
+	if err != nil || json.Unmarshal(b, &r) != nil || len(r.Plugins) != 8 {
 		t.Fatalf("report %+v %v", r.Plugins, err)
 	}
 	for _, p := range r.Plugins {
@@ -678,7 +679,7 @@ func TestScanURLLogin(t *testing.T) {
 	calls := useLogin(t, login.Result{Attempts: 7, Baseline: 401}, nil)
 	code, out := scan(false, "", append(slices.Clone(loginArgs), "--authorized-host", "localhost", "--only", "login-throttle,zap", "http://localhost:3000/")...)
 	if code != report.ExitClean || len(*calls) != 1 || (*calls)[0].ReadOnly || len(f.specs) != 1 ||
-		!strings.Contains(out, `login-throttle siegekit 0.0.0-dev: 7 logins for "tester" with a random wrong password, POST http://localhost:3000/rest/user/login, one per second; the account may be locked`) {
+		!strings.Contains(out, `login-throttle       siegekit 0.0.0-dev: 7 logins for "tester" with a random wrong password, POST http://localhost:3000/rest/user/login, one per second; the account may be locked`) {
 		t.Fatalf("exit %d, %d checks, %d runs\n%s", code, len(*calls), len(f.specs), out)
 	}
 	b, err := os.ReadFile(filepath.Join(data, "siegekit", "audit.log"))
@@ -769,7 +770,7 @@ func TestScanURLLogin(t *testing.T) {
 	useProver(t, &fakeProver{published: map[string]string{"shop.example": verify.Value(tok)}})
 	deployedArgs := []string{"--deployed", "--login-url", "https://shop.example/rest/user/login", "--login-user", "tester", "--login-body", "u={user}&p={password}", "--login-attempts", "7", "--only", "login-throttle,zap", "https://shop.example/"}
 	code, out = scan(true, "shop.example\n", deployedArgs...)
-	if code != exitOK || len(*calls) != 0 || !strings.Contains(out, "login-throttle not run - runs only on local targets") {
+	if code != exitOK || len(*calls) != 0 || !strings.Contains(out, "login-throttle       not run - runs only on local targets") {
 		t.Errorf("deployed: exit %d, %d checks\n%s", code, len(*calls), out)
 	}
 	if p := readReport().Plugins[0]; p.Status != report.Skipped || p.Requests != 0 {

@@ -3,6 +3,7 @@
 - Status: Accepted
 - Date: 2026-11-19
 - Amends: [0004](0004-plugin-manifest.md) (placeholder `{target-base}`, parser `nuclei-jsonl`), [0018](0018-egress-proxy.md) and [0023](0023-active-web-scans.md) (what the connection limit counts), [0021](0021-built-in-relay.md) (relay connection limit), [0025](0025-m2-5-web-tools.md) (which templates each Nuclei plugin runs)
+- Amended by: [0031](0031-default-logins.md) (default-login templates run in `nuclei-default-login`)
 
 ## Context
 
@@ -37,7 +38,7 @@ ADR 0025 placed Nuclei in two plugins. Building them (M2.5b) showed facts that A
 Not tested, and stated in every report's "Not tested" list:
 - Nuclei's TCP, DNS, SSL and JavaScript templates (about 490): they cannot pass the HTTP-only egress proxy. TLS settings are not checked.
 - Templates that need out-of-band callbacks (blind SSRF and similar).
-- 340 default-login templates (until M2.6), and the denial-of-service, fuzzing and brute-force templates.
+- 340 default-login templates (until M2.6), and the denial-of-service, fuzzing and brute-force templates. (ADR 0031: 338 HTTP template files carry the tag, and the M2.6b plugin `nuclei-default-login` runs 337 of them, as counted by Nuclei's own template list.)
 
 Also:
 - A deployed scan now takes about 18 minutes longer and sends about 10,500 more requests.

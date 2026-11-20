@@ -3,7 +3,7 @@
   "id": "nuclei-intrusive",
   "name": "Nuclei intrusive checks",
   "version": "1.0.0",
-  "description": "Runs Nuclei's templates tagged intrusive: checks that send attack payloads or can change data. Local targets only, after confirmation. Denial-of-service, fuzzing, brute-force and default-login templates stay out (ADR 0025).",
+  "description": "Runs Nuclei's templates tagged intrusive: checks that send attack payloads or can change data. Local targets only, after confirmation. Denial-of-service, fuzzing and brute-force templates stay out (ADR 0025); default-login templates run in nuclei-default-login (ADR 0031).",
   "family": "dast",
   "mode": "active",
   "destructive": true,

@@ -387,18 +387,18 @@ func runURL(ctx context.Context, u *target.URL, addrs []netip.Addr, mode target.
 	fmt.Fprintf(stdout, "\nPlan: %s, %s mode, addresses %s.\n", u, mode, joinList(addrs))
 	for _, m := range selected {
 		if r, ok := unavailable[m.ID]; ok {
-			fmt.Fprintf(stdout, "  %-12s not run - %s\n", m.ID, r.Reason)
+			fmt.Fprintf(stdout, "  %-20s not run - %s\n", m.ID, r.Reason)
 			continue
 		}
 		planned = append(planned, m.ID)
-		fmt.Fprintf(stdout, "  %-12s %s %s: %s\n", m.ID, m.Tool.Name, m.Tool.Version, m.Name)
+		fmt.Fprintf(stdout, "  %-20s %s %s: %s\n", m.ID, m.Tool.Name, m.Tool.Version, m.Name)
 	}
 	if loginSelected {
 		if r, ok := unavailable[login.ID]; ok {
-			fmt.Fprintf(stdout, "  %-12s not run - %s\n", login.ID, r.Reason)
+			fmt.Fprintf(stdout, "  %-20s not run - %s\n", login.ID, r.Reason)
 		} else {
 			planned = append(planned, login.ID)
-			fmt.Fprintf(stdout, "  %-12s siegekit %s: %d logins for %q with a random wrong password, POST %s, one per second; the account may be locked\n",
+			fmt.Fprintf(stdout, "  %-20s siegekit %s: %d logins for %q with a random wrong password, POST %s, one per second; the account may be locked\n",
 				login.ID, version, o.login.attempts, lg.User, lg.URL)
 		}
 	}
@@ -447,7 +447,7 @@ func runURL(ctx context.Context, u *target.URL, addrs []netip.Addr, mode target.
 			for _, id := range destructive {
 				unavailable[id] = runner.Unavailable{Status: report.Skipped, Reason: reason}
 				planned = slices.DeleteFunc(planned, func(p string) bool { return p == id })
-				fmt.Fprintf(stdout, "  %-12s not run - %s\n", id, reason)
+				fmt.Fprintf(stdout, "  %-20s not run - %s\n", id, reason)
 			}
 		}
 	}

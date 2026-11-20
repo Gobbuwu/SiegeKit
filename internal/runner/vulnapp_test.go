@@ -124,6 +124,17 @@ func vulnApp() http.Handler {
 		}
 		http.Error(w, "wrong password", http.StatusUnauthorized)
 	})
+	// A Tomcat manager page that still accepts the factory login
+	// tomcat:tomcat (ADR 0031). The page has the words Nuclei's
+	// tomcat-default-login template looks for.
+	mux.HandleFunc("/manager/html", func(w http.ResponseWriter, r *http.Request) {
+		if u, p, ok := r.BasicAuth(); !ok || u != "tomcat" || p != "tomcat" {
+			w.Header().Set("WWW-Authenticate", `Basic realm="Tomcat Manager Application"`)
+			http.Error(w, "401 Unauthorized", http.StatusUnauthorized)
+			return
+		}
+		page(w, "<h1>Apache Tomcat Web Application Manager</h1><h2>Server Information</h2><table><tr><td>Tomcat Version</td><td>Apache Tomcat/9.0.0</td><td>JVM Version</td><td>11</td></tr></table>")
+	})
 	// PUT stores the file and GET serves it back, as a misconfigured WebDAV
 	// server would.
 	var mu sync.Mutex
@@ -176,6 +187,9 @@ var vulnAppIssues = map[string]map[string]string{
 	},
 	"nuclei-intrusive": {
 		"put-method-enabled": "PUT uploads a file that the server then serves",
+	},
+	"nuclei-default-login": {
+		"tomcat-default-login": "the Tomcat manager accepts the factory login tomcat:tomcat",
 	},
 	"ffuf": {
 		"path-found /.env":        "exposed /.env",
