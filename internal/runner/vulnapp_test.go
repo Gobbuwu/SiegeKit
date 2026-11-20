@@ -171,6 +171,50 @@ func vulnApp() http.Handler {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		}
 	})
+	// Orders (ADR 0035). /api/orders/{id} answers any logged-in account
+	// (CWE-639): account B reads account A's order. /api/own-orders/{id}
+	// checks the owner, and /api/my/orders answers each account its own
+	// orders: neither is an issue. /account/profile answers with no login
+	// at all (CWE-306).
+	vulnAccounts := map[string]string{"Bearer token-a": "alice@shop.test", "Bearer token-b": "bob@shop.test"}
+	mux.HandleFunc("GET /api/orders/{id}", func(w http.ResponseWriter, r *http.Request) {
+		if vulnAccounts[r.Header.Get("Authorization")] == "" {
+			http.Error(w, "log in first", http.StatusUnauthorized)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprintf(w, `{"id":%q,"owner":"alice@shop.test","total":42}`, r.PathValue("id"))
+	})
+	mux.HandleFunc("GET /api/own-orders/{id}", func(w http.ResponseWriter, r *http.Request) {
+		switch vulnAccounts[r.Header.Get("Authorization")] {
+		case "":
+			http.Error(w, "log in first", http.StatusUnauthorized)
+		case "alice@shop.test":
+			w.Header().Set("Content-Type", "application/json")
+			fmt.Fprintf(w, `{"id":%q,"owner":"alice@shop.test","total":42}`, r.PathValue("id"))
+		default:
+			http.Error(w, "not your order", http.StatusForbidden)
+		}
+	})
+	mux.HandleFunc("GET /api/my/orders", func(w http.ResponseWriter, r *http.Request) {
+		who := vulnAccounts[r.Header.Get("Authorization")]
+		if who == "" {
+			http.Error(w, "log in first", http.StatusUnauthorized)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprintf(w, `{"status":"success","data":[{"owner":%q}]}`, who)
+	})
+	// A member list that gives anyone each member's password hash
+	// (CWE-200, ADR 0035).
+	mux.HandleFunc("GET /api/members", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"members":[{"name":"carol","passwordHash":"$2b$10$N9qo8uLOickgx2ZMRZoMyeIjZAgcfl7p92ldGxad68LJZdL17lhWy"}]}`)
+	})
+	mux.HandleFunc("GET /account/profile", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"email":"alice@shop.test","address":"1 Main St"}`)
+	})
 	return mux
 }
 
@@ -225,5 +269,11 @@ var vulnAppIssues = map[string]map[string]string{
 	},
 	"login-throttle": {
 		"login-not-limited /account/sign-in": "failed logins are not limited at POST /account/sign-in",
+	},
+	// access-control runs in the test process (TestAuthzFindsPlantedIssues).
+	"access-control": {
+		"cross-account-read /api/orders/7": "account B reads account A's order at GET /api/orders/7",
+		"no-login-read /account/profile":   "account A's profile answers with no login",
+		"no-login-secret /api/members":     "the member list gives anyone password hashes",
 	},
 }

@@ -370,7 +370,7 @@ func TestScanURLRunsActivePlugins(t *testing.T) {
 		t.Fatal(err)
 	}
 	var r report.Run
-	if err := json.Unmarshal(b, &r); err != nil || r.Target != "http://localhost:3000/app" || len(r.Findings) != 1 || r.Plugins[2].Requests != 3 || r.Plugins[1].ID != "served-secrets" || r.Plugins[1].Status != report.Ran || r.Plugins[0].ID != "login-throttle" || r.Plugins[0].Status != report.Skipped || !strings.Contains(r.Plugins[0].Reason, "no login was given") {
+	if err := json.Unmarshal(b, &r); err != nil || r.Target != "http://localhost:3000/app" || len(r.Findings) != 1 || r.Plugins[3].Requests != 3 || r.Plugins[2].ID != "access-control" || r.Plugins[2].Status != report.Skipped || r.Plugins[1].ID != "served-secrets" || r.Plugins[1].Status != report.Ran || r.Plugins[0].ID != "login-throttle" || r.Plugins[0].Status != report.Skipped || !strings.Contains(r.Plugins[0].Reason, "no login was given") {
 		t.Errorf("report %+v %v", r, err)
 	}
 	if f := r.Findings[0]; f.Location.URI != "http://localhost:3000/app" || !slices.Equal(f.CWEs, []string{"CWE-1021"}) || !strings.HasPrefix(f.HelpURI, "https://developer.mozilla.org/") {
@@ -420,12 +420,12 @@ func TestScanURLDestructiveNeedsConfirmation(t *testing.T) {
 			if tc.runs == 3 { // the four destructive plugins were skipped
 				b, err := os.ReadFile(filepath.Join("siegekit-report", "report.json"))
 				var r report.Run
-				if err != nil || json.Unmarshal(b, &r) != nil || len(r.Plugins) != 9 {
+				if err != nil || json.Unmarshal(b, &r) != nil || len(r.Plugins) != 10 {
 					t.Fatalf("report %+v %v", r.Plugins, err)
 				}
 				for _, p := range r.Plugins {
 					destructive := slices.Contains([]string{"nuclei-default-login", "nuclei-intrusive", "schemathesis", "zap-active"}, p.ID)
-					if destructive && (p.Status != report.Skipped || p.Reason == "") || !destructive && p.ID != "login-throttle" && p.Status != report.Ran {
+					if destructive && (p.Status != report.Skipped || p.Reason == "") || !destructive && p.ID != "login-throttle" && p.ID != "access-control" && p.Status != report.Ran {
 						t.Errorf("plugin %+v", p)
 					}
 				}
@@ -610,10 +610,16 @@ func TestScanURLProfile(t *testing.T) {
 	}
 	b, err := os.ReadFile(filepath.Join("siegekit-report", "report.json"))
 	var r report.Run
-	if err != nil || json.Unmarshal(b, &r) != nil || len(r.Plugins) != 9 {
+	if err != nil || json.Unmarshal(b, &r) != nil || len(r.Plugins) != 10 {
 		t.Fatalf("report %+v %v", r.Plugins, err)
 	}
 	for _, p := range r.Plugins {
+		if p.ID == "access-control" { // GET and HEAD only, so in the quick profile; skipped here for want of a HAR
+			if p.Status != report.Skipped || !strings.Contains(p.Reason, "no HAR file") {
+				t.Errorf("plugin %+v", p)
+			}
+			continue
+		}
 		quick := p.ID == "ffuf" || p.ID == "nuclei" || p.ID == "zap" || p.ID == "served-secrets"
 		if quick && p.Status != report.Ran || !quick && (p.Status != report.Skipped || !strings.Contains(p.Reason, "--profile quick")) {
 			t.Errorf("plugin %+v", p)

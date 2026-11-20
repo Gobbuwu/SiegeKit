@@ -6,7 +6,7 @@ How SiegeKit's planned checks map to four widely used lists. "Auto" means a plan
 
 | Item | Coverage | How |
 | --- | --- | --- |
-| A01 Broken Access Control | Partial | Authorization differential test, unauthenticated route check ([ADR 0011](adr/0011-app-logic-and-ai-checks.md)) |
+| A01 Broken Access Control | Partial | `access-control`: a browser recording replayed as a second account and with no login (M2.7a, [ADR 0035](adr/0035-access-control-replay.md)); see [coverage](coverage.md) for what it misses |
 | A02 Security Misconfiguration | Auto | Checkov (IaC); ZAP, Nuclei (headers, CORS, exposed files); backend-rules checks (ADR 0011) |
 | A03 Software Supply Chain Failures | Auto | OSV-Scanner (whether it flags known malicious packages is to be confirmed in M2, where it was moved), Grype, Trivy, Syft SBOM |
 | A04 Cryptographic Failures | Partial | Opengrep weak-crypto rules; ZAP and Nuclei TLS and cookie checks; offline hash audit (M3) |
@@ -21,11 +21,11 @@ How SiegeKit's planned checks map to four widely used lists. "Auto" means a plan
 
 | Item | Coverage | How |
 | --- | --- | --- |
-| API1 Broken Object Level Authorization | Partial | Authorization differential test (ADR 0011) |
-| API2 Broken Authentication | Partial | Unauthenticated route check, login throttling |
+| API1 Broken Object Level Authorization | Partial | `access-control`, recorded requests replayed as a second account (ADR 0035) |
+| API2 Broken Authentication | Partial | `access-control` with no login (ADR 0035), login throttling (ADR 0030) |
 | API3 Broken Object Property Level Authorization | Partial | Differential test compares returned fields; mass-assignment remains manual |
 | API4 Unrestricted Resource Consumption | Partial | Capped rate-limit check (ADR 0011); no load testing by design |
-| API5 Broken Function Level Authorization | Partial | Differential test with two roles |
+| API5 Broken Function Level Authorization | Partial | `access-control` with two accounts of different roles (ADR 0035; GET and HEAD only) |
 | API6 Unrestricted Access to Sensitive Business Workflows | Manual | Business logic |
 | API7 Server Side Request Forgery | Auto | Opengrep; ZAP, Nuclei |
 | API8 Security Misconfiguration | Auto | As A02 |

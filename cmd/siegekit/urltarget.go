@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"maps"
+	"net/http"
 	"net/netip"
 	"os"
 	"os/signal"
@@ -18,6 +19,7 @@ import (
 	"time"
 
 	"github.com/Gobbuwu/SiegeKit/internal/audit"
+	"github.com/Gobbuwu/SiegeKit/internal/authz"
 	"github.com/Gobbuwu/SiegeKit/internal/checks"
 	"github.com/Gobbuwu/SiegeKit/internal/deps"
 	"github.com/Gobbuwu/SiegeKit/internal/egress"
@@ -89,6 +91,11 @@ type urlScan struct {
 	openAPI        string // --openapi: a file or a URL on the target's origin
 	profile        string // --profile: full or quick
 	login          loginFlags
+	har, harUser   string // --har and --har-user (ADR 0035)
+
+	// Read from --har and SIEGEKIT_SESSION_B before any request.
+	harRequests *authz.HAR
+	sessionB    http.Header
 }
 
 // loginFlags are the --login flags of the login throttling check
@@ -155,6 +162,21 @@ func scanURL(raw string, o urlScan, stdout, stderr io.Writer) int {
 	if o.login.url != "" {
 		if lg, err = login.Parse(o.login.url, o.login.user, o.login.body, u); err != nil {
 			return refuse("%v", err)
+		}
+	}
+	// So are the HAR file and account B's session (ADR 0035).
+	if o.har != "" {
+		data, err := readHAR(o.har)
+		if err != nil {
+			return refuse("--har: %v", err)
+		}
+		if o.harRequests, err = authz.ParseHAR(data, u); err != nil {
+			return refuse("--har: %v", err)
+		}
+		if s, ok := os.LookupEnv(authz.SessionEnv); ok {
+			if o.sessionB, err = authz.ParseSession(s); err != nil {
+				return refuse("%v", err)
+			}
 		}
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -329,6 +351,7 @@ func runURL(ctx context.Context, u *target.URL, addrs []netip.Addr, mode target.
 	selected, own, err := runner.Select(all, []checks.Check{
 		{ID: login.ID, Name: login.Name, Family: login.Family, Targets: []string{"url"}},
 		{ID: served.ID, Name: served.Name, Family: served.Family, Targets: []string{"url"}},
+		{ID: authz.ID, Name: authz.Name, Family: authz.Family, Targets: []string{"url"}},
 	}, "url", o.only, o.skip)
 	if err != nil {
 		return fail(err)
@@ -336,7 +359,7 @@ func runURL(ctx context.Context, u *target.URL, addrs []netip.Addr, mode target.
 	ownSelected := func(id string) bool {
 		return slices.ContainsFunc(own, func(c checks.Check) bool { return c.ID == id })
 	}
-	loginSelected, servedSelected := ownSelected(login.ID), ownSelected(served.ID)
+	loginSelected, servedSelected, authzSelected := ownSelected(login.ID), ownSelected(served.ID), ownSelected(authz.ID)
 	// The served-secrets check runs Gitleaks over the files it fetched
 	// (ADR 0032).
 	var gitleaks *manifest.Manifest
@@ -407,6 +430,14 @@ func runURL(ctx context.Context, u *target.URL, addrs []netip.Addr, mode target.
 			unavailable[login.ID] = runner.Unavailable{Status: report.Failed, Reason: "active tests run only on Linux for now (ADR 0018)"}
 		}
 	}
+	if authzSelected {
+		switch {
+		case o.harRequests == nil:
+			unavailable[authz.ID] = runner.Unavailable{Status: report.Skipped, Reason: "no HAR file was given: pass --har (a browser recording made as test account A) and set " + authz.SessionEnv + " to account B's session headers to test access between accounts"}
+		case hostOS != "linux":
+			unavailable[authz.ID] = runner.Unavailable{Status: report.Failed, Reason: "active tests run only on Linux for now (ADR 0018)"}
+		}
+	}
 	limits := runner.LocalLimits
 	if o.deployed {
 		limits = runner.DeployedLimits
@@ -439,6 +470,19 @@ func runURL(ctx context.Context, u *target.URL, addrs []netip.Addr, mode target.
 			planned = append(planned, served.ID)
 			fmt.Fprintf(stdout, "  %-20s %s %s: GET the start page and up to %d same-origin scripts, styles, JSON files and source maps it links, then scan them for secrets\n",
 				served.ID, gitleaks.Tool.Name, gitleaks.Tool.Version, served.MaxRequests-1)
+		}
+	}
+	if authzSelected {
+		if r, ok := unavailable[authz.ID]; ok {
+			fmt.Fprintf(stdout, "  %-20s not run - %s\n", authz.ID, r.Reason)
+		} else {
+			planned = append(planned, authz.ID)
+			who := "as account A, as account B and with no login"
+			if o.sessionB == nil {
+				who = "as account A and with no login (" + authz.SessionEnv + " not set: account B is not tested)"
+			}
+			fmt.Fprintf(stdout, "  %-20s siegekit %s: replay %d GET and HEAD request(s) from %s %s\n",
+				authz.ID, version, len(o.harRequests.Requests), filepath.Base(o.har), who)
 		}
 	}
 	fmt.Fprintf(stdout, "Limits: at most %.0f requests per second, stop after %d server errors in a row; only %s is reachable, and every request is labeled \"SiegeKit/%s\".\n",
@@ -502,9 +546,12 @@ func runURL(ctx context.Context, u *target.URL, addrs []netip.Addr, mode target.
 		if err := reachable(ctx, cfg); err != nil {
 			return fail(fmt.Errorf("%s: %w; no test was sent. Check that the app is running at this address", u, err))
 		}
-		if slices.ContainsFunc(selected, func(m *manifest.Manifest) bool {
+		needSpec := slices.ContainsFunc(selected, func(m *manifest.Manifest) bool {
 			return slices.Contains(planned, m.ID) && runner.UsesOpenAPI(m)
-		}) {
+		})
+		// The access-control check adds the spec's routes when there is
+		// one (ADR 0035), but runs without.
+		if needSpec || slices.Contains(planned, authz.ID) {
 			s, reason, failed := findSpec(ctx, cfg, src, o.deployed)
 			switch {
 			case s != nil:
@@ -517,9 +564,11 @@ func runURL(ctx context.Context, u *target.URL, addrs []netip.Addr, mode target.
 						unavailable[m.ID] = runner.Unavailable{Status: report.Failed, Reason: reason}
 					}
 				}
-			default:
+			case needSpec:
 				noSpec = reason
 				fmt.Fprintf(stdout, "OpenAPI spec: %s; tests that need one do not run.\n", reason)
+			default:
+				fmt.Fprintf(stdout, "OpenAPI spec: %s.\n", reason)
 			}
 		}
 	}
@@ -564,6 +613,39 @@ func runURL(ctx context.Context, u *target.URL, addrs []netip.Addr, mode target.
 		}
 		servedResult = &pr
 	}
+	var authzResult *report.PluginResult
+	var authzFindings []findings.Finding
+	if authzSelected {
+		pr := report.PluginResult{ID: authz.ID, Family: authz.Family, Tool: "siegekit", Version: version}
+		if r, ok := unavailable[authz.ID]; ok {
+			pr.Status, pr.Reason = r.Status, r.Reason
+		} else {
+			if spec != nil {
+				base, _ := openapi.BasePath(spec.Data, spec.Format)
+				o.harRequests.AddSpecRoutes(authz.SpecRoutes(spec.Data, spec.Format), base)
+			}
+			pr.Input = fmt.Sprintf("%s, %d request(s) recorded as account A", filepath.Base(o.har), len(o.harRequests.Requests)-o.harRequests.FromSpec)
+			if o.harRequests.FromSpec > 0 {
+				pr.Input += fmt.Sprintf("; %d route(s) from the OpenAPI spec %s", o.harRequests.FromSpec, spec.Source)
+			}
+			if o.sessionB != nil {
+				pr.Input += "; account B from " + authz.SessionEnv
+			}
+			fmt.Fprintf(stdout, "%s: replaying %d request(s).\n", authz.ID, len(o.harRequests.Requests))
+			res, err := authzCheck(ctx, egress.Config{Target: u, Addrs: addrs, VerifyTLS: o.deployed, Version: version, ReadOnly: true}, o.harRequests.Requests, o.sessionB, limits.Rate)
+			if ctx.Err() != nil {
+				return fail(errors.New("interrupted; no report written"))
+			}
+			pr.Requests = res.Requests
+			if err != nil {
+				pr.Status, pr.Reason = report.Failed, err.Error()
+			} else {
+				authzFindings = authz.Findings(u.Origin(), res, o.harUser)
+				pr.Status, pr.Result, pr.Findings = report.Ran, res.Summary(o.harRequests, o.harUser, authz.Count(res, o.harUser)), len(authzFindings)
+			}
+		}
+		authzResult = &pr
+	}
 	var active runner.ActiveRunner
 	if e, ok := ex.(*sandbox.Engine); ok {
 		bin, err := os.Executable()
@@ -587,7 +669,7 @@ func runURL(ctx context.Context, u *target.URL, addrs []netip.Addr, mode target.
 		return fail(err)
 	}
 	var first []report.PluginResult
-	for _, pr := range []*report.PluginResult{loginResult, servedResult} {
+	for _, pr := range []*report.PluginResult{loginResult, servedResult, authzResult} {
 		if pr != nil {
 			first = append(first, *pr)
 		}
@@ -595,7 +677,7 @@ func runURL(ctx context.Context, u *target.URL, addrs []netip.Addr, mode target.
 	if len(first) > 0 {
 		run.Started = started
 		run.Plugins = append(first, run.Plugins...)
-		if run.Findings = findings.Dedupe(slices.Concat(loginFindings, servedFindings, run.Findings)); run.Findings == nil {
+		if run.Findings = findings.Dedupe(slices.Concat(loginFindings, servedFindings, authzFindings, run.Findings)); run.Findings == nil {
 			run.Findings = []findings.Finding{}
 		}
 	}
@@ -646,6 +728,27 @@ func runServed(ctx context.Context, ex runner.Executor, gl *manifest.Manifest, c
 	fs := served.Findings(run.Findings, res)
 	pr.Findings = len(fs)
 	return pr, fs
+}
+
+// authzCheck replays the HAR's requests; tests replace it.
+var authzCheck = authz.Check
+
+// readHAR reads the HAR file, refusing anything but a regular file of at
+// most authz.MaxHARSize bytes.
+func readHAR(name string) ([]byte, error) {
+	f, err := os.Open(name) // #nosec G304 -- a file the person names on the command line
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	st, err := f.Stat()
+	if err != nil {
+		return nil, err
+	}
+	if !st.Mode().IsRegular() {
+		return nil, fmt.Errorf("%s is not a regular file", name)
+	}
+	return io.ReadAll(io.LimitReader(f, authz.MaxHARSize+1))
 }
 
 // servedCollect fetches the served files; tests replace it.

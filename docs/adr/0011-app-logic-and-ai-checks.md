@@ -2,7 +2,7 @@
 
 - Status: Accepted
 - Date: 2026-11-18
-- Amended by: [0015](0015-built-in-checks.md) (static backend-rules check written in Go)
+- Amended by: [0015](0015-built-in-checks.md) (static backend-rules check written in Go), [0035](0035-access-control-replay.md) (item 1: requests from a browser recording, what counts as a finding)
 
 ## Context
 
