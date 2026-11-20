@@ -1,0 +1,9 @@
+{
+  "fixture": "psf/requests@3c7baaa05ab4aa49cc819ce3a819d260de19c157",
+  "measured": "not measured yet",
+  "checks": {
+    "gitleaks": {
+      "status": "ran"
+    }
+  }
+}

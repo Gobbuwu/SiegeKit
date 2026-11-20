@@ -1,0 +1,9 @@
+{
+  "fixture": "vercel/nextjs-subscription-payments@bdd0813206e47e6b218d42f15a7976c8a0d3c3eb",
+  "measured": "not measured yet",
+  "checks": {
+    "gitleaks": {
+      "status": "ran"
+    }
+  }
+}

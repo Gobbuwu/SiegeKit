@@ -1,0 +1,9 @@
+{
+  "fixture": "OWASP/NodeGoat@c5cb68a7084e4ae7dcc60e6a98768720a81841e8",
+  "measured": "not measured yet",
+  "checks": {
+    "gitleaks": {
+      "status": "ran"
+    }
+  }
+}

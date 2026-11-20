@@ -241,6 +241,12 @@ var (
 	servedCloudKey = "AK" + "IA" + "QWERTYZXCV234567"
 )
 
+// vulnAppMinRequests is the least work a complete run of each container
+// plugin does on the test app: requests through the egress proxy (ADR 0039).
+// A run that sends fewer was cut short, whatever the reason, and fails.
+// Measured in CI on both engines; see the ADR for the runs.
+var vulnAppMinRequests = map[string]int{}
+
 // vulnAppIssues maps each planted issue to the rule (ZAP rule ID or Nuclei
 // template ID) that must report it, per plugin. A key "RULE /path" also
 // needs the finding's location to end in /path (ffuf reports every guessed

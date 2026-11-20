@@ -1,0 +1,9 @@
+{
+  "fixture": "caddyserver/caddy@16618f454ca6f78f37dfd85a90573d8ffd43c1c8",
+  "measured": "not measured yet",
+  "checks": {
+    "gitleaks": {
+      "status": "ran"
+    }
+  }
+}

@@ -1,0 +1,9 @@
+{
+  "fixture": "expressjs/express@43fca52d28a422c8be48fd489cbd4f2d6152bab6",
+  "measured": "not measured yet",
+  "checks": {
+    "gitleaks": {
+      "status": "ran"
+    }
+  }
+}

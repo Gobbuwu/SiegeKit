@@ -1,0 +1,9 @@
+{
+  "fixture": "go-chi/chi@c64ed7d6635f33a8b2feaff7dcfa55677023ac7d",
+  "measured": "not measured yet",
+  "checks": {
+    "gitleaks": {
+      "status": "ran"
+    }
+  }
+}

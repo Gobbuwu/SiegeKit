@@ -121,17 +121,59 @@ type Result struct {
 
 // Engine is a container engine CLI (Docker or Podman).
 type Engine struct {
-	Bin string // absolute path to docker or podman
+	Bin    string // absolute path to docker or podman
+	Podman bool   // the CLI is Podman, even when it is installed as "docker"
 }
 
-// Detect finds docker or podman on PATH, preferring Podman (rootless by default).
+// EngineEnv names the environment variable that picks the engine when both
+// are installed: "podman" or "docker" (ADR 0039).
+const EngineEnv = "SIEGEKIT_ENGINE"
+
+// Detect finds docker or podman on PATH, preferring Podman (rootless by
+// default), or the one named by SIEGEKIT_ENGINE.
 func Detect() (*Engine, error) {
-	for _, name := range []string{"podman", "docker"} {
+	names := []string{"podman", "docker"}
+	if v, ok := os.LookupEnv(EngineEnv); ok && v != "" {
+		if v != "podman" && v != "docker" {
+			return nil, fmt.Errorf("%s must be \"podman\" or \"docker\", not %q", EngineEnv, v)
+		}
+		names = []string{v}
+	}
+	for _, name := range names {
 		if p, err := exec.LookPath(name); err == nil {
-			return &Engine{Bin: p}, nil
+			return &Engine{Bin: p, Podman: isPodman(p)}, nil
 		}
 	}
+	if len(names) == 1 {
+		return nil, fmt.Errorf("%s=%s, but %s is not installed", EngineEnv, names[0], names[0])
+	}
 	return nil, errors.New("no container engine found: install Docker or Podman (see README)")
+}
+
+// isPodman reports whether the engine CLI at bin is Podman. "podman
+// --version" prints "podman version X"; Docker prints "Docker version X".
+func isPodman(bin string) bool {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, bin, "--version") // #nosec G204 -- bin is the engine found on PATH; the argument is fixed
+	cmd.Env = minimalEnv()
+	out, err := cmd.Output()
+	return err == nil && strings.HasPrefix(strings.ToLower(strings.TrimSpace(string(out))), "podman")
+}
+
+// sameOnEveryEngine adds the flags that make Podman's sandbox match
+// Docker's (ADR 0039): with --read-only, Podman also mounts writable tmpfs
+// on /run and /var/tmp unless --read-only-tmpfs=false is given. /tmp is
+// mounted by SiegeKit itself, with noexec spelled out.
+func (e *Engine) sameOnEveryEngine(args []string) []string {
+	if !e.Podman {
+		return args
+	}
+	i := slices.Index(args, "--read-only")
+	if i < 0 {
+		return args
+	}
+	return slices.Insert(args, i+1, "--read-only-tmpfs=false")
 }
 
 // validate rejects specs that would weaken the sandbox.
@@ -293,7 +335,9 @@ func (s *Spec) EngineArgs(name string, uid, gid int) ([]string, error) {
 		"--cap-drop", "ALL",
 		"--security-opt", "no-new-privileges",
 		"--read-only",
-		"--tmpfs", fmt.Sprintf("/tmp:rw,nosuid,nodev,size=%dm", tmp),
+		// noexec is spelled out: Docker adds it to --tmpfs and Podman does
+		// not, so without it the sandbox differs by engine (ADR 0039).
+		"--tmpfs", fmt.Sprintf("/tmp:rw,nosuid,nodev,noexec,size=%dm", tmp),
 		"--pids-limit", strconv.Itoa(pids),
 		"--memory", fmt.Sprintf("%dm", s.MemoryMiB),
 		"--memory-swap", fmt.Sprintf("%dm", s.MemoryMiB),
@@ -344,6 +388,7 @@ func (e *Engine) Run(ctx context.Context, s Spec) (*Result, error) {
 	if err != nil {
 		return nil, err
 	}
+	args = e.sameOnEveryEngine(args)
 	// The container user may not map to the caller's UID (SiegeKit running as
 	// root, user-namespace remapping, rootless engines), so the output
 	// directory is opened up for the run. This is only safe because its
@@ -698,6 +743,7 @@ func (e *Engine) StartRelay(ctx context.Context, dir, bin string) (string, error
 		RelayImage,
 		relay.Command, fmt.Sprintf("127.0.0.1:%d", RelayPort), relayMount + "/" + RelaySocket,
 	}
+	args = e.sameOnEveryEngine(args)
 	cmd := exec.CommandContext(ctx, e.Bin, args...) // #nosec G204 -- fixed arguments; dir is checked above
 	cmd.Env = minimalEnv()
 	if out, err := cmd.CombinedOutput(); err != nil {

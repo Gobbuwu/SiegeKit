@@ -1,0 +1,9 @@
+{
+  "fixture": "juice-shop/juice-shop@266448aba68cd8ba5915f526a128da4fa7bc3f9f",
+  "measured": "not measured yet",
+  "checks": {
+    "gitleaks": {
+      "status": "ran"
+    }
+  }
+}

@@ -316,6 +316,11 @@ func findsPlanted(t *testing.T, filesRoot string, ids ...string) {
 		if p.Status != report.Ran || p.Requests == 0 {
 			t.Errorf("%s did not run: %+v", p.ID, p)
 		}
+		if min, ok := vulnAppMinRequests[p.ID]; !ok {
+			t.Errorf("%s: no known minimum work on the test app; this run sent %d requests (ADR 0039)", p.ID, p.Requests)
+		} else if p.Requests < min {
+			t.Errorf("%s sent %d requests; a complete run on the test app sends at least %d (ADR 0039)", p.ID, p.Requests, min)
+		}
 		for rule, issue := range vulnAppIssues[p.ID] {
 			if !found[p.ID][rule] {
 				t.Errorf("%s missed %s (rule %s); planted files asked for: %v", p.ID, issue, rule, asked)

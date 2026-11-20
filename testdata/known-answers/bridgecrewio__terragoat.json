@@ -1,0 +1,9 @@
+{
+  "fixture": "bridgecrewio/terragoat@729f8da62c6a85ce4af5ad3d123de97776d954c4",
+  "measured": "not measured yet",
+  "checks": {
+    "gitleaks": {
+      "status": "ran"
+    }
+  }
+}

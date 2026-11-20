@@ -1,0 +1,9 @@
+{
+  "fixture": "digininja/DVWA@502ac150ce37c20ca6e04cab7c5ca959f315f2d0",
+  "measured": "not measured yet",
+  "checks": {
+    "gitleaks": {
+      "status": "ran"
+    }
+  }
+}

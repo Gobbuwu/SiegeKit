@@ -1,0 +1,9 @@
+{
+  "fixture": "kubernetes/examples@22934a040acbb0c0aa103023ccbd871507bf17f6",
+  "measured": "not measured yet",
+  "checks": {
+    "gitleaks": {
+      "status": "ran"
+    }
+  }
+}

@@ -1,0 +1,9 @@
+{
+  "fixture": "terraform-aws-modules/terraform-aws-vpc@577ad620abe00da27a3a0f1e5acee041959fb3be",
+  "measured": "not measured yet",
+  "checks": {
+    "gitleaks": {
+      "status": "ran"
+    }
+  }
+}

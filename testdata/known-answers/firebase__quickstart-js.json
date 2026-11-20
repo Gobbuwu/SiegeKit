@@ -1,0 +1,9 @@
+{
+  "fixture": "firebase/quickstart-js@474e779bc3f0af1c620fb9dfa53e933e6aa3edd7",
+  "measured": "not measured yet",
+  "checks": {
+    "gitleaks": {
+      "status": "ran"
+    }
+  }
+}
