@@ -19,7 +19,8 @@ SiegeKit runs security checks on code and apps the person owns. The person stays
 
 ```sh
 siegekit scan DIR                  # passive checks of a source directory (no network)
-siegekit scan --only gitleaks DIR  # selected checks; --skip a,b leaves some out
+siegekit scan --only gitleaks DIR  # selected checks or families (--only secrets,dast); --skip a,b leaves some out
+siegekit scan --profile quick URL  # no attack tests (zap-active, nuclei-intrusive, schemathesis); full is the default
 siegekit scan http://localhost:3000   # a running app: target rules first, then ZAP web tests
 siegekit update                    # refresh vulnerability data (network; asks first)
 siegekit plugins list              # checks and pinned tool versions

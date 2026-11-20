@@ -561,3 +561,44 @@ func TestScanURLOpenAPI(t *testing.T) {
 		t.Errorf("directory scan with --openapi: exit %d", code)
 	}
 }
+
+// TestScanURLProfile checks --profile (owner decision 2026-11-20): quick
+// leaves out the attack tests and says so in the report, without asking
+// for confirmation; full is the default; other names are usage errors.
+func TestScanURLProfile(t *testing.T) {
+	old := resolver
+	resolver = fakeResolver{"localhost": "127.0.0.1"}
+	t.Cleanup(func() { resolver = old })
+	f := useActive(t)
+	useData(t)
+	var out, errb bytes.Buffer
+	code := run([]string{"scan", "--no-save", "--profile", "quick", "http://localhost:3000/"}, &out, &errb)
+	if code != report.ExitClean && code != report.ExitFindings || len(f.specs) != 3 || strings.Contains(out.String(), "Type yes") || len(f.got) != 0 {
+		t.Fatalf("exit %d, %d runs, spec requests %v\n%s%s", code, len(f.specs), f.got, out.String(), errb.String())
+	}
+	b, err := os.ReadFile(filepath.Join("siegekit-report", "report.json"))
+	var r report.Run
+	if err != nil || json.Unmarshal(b, &r) != nil || len(r.Plugins) != 6 {
+		t.Fatalf("report %+v %v", r.Plugins, err)
+	}
+	for _, p := range r.Plugins {
+		quick := p.ID == "ffuf" || p.ID == "nuclei" || p.ID == "zap"
+		if quick && p.Status != report.Ran || !quick && (p.Status != report.Skipped || !strings.Contains(p.Reason, "--profile quick")) {
+			t.Errorf("plugin %+v", p)
+		}
+	}
+	for _, c := range []struct {
+		args []string
+		code int
+		want string
+	}{
+		{[]string{"--profile", "fast"}, exitUsage, "--profile must be one of full, quick"},
+		{[]string{"--profile", "quick", "--only", "zap-active"}, exitInvalid, "--only names zap-active, which --profile quick does not run"},
+	} {
+		f := useActive(t)
+		var out, errb bytes.Buffer
+		if code := run(append(append([]string{"scan", "--no-save"}, c.args...), "http://localhost:3000/"), &out, &errb); code != c.code || !strings.Contains(errb.String(), c.want) || len(f.specs) != 0 {
+			t.Errorf("%v: exit %d, %d runs:\n%s", c.args, code, len(f.specs), errb.String())
+		}
+	}
+}

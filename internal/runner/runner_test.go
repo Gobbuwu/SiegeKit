@@ -220,6 +220,67 @@ func TestSelect(t *testing.T) {
 	}
 }
 
+// TestSelectFamilies checks that --only and --skip accept family names
+// (ADR 0004), mixed with IDs, and that a family with nothing for the
+// target kind is an error.
+func TestSelectFamilies(t *testing.T) {
+	all, err := plugins.Builtin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	builtins := checks.Builtin()
+	ids := func(ms []*manifest.Manifest, cs []checks.Check) []string {
+		var out []string
+		for _, m := range ms {
+			out = append(out, m.ID)
+		}
+		for _, c := range builtins {
+			if slices.ContainsFunc(cs, func(x checks.Check) bool { return x.ID == c.ID }) {
+				out = append(out, c.ID)
+			}
+		}
+		return out
+	}
+	for _, c := range []struct {
+		kind       string
+		only, skip []string
+		want       []string
+	}{
+		{"repo", []string{"secrets"}, nil, []string{"gitleaks", "gitleaks-history", "dotenv-gitignore"}},
+		{"repo", []string{"sast", "trivy"}, nil, []string{"bandit", "gosec", "trivy"}},
+		{"repo", nil, []string{"secrets", "iac"}, []string{"bandit", "gosec", "trivy"}},
+		{"repo", []string{"secrets"}, []string{"gitleaks-history"}, []string{"gitleaks", "dotenv-gitignore"}},
+		{"url", []string{"dast"}, []string{"zap-active"}, []string{"ffuf", "nuclei", "nuclei-intrusive", "schemathesis", "zap"}},
+	} {
+		ms, cs, err := Select(all, builtins, c.kind, c.only, c.skip)
+		if got := ids(ms, cs); err != nil || !slices.Equal(got, c.want) {
+			t.Errorf("%s only %v skip %v: %v %v, want %v", c.kind, c.only, c.skip, got, err, c.want)
+		}
+	}
+	for _, c := range []struct {
+		kind, name, err string
+	}{
+		{"url", "secrets", "no secrets plugin can scan a url target"},
+		{"repo", "dast", "no dast plugin can scan a repo target"},
+		{"repo", "sats", `unknown plugin or family "sats"`},
+	} {
+		if _, _, err := Select(all, builtins, c.kind, []string{c.name}, nil); err == nil || !strings.Contains(err.Error(), c.err) {
+			t.Errorf("%s %s: %v", c.kind, c.name, err)
+		}
+	}
+	// A plugin or check named like a family would make --only ambiguous.
+	for _, m := range all {
+		if slices.Contains(manifest.Families, m.ID) {
+			t.Errorf("plugin %s has a family's name", m.ID)
+		}
+	}
+	for _, c := range builtins {
+		if slices.Contains(manifest.Families, c.ID) {
+			t.Errorf("check %s has a family's name", c.ID)
+		}
+	}
+}
+
 func TestSubstituteRejectsRateLimit(t *testing.T) {
 	if _, err := substitute([]string{"--rate", "{ratelimit}"}, 1, ""); err == nil {
 		t.Fatal("expected rejection")
