@@ -3,6 +3,7 @@
 - Status: Accepted
 - Date: 2026-11-20
 - Amends: [0004](0004-plugin-manifest.md) (selection on the command line)
+- Amended by: [0030](0030-login-throttling.md) (`--profile quick` also leaves out `login-throttle`)
 
 ## Context
 

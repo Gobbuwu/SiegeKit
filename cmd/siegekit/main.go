@@ -13,6 +13,7 @@ import (
 
 	"github.com/Gobbuwu/SiegeKit/docs"
 	"github.com/Gobbuwu/SiegeKit/internal/checks"
+	"github.com/Gobbuwu/SiegeKit/internal/login"
 	"github.com/Gobbuwu/SiegeKit/internal/manifest"
 	"github.com/Gobbuwu/SiegeKit/internal/relay"
 	"github.com/Gobbuwu/SiegeKit/plugins"
@@ -109,5 +110,6 @@ func list(stdout, stderr io.Writer) int {
 	for _, c := range checks.Builtin() {
 		fmt.Fprintf(stdout, "%-18s %-8s %-8s built into SiegeKit %s\n", c.ID, c.Family, "passive", version)
 	}
+	fmt.Fprintf(stdout, "%-18s %-8s %-8s built into SiegeKit %s\n", login.ID, login.Family, "active", version)
 	return exitOK
 }

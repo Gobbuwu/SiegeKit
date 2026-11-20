@@ -73,6 +73,7 @@ jobs:
           go test -run='^$' -fuzz=FuzzSchemathesis -fuzztime=30s ./internal/schemathesis
           go test -run='^$' -fuzz=FuzzCheck -fuzztime=30s ./internal/openapi
           go test -run='^$' -fuzz=FuzzBasePath -fuzztime=30s ./internal/openapi
+          go test -run='^$' -fuzz=FuzzLogin -fuzztime=30s ./internal/login
           go test -run='^$' -fuzz=FuzzBackendRules -fuzztime=30s ./internal/checks
           go test -run='^$' -fuzz=FuzzDotenv -fuzztime=30s ./internal/checks
           go test -run='^$' -fuzz=FuzzParse -fuzztime=60s ./internal/target

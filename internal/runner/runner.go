@@ -101,7 +101,13 @@ var Profiles = []string{"full", "quick"}
 
 // ProfileReason says why m does not run in profile, or "".
 func ProfileReason(m *manifest.Manifest, profile string) string {
-	if profile == "quick" && m.Destructive != nil && *m.Destructive {
+	return ProfileSkip(m.Destructive != nil && *m.Destructive, profile)
+}
+
+// ProfileSkip says why a check that is destructive or not does not run in
+// profile, or "". SiegeKit's own login throttling check uses it too.
+func ProfileSkip(destructive bool, profile string) string {
+	if profile == "quick" && destructive {
 		return "not run with --profile quick, which leaves out attack tests; use --profile full (the default) to run it"
 	}
 	return ""

@@ -20,7 +20,7 @@ SiegeKit runs security checks on code and apps the person owns. The person stays
 ```sh
 siegekit scan DIR                  # passive checks of a source directory (no network)
 siegekit scan --only gitleaks DIR  # selected checks or families (--only secrets,dast); --skip a,b leaves some out
-siegekit scan --profile quick URL  # no attack tests (zap-active, nuclei-intrusive, schemathesis); full is the default
+siegekit scan --profile quick URL  # no attack tests (zap-active, nuclei-intrusive, schemathesis, login-throttle); full is the default
 siegekit scan http://localhost:3000   # a running app: target rules first, then ZAP web tests
 siegekit update                    # refresh vulnerability data (network; asks first)
 siegekit plugins list              # checks and pinned tool versions
@@ -34,6 +34,8 @@ Useful scan flags:
 - `--no-install`: install nothing.
 - `--yes`: install missing dependencies without asking, only after the person agrees.
 - `--require-all`: treat checks skipped for a missing dependency as an incomplete run.
+- `--login-url URL`, `--login-user NAME`, `--login-body TEMPLATE`: a login for the login throttling check, all three together. Use only a test account the person gave you for this; the check can lock it.
+- `--login-attempts N`: how many wrong-password logins it sends, from 2 to 50 (default 20).
 
 `siegekit scan -h` lists them all.
 
@@ -44,8 +46,9 @@ A URL scan sends real requests to the app. It first prints the plan (target, mod
 - `zap-active` sends attack payloads (SQL injection, cross-site scripting, path traversal) that can change data. It runs only on local targets: this machine, or a private address the person confirmed. On `--deployed` targets it is skipped. On this machine it runs only after the person types `yes` in a terminal, or with `--authorized-host HOST` (the target's host); `--yes` does not count. Without either, it is reported as skipped. Pass `--authorized-host` only when the person told you, in this conversation, to run the attack scan on that app.
 - `nuclei-intrusive` runs Nuclei's intrusive templates, such as uploading a file with PUT. It follows the same rules as `zap-active`.
 - `schemathesis` sends requests generated from the API's OpenAPI or Swagger 2.0 spec, including invalid input and POST, PUT and DELETE requests, and reports server errors and answers that differ from the spec. It follows the same rules as `zap-active`. It needs a spec: pass `--openapi FILE` (or a URL on the target's own origin), or SiegeKit sends one GET to each of 10 common spec paths, such as `/openapi.json`, and uses the first valid one. Without a spec it is skipped; `plugins[].input` in `report.json` names the spec it used.
+- `login-throttle` is SiegeKit's own check of whether the app limits failed logins. It needs a test account the person owns and its login: `--login-url http://localhost:3000/rest/user/login --login-user test@example.com --login-body '{"email":"{user}","password":"{password}"}'`. The body is JSON if it starts with `{`, otherwise a form such as `username={user}&password={password}`. SiegeKit sends 20 POST logins (or `--login-attempts N`, at most 50), one per second, each with a new random wrong password, and stops at the first sign of a limit (a 429, 423 or 503, a `Retry-After` header, a changed status, a lockout or CAPTCHA message, or a much slower answer). No limit is a medium finding, `login-not-limited`. It sends these requests itself from this machine to the target's address, not through the proxy, and follows the same rules as `zap-active`, because it can lock the account. Without the three flags it is skipped. `plugins[].result` says what it saw. Never use a real person's account, and never put a real password in the body: SiegeKit fills in `{password}` itself.
 
-Every request goes through SiegeKit's egress proxy, which allows only the target's own address and labels the traffic `SiegeKit/<version>`. On `--deployed` targets it also allows only GET and HEAD requests, so no check can change data there. Web tests run only on Linux for now; elsewhere the run is reported as incomplete. Scan a URL only when the person asked for that app to be tested, and prefer a local or staging copy.
+Every request from the tools goes through SiegeKit's egress proxy, which allows only the target's own address and labels the traffic `SiegeKit/<version>`. SiegeKit's own requests (the first GET, the spec lookup and `login-throttle`) go straight to the same pinned address with the same label. On `--deployed` targets it also allows only GET and HEAD requests, so no check can change data there. Web tests run only on Linux for now; elsewhere the run is reported as incomplete. Scan a URL only when the person asked for that app to be tested, and prefer a local or staging copy.
 
 ## Exit codes
 
@@ -74,7 +77,8 @@ Top level:
   - `requests`: how many requests the target answered through the egress proxy. A check with none is reported as `failed`, because it tested nothing.
   - `refused`: how many requests and connections the proxy blocked: those to another host, address or port, and on `--deployed` targets any method other than GET and HEAD.
   - `refusedTo`: what was blocked, such as `CONNECT other.example:443` or `POST app.example (only GET and HEAD)`, each once, at most 20.
-  - `input`: what the check tested from besides the target, such as `OpenAPI spec http://localhost:3000/openapi.json` for `schemathesis`. Absent for other checks.
+  - `input`: what the check tested from besides the target, such as `OpenAPI spec http://localhost:3000/openapi.json` for `schemathesis`, or `POST http://localhost:3000/rest/user/login as "test@example.com"` for `login-throttle`. Absent for other checks.
+  - `result`: what a check saw when that is not a finding, such as `limited after 6 of 20 attempts: answered 429` for `login-throttle`. Absent for other checks.
 - `findings`: the deduplicated findings, most severe first.
 - `comparison`: present when a saved run of the same `target` exists (runs are saved unless `--no-save` is given). It compares this run with the most recent one:
   - `previousRun`, `previousStarted`, `previousVersion`: that run's ID, start time and SiegeKit version. If the version differs, some changes may come from the upgrade.

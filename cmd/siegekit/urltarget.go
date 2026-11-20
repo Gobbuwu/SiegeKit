@@ -18,9 +18,11 @@ import (
 	"time"
 
 	"github.com/Gobbuwu/SiegeKit/internal/audit"
+	"github.com/Gobbuwu/SiegeKit/internal/checks"
 	"github.com/Gobbuwu/SiegeKit/internal/deps"
 	"github.com/Gobbuwu/SiegeKit/internal/egress"
 	"github.com/Gobbuwu/SiegeKit/internal/findings"
+	"github.com/Gobbuwu/SiegeKit/internal/login"
 	"github.com/Gobbuwu/SiegeKit/internal/manifest"
 	"github.com/Gobbuwu/SiegeKit/internal/openapi"
 	"github.com/Gobbuwu/SiegeKit/internal/report"
@@ -85,7 +87,38 @@ type urlScan struct {
 	requireAll     bool
 	openAPI        string // --openapi: a file or a URL on the target's origin
 	profile        string // --profile: full or quick
+	login          loginFlags
 }
+
+// loginFlags are the --login flags of the login throttling check
+// (ADR 0030).
+type loginFlags struct {
+	url, user, body string
+	attempts        int
+}
+
+// check accepts all three of --login-url, --login-user and --login-body or
+// none, and --login-attempts only with them.
+func (f loginFlags) check(attemptsSet bool) error {
+	n := 0
+	for _, v := range []string{f.url, f.user, f.body} {
+		if v != "" {
+			n++
+		}
+	}
+	switch {
+	case n != 0 && n != 3:
+		return errors.New("--login-url, --login-user and --login-body are needed together")
+	case attemptsSet && n == 0:
+		return errors.New("--login-attempts needs --login-url, --login-user and --login-body")
+	case f.attempts < login.MinAttempts || f.attempts > login.MaxAttempts:
+		return fmt.Errorf("--login-attempts must be from %d to %d", login.MinAttempts, login.MaxAttempts)
+	}
+	return nil
+}
+
+// loginCheck runs the login throttling check; tests replace it.
+var loginCheck = login.Check
 
 // scanURL applies the target rules of ADR 0005, then runs the active
 // plugins (ADR 0023). Deployed mode checks proof of control (a GET of the
@@ -113,6 +146,14 @@ func scanURL(raw string, o urlScan, stdout, stderr io.Writer) int {
 	if o.openAPI != "" {
 		if spec, err = openAPISource(o.openAPI, u); err != nil {
 			return refuse("--openapi: %v", err)
+		}
+	}
+	// The login is checked now too, so a mistake is reported before any
+	// request.
+	var lg *login.Login
+	if o.login.url != "" {
+		if lg, err = login.Parse(o.login.url, o.login.user, o.login.body, u); err != nil {
+			return refuse("%v", err)
 		}
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -187,7 +228,7 @@ func scanURL(raw string, o urlScan, stdout, stderr io.Writer) int {
 	if verification != "loopback" {
 		confirmed = u.Host
 	}
-	return runURL(ctx, u, d.Addrs, mode, verification, confirmed, o, spec, stdout, stderr)
+	return runURL(ctx, u, d.Addrs, mode, verification, confirmed, o, spec, lg, stdout, stderr)
 }
 
 // specSource is what --openapi named: a spec read from a file, or a path
@@ -273,7 +314,7 @@ func findSpec(ctx context.Context, cfg egress.Config, src specSource, deployed b
 // runURL selects the active plugins, asks before installing their images
 // (ADR 0016), prints the plan (ADR 0022), records the run in the audit log
 // (ADR 0005) and runs it.
-func runURL(ctx context.Context, u *target.URL, addrs []netip.Addr, mode target.Mode, verification, confirmed string, o urlScan, src specSource, stdout, stderr io.Writer) int {
+func runURL(ctx context.Context, u *target.URL, addrs []netip.Addr, mode target.Mode, verification, confirmed string, o urlScan, src specSource, lg *login.Login, stdout, stderr io.Writer) int {
 	fail := func(err error) int {
 		fmt.Fprintf(stderr, "siegekit scan: %v\n", err)
 		return exitInvalid
@@ -282,9 +323,14 @@ func runURL(ctx context.Context, u *target.URL, addrs []netip.Addr, mode target.
 	if err != nil {
 		return fail(err)
 	}
-	selected, _, err := runner.Select(all, nil, "url", o.only, o.skip)
+	// SiegeKit's own login throttling check is selected like a plugin.
+	selected, own, err := runner.Select(all, []checks.Check{{ID: login.ID, Name: login.Name, Family: login.Family, Targets: []string{"url"}}}, "url", o.only, o.skip)
 	if err != nil {
 		return fail(err)
+	}
+	loginSelected := len(own) > 0
+	if loginSelected && runner.ProfileSkip(true, o.profile) != "" && slices.Contains(o.only, login.ID) {
+		return fail(fmt.Errorf("--only names %s, which --profile %s does not run", login.ID, o.profile))
 	}
 	dir, err := dataDir()
 	if err != nil {
@@ -319,6 +365,18 @@ func runURL(ctx context.Context, u *target.URL, addrs []netip.Addr, mode target.
 		return fail(err)
 	}
 	maps.Copy(unavailable, un)
+	if loginSelected {
+		switch {
+		case o.deployed:
+			unavailable[login.ID] = runner.Unavailable{Status: report.Skipped, Reason: "runs only on local targets: deployed targets get only GET and HEAD requests until request limits are measured (M2.10)"}
+		case runner.ProfileSkip(true, o.profile) != "":
+			unavailable[login.ID] = runner.Unavailable{Status: report.Skipped, Reason: runner.ProfileSkip(true, o.profile)}
+		case lg == nil:
+			unavailable[login.ID] = runner.Unavailable{Status: report.Skipped, Reason: "no login was given: pass --login-url, --login-user and --login-body to test whether failed logins are limited"}
+		case hostOS != "linux":
+			unavailable[login.ID] = runner.Unavailable{Status: report.Failed, Reason: "active tests run only on Linux for now (ADR 0018)"}
+		}
+	}
 	limits := runner.LocalLimits
 	if o.deployed {
 		limits = runner.DeployedLimits
@@ -334,6 +392,15 @@ func runURL(ctx context.Context, u *target.URL, addrs []netip.Addr, mode target.
 		}
 		planned = append(planned, m.ID)
 		fmt.Fprintf(stdout, "  %-12s %s %s: %s\n", m.ID, m.Tool.Name, m.Tool.Version, m.Name)
+	}
+	if loginSelected {
+		if r, ok := unavailable[login.ID]; ok {
+			fmt.Fprintf(stdout, "  %-12s not run - %s\n", login.ID, r.Reason)
+		} else {
+			planned = append(planned, login.ID)
+			fmt.Fprintf(stdout, "  %-12s siegekit %s: %d logins for %q with a random wrong password, POST %s, one per second; the account may be locked\n",
+				login.ID, version, o.login.attempts, lg.User, lg.URL)
+		}
 	}
 	fmt.Fprintf(stdout, "Limits: at most %.0f requests per second, stop after %d server errors in a row; only %s is reachable, and every request is labeled \"SiegeKit/%s\".\n",
 		limits.Rate, limits.MaxServerErrors, strings.TrimSuffix(u.String(), u.Path), version)
@@ -351,13 +418,22 @@ func runURL(ctx context.Context, u *target.URL, addrs []netip.Addr, mode target.
 				destructive = append(destructive, m.ID)
 			}
 		}
+		var warn []string
+		if len(destructive) > 0 {
+			warn = append(warn, fmt.Sprintf("%s send(s) attack payloads that can change or delete data in the app at %s.", strings.Join(destructive, ", "), u))
+		}
+		// The login check can lock the test account (ADR 0010).
+		if slices.Contains(planned, login.ID) {
+			destructive = append(destructive, login.ID)
+			warn = append(warn, fmt.Sprintf("%s can lock the test account %q.", login.ID, lg.User))
+		}
 		reason := ""
 		switch {
 		case len(destructive) == 0:
 		case o.authorizedHost != "": // matched the target above
 			verification, confirmed = "loopback + --authorized-host", u.Host
 		case stdinIsTerminal():
-			fmt.Fprintf(stdout, "%s send(s) attack payloads that can change or delete data in the app at %s. Type yes to run them: ", strings.Join(destructive, ", "), u)
+			fmt.Fprintf(stdout, "%s Type yes to run them: ", strings.Join(warn, " "))
 			line, _ := bufio.NewReader(stdin).ReadString('\n')
 			if strings.TrimSpace(line) == "yes" {
 				verification, confirmed = "loopback + typed yes", u.Host
@@ -408,6 +484,32 @@ func runURL(ctx context.Context, u *target.URL, addrs []netip.Addr, mode target.
 			}
 		}
 	}
+	// The login check runs first, so other tests' traffic cannot trip a
+	// limit it would then report (ADR 0030).
+	started := time.Now().UTC()
+	var loginResult *report.PluginResult
+	var loginFindings []findings.Finding
+	if loginSelected {
+		pr := report.PluginResult{ID: login.ID, Family: login.Family, Tool: "siegekit", Version: version}
+		if r, ok := unavailable[login.ID]; ok {
+			pr.Status, pr.Reason = r.Status, r.Reason
+		} else {
+			pr.Input = fmt.Sprintf("POST %s as %q", lg.URL, lg.User)
+			fmt.Fprintf(stdout, "%s: sending %d logins, one per second.\n", login.ID, o.login.attempts)
+			res, err := loginCheck(ctx, egress.Config{Target: u, Addrs: addrs, VerifyTLS: o.deployed, Version: version, ReadOnly: o.deployed}, lg, o.login.attempts)
+			if ctx.Err() != nil {
+				return fail(errors.New("interrupted; no report written"))
+			}
+			pr.Requests = res.Attempts
+			if err != nil {
+				pr.Status, pr.Reason = report.Failed, err.Error()
+			} else {
+				loginFindings = login.Findings(lg, res, o.login.attempts)
+				pr.Status, pr.Result, pr.Findings = report.Ran, res.Summary(o.login.attempts), len(loginFindings)
+			}
+		}
+		loginResult = &pr
+	}
 	var active runner.ActiveRunner
 	if e, ok := ex.(*sandbox.Engine); ok {
 		bin, err := os.Executable()
@@ -429,6 +531,13 @@ func runURL(ctx context.Context, u *target.URL, addrs []netip.Addr, mode target.
 	}
 	if err != nil {
 		return fail(err)
+	}
+	if loginResult != nil {
+		run.Started = started
+		run.Plugins = append([]report.PluginResult{*loginResult}, run.Plugins...)
+		if run.Findings = findings.Dedupe(append(loginFindings, run.Findings...)); run.Findings == nil {
+			run.Findings = []findings.Finding{}
+		}
 	}
 	return finish(run, o.reportDir, o.noSave, u.Host, o.threshold, o.requireAll, unavailable, stdout, stderr)
 }

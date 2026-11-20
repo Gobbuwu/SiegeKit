@@ -21,6 +21,7 @@ func TestRun(t *testing.T) {
 		{"valid plugin", []string{"plugins", "validate", "../../schemas/testdata/valid/passive.json"}, exitOK, "ok"},
 		{"invalid plugin", []string{"plugins", "validate", "../../schemas/testdata/invalid/unpinned-image.json"}, exitInvalid, "FAIL"},
 		{"missing file", []string{"plugins", "validate", "does-not-exist.json"}, exitInvalid, "FAIL"},
+		{"list", []string{"plugins", "list"}, exitOK, "login-throttle     dast     active   built into SiegeKit"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var out, errb bytes.Buffer

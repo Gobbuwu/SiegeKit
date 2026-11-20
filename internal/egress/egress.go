@@ -6,6 +6,7 @@
 package egress
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
 	"crypto/x509"
@@ -215,31 +216,69 @@ func Reachable(ctx context.Context, cfg Config) error {
 // error. Redirects are not followed. SiegeKit uses it to find an OpenAPI
 // spec on a local target (ADR 0025 item 4).
 func Get(ctx context.Context, cfg Config, path string, max int64) (int, []byte, error) {
+	a, err := Send(ctx, cfg, http.MethodGet, path, "", nil, max)
+	if a == nil {
+		return 0, nil, err
+	}
+	return a.Status, a.Body, err
+}
+
+// Answer is the target's answer to one request sent by Send.
+type Answer struct {
+	Status int
+	Header http.Header
+	Body   []byte
+	// Took is the time from sending the request to reading the whole body.
+	Took time.Duration
+}
+
+// Send sends one request for path (which must start with "/") on the
+// target's origin from the host, through the same pinned transport as the
+// proxy, with body sent as contentType, and reads at most max bytes of the
+// answer; a longer body is an error, returned with the status and headers.
+// Redirects are not followed. A ReadOnly config allows only GET and HEAD.
+// SiegeKit uses it for its own checks: finding an OpenAPI spec (ADR 0025
+// item 4) and the login throttling check (ADR 0030).
+func Send(ctx context.Context, cfg Config, method, path, contentType string, body []byte, max int64) (*Answer, error) {
 	if !strings.HasPrefix(path, "/") || strings.HasPrefix(path, "//") {
-		return 0, nil, fmt.Errorf("path %q must start with a single /", path)
+		return nil, fmt.Errorf("path %q must start with a single /", path)
+	}
+	if cfg.ReadOnly && method != http.MethodGet && method != http.MethodHead {
+		return nil, fmt.Errorf("%s is not allowed: only GET and HEAD requests may be sent to this target", method)
 	}
 	tr := newTransport(cfg)
 	defer tr.CloseIdleConnections()
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, cfg.Target.Origin()+path, nil)
+	var rd io.Reader
+	if body != nil {
+		rd = bytes.NewReader(body)
+	}
+	req, err := http.NewRequestWithContext(ctx, method, cfg.Target.Origin()+path, rd)
 	if err != nil {
-		return 0, nil, err
+		return nil, err
 	}
 	req.Header.Set("User-Agent", "SiegeKit/"+cfg.Version)
+	if contentType != "" {
+		req.Header.Set("Content-Type", contentType)
+	}
+	start := time.Now()
 	resp, err := tr.RoundTrip(req)
 	if err != nil {
-		return 0, nil, fmt.Errorf("the target did not answer: %w", err)
+		return nil, fmt.Errorf("the target did not answer: %w", err)
 	}
 	defer resp.Body.Close()
+	a := &Answer{Status: resp.StatusCode, Header: resp.Header}
 	b, err := io.ReadAll(io.LimitReader(resp.Body, max+1))
+	a.Took = time.Since(start)
 	if err != nil {
-		return resp.StatusCode, nil, err
+		return a, err
 	}
 	if int64(len(b)) > max {
-		return resp.StatusCode, nil, fmt.Errorf("answer larger than %d bytes", max)
+		return a, fmt.Errorf("answer larger than %d bytes", max)
 	}
-	return resp.StatusCode, b, nil
+	a.Body = b
+	return a, nil
 }
 
 // Stats returns a copy of the counters.

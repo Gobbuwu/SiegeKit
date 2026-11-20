@@ -133,17 +133,25 @@ jobs:
         # a permissive CORS header (10098). Juice Shop serves no OpenAPI spec
         # at the default paths (it answers them with HTML, measured
         # 2026-11-20), so schemathesis must be skipped for that reason (ADR 0028).
+        # Juice Shop does not limit failed logins (20 logins for
+        # jim@juice-sh.op all answered 401, measured 2026-11-20), so
+        # login-throttle must send 20 logins and report login-not-limited
+        # (ADR 0030).
         run: |
           set +e
-          "$RUNNER_TEMP/siegekit" scan --yes --authorized-host 127.0.0.1 --no-save --report-dir "$RUNNER_TEMP/report" http://127.0.0.1:3000/
+          "$RUNNER_TEMP/siegekit" scan --yes --authorized-host 127.0.0.1 --no-save --report-dir "$RUNNER_TEMP/report" \
+            --login-url http://127.0.0.1:3000/rest/user/login --login-user jim@juice-sh.op \
+            --login-body '{"email":"{user}","password":"{password}"}' http://127.0.0.1:3000/
           code=$?
           set -e
           echo "exit code $code"
           if [ "$code" -ne 0 ] && [ "$code" -ne 3 ]; then exit 1; fi
           r="$RUNNER_TEMP/report/report.json"
-          jq '.plugins[] | {id, status, reason, input, requests, refused, refusedTo, findings}' "$r"
-          jq -e '[.plugins[] | select(.status == "ran" and .requests > 0) | .id] | sort == ["ffuf", "nuclei", "nuclei-intrusive", "zap", "zap-active"]' "$r"
+          jq '.plugins[] | {id, status, reason, input, result, requests, refused, refusedTo, findings}' "$r"
+          jq -e '[.plugins[] | select(.status == "ran" and .requests > 0) | .id] | sort == ["ffuf", "login-throttle", "nuclei", "nuclei-intrusive", "zap", "zap-active"]' "$r"
           jq -e '[.plugins[] | select(.id == "schemathesis" and .status == "skipped" and (.reason | contains("none was found at /openapi.json")))] | length == 1' "$r"
+          jq -e '[.plugins[] | select(.id == "login-throttle" and .requests == 20)] | length == 1' "$r"
+          jq -e '[.findings[] | select(.ruleId == "login-not-limited" and .location.uri == "http://127.0.0.1:3000/rest/user/login")] | length == 1' "$r"
           for rule in 10038 10098; do
             jq -e --arg rule "$rule" '[.findings[] | select(.ruleId == $rule)] | length > 0' "$r" > /dev/null || { echo "ZAP rule $rule not reported"; exit 1; }
           done
