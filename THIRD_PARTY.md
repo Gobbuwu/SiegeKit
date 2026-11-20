@@ -30,6 +30,19 @@ Downloaded by SiegeKit itself after the user agrees, from the publisher's GitHub
 | --- | --- | --- | --- |
 | [nuclei](plugins/nuclei/plugin.json) and [nuclei-intrusive](plugins/nuclei-intrusive/plugin.json) | nuclei-templates `v10.5.2` (published 2026-11-12, MIT), GitHub's archive of the tag: `https://github.com/projectdiscovery/nuclei-templates/archive/refs/tags/v10.5.2.tar.gz` | 10,105,056 bytes, `016b7abbf931d4d1a851a5a568e44510dc61691dc8a5202e3b24e701515ec574` | Downloaded twice on a GitHub Actions runner on 2026-11-19, identical both times; the publisher attaches no release files ([ADR 0026](docs/adr/0026-nuclei.md)) |
 
+| [ffuf](plugins/ffuf/plugin.json) | ffuf `2.3.0` (MIT; files in the archive dated 2026-09-09), `https://github.com/ffuf/ffuf/releases/download/v2.3.0/ffuf_2.3.0_linux_amd64.tar.gz` | 4,367,536 bytes, `b2a3c725fcb9da175159682f54d6e9149f2905b00d84d155e7efc5d599975ceb` | The publisher's `ffuf_2.3.0_checksums.txt` on the release; matched by a download on 2026-11-20 |
+| [ffuf](plugins/ffuf/plugin.json) | the same, `ffuf_2.3.0_linux_arm64.tar.gz` | 3,950,470 bytes, `e2d712615d53da797ee929006e41f2df5a7960a5353133db9c150ddaa22ae4e8` | As above |
+
+ffuf runs in the relay's pinned Alpine image (`docker.io/library/alpine@sha256:f59abe65…`, ADR 0021).
+
+## Shipped data
+
+Part of SiegeKit's binary, copied byte for byte ([ADR 0027](docs/adr/0027-ffuf.md)).
+
+| Used by | File | Source | License |
+| --- | --- | --- | --- |
+| [ffuf](plugins/ffuf/plugin.json), local targets | [`internal/wordlists/seclists-common.txt`](internal/wordlists/seclists-common.txt) | [SecLists](https://github.com/danielmiessler/SecLists) `Discovery/Web-Content/common.txt`, tag `2026.2` (commit `145f1f45ba7bc5fd6b3966d3a79bf95654deb20e`), 38,536 bytes, SHA-256 `47fb86ca6fb3f97e5491161581900d6d99851fb16764eacddf16aa85617c956a` | MIT, Copyright (c) 2018 Daniel Miessler; full text in [`internal/wordlists/SECLISTS-LICENSE`](internal/wordlists/SECLISTS-LICENSE) |
+
 ## Test fixtures (CI only)
 
 These run only in SiegeKit's own CI. They are not shipped or downloaded by SiegeKit.
@@ -60,7 +73,7 @@ Trivy's vulnerability database is not pinned: `siegekit update` lets Trivy downl
 | [Hadolint](https://github.com/hadolint/hadolint) | Dockerfiles | not checked | GPL-3.0 | Optional |
 | [ZAP](https://github.com/zaproxy/zaproxy) | DAST | 2.17.0 | Apache-2.0 | Pinned (M2) |
 | [Nuclei](https://github.com/projectdiscovery/nuclei) and [templates](https://github.com/projectdiscovery/nuclei-templates) | DAST, known CVEs | 3.11.1, templates 10.5.2 | MIT | Pinned (M2.5b) |
-| [ffuf](https://github.com/ffuf/ffuf) | Content discovery | 2.3.0 | MIT | Planned (M2) |
+| [ffuf](https://github.com/ffuf/ffuf) | Content discovery | 2.3.0 | MIT | Pinned (M2.5c) |
 | [Schemathesis](https://github.com/schemathesis/schemathesis) | API fuzzing | 4.33.4 | MIT | Planned (M2) |
 | [sqlmap](https://github.com/sqlmapproject/sqlmap) | SQL injection | 1.10.11 | GPL-2.0 | Optional (M2) |
 | [Nikto](https://github.com/sullo/nikto) | Web server checks | not checked | GPL-3.0 (code); database under separate terms | Optional (M2) |

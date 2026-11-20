@@ -21,6 +21,7 @@ One file per milestone records what was built, how it was checked and what is st
   2. Label each finding as a true positive, a false positive or unclear, with one line of reason and its evidence (file and line, or URL and request).
   3. Misses: list the known issues in the gate's fixtures and in Juice Shop that fall in a category a check that ran claims to test, and say which no check reported.
   4. Record the counts per check (sampled, true, false, unclear, missed) under "Result quality" in the milestone record, with the labelled list in a file next to it. Each false positive or miss becomes a known gap or an item in the check's fix plan. No pass mark is set; the owner decides what blocks the milestone.
+- **The full project check also looks for wrong claims and work outside the plan** (owner, 2026-11-20). It lists every claim in code comments, docs and ADRs that no evidence backs (a guess or assumption written as fact, or one that turned out wrong), and every piece of work that is superfluous or has nothing to do with the plan. Each one is fixed, backed with evidence, moved under "Unverified", or removed.
 - When a milestone's gate passes and the owner signs off, its record gets the date and the evidence for each gate item.
 
 ## How to cross-check a record

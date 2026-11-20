@@ -11,8 +11,8 @@ Each row is a common security concern, the plugins planned to check it, and the 
 | Outdated libraries with known vulnerabilities | Trivy, from lock and manifest files (M1); OSV-Scanner, Grype (M2) | M1, M2 |
 | Outdated container base images and OS packages | Trivy, Grype (needs container-image targets) | M3 |
 | Software inventory (what versions you ship) | Syft (SBOM) | M2 |
-| Old or forgotten endpoints, backup and leftover files, directory listings | ffuf, Nuclei, Nikto (optional) | M2 |
-| Exposed admin pages and dashboards | Nuclei panel templates (delivered in M2.5b), ffuf, ZAP spider | M2 |
+| Old or forgotten endpoints, backup and leftover files, directory listings | ffuf on every URL target: SecLists `common.txt` (4,751 paths) on local targets, SiegeKit's own 210 paths on deployed ones (delivered in M2.5c, [ADR 0027](adr/0027-ffuf.md)); Nuclei; Nikto (optional) | M2 |
+| Exposed admin pages and dashboards | Nuclei panel templates (delivered in M2.5b), ffuf (delivered in M2.5c), ZAP spider | M2 |
 | Default vendor logins left enabled | Nuclei default-login templates, local mode only, with limits on attempts (not run by the M2.5b Nuclei plugins: M2.6) | M2 ([ADR 0010](adr/0010-login-checks.md)) |
 | No limit on failed login attempts | Login throttling check on your own test account | M2 ([ADR 0010](adr/0010-login-checks.md)) |
 | Session cookie flags, security headers, TLS settings | ZAP crawl and passive checks on every URL target (delivered in M2.4, [ADR 0023](adr/0023-active-web-scans.md)); Nuclei header and cookie templates on every URL target (delivered in M2.5b). TLS settings: not yet, Nuclei's SSL templates cannot pass the egress proxy | M2 |

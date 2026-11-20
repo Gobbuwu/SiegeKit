@@ -3,6 +3,7 @@
 - Status: Accepted
 - Date: 2026-11-19
 - Amends: [0004](0004-plugin-manifest.md) (archive and binary artifacts get `size` and `mount`), [0008](0008-supply-chain.md) (where pinned files may come from), [0016](0016-dependency-consent.md) (a fourth kind of dependency)
+- Amended by: [0027](0027-ffuf.md) (a wordlist ships inside SiegeKit)
 
 ## Context
 

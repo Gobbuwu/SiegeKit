@@ -20,6 +20,7 @@ import (
 	"github.com/Gobbuwu/SiegeKit/internal/report"
 	"github.com/Gobbuwu/SiegeKit/internal/sandbox"
 	"github.com/Gobbuwu/SiegeKit/internal/target"
+	"github.com/Gobbuwu/SiegeKit/internal/wordlists"
 )
 
 // Limits are the egress proxy's limits for one active run (ADR 0005, 0018).
@@ -132,6 +133,17 @@ func runActive(ctx context.Context, run ActiveRunner, m *manifest.Manifest, opt 
 	if err != nil {
 		return fail(report.Failed, "%v", err)
 	}
+	if w := m.Run.Wordlist; w != nil {
+		name := w.Local
+		if opt.Deployed {
+			name = w.Deployed
+		}
+		dir, err := writeWordlist(work, m.ID, name)
+		if err != nil {
+			return fail(report.Failed, "write wordlist: %v", err)
+		}
+		fileMounts = append(fileMounts, sandbox.FileMount{Host: dir, Mount: WordlistMount})
+	}
 	cpus := min(m.Resources.CPUs, runtime.NumCPU())
 	u := opt.Target.String()
 	args := substituteURL(m.Run.Args, u, cpus, opt.Limits.Rate)
@@ -210,12 +222,40 @@ func substituteURL(args []string, u string, cpus int, rate float64) []string {
 		"{threads}", strconv.Itoa(cpus),
 		"{ratelimit}", strconv.Itoa(max(1, int(rate))),
 		"{config}", sandbox.ConfigMount,
+		"{wordlist}", WordlistMount+"/"+wordlistFile,
 	)
 	out := make([]string, len(args))
 	for i, a := range args {
 		out[i] = r.Replace(a)
 	}
 	return out
+}
+
+// WordlistMount is where a plugin's path list is mounted (ADR 0027).
+const WordlistMount = manifest.WordlistMount
+
+const wordlistFile = "paths.txt"
+
+// writeWordlist writes the shipped list name into a new directory under
+// work and returns the directory, which is mounted read-only.
+func writeWordlist(work, id, name string) (string, error) {
+	b, err := wordlists.Get(name)
+	if err != nil {
+		return "", err
+	}
+	dir, err := os.MkdirTemp(work, id+"-wordlist-")
+	if err != nil {
+		return "", err
+	}
+	// Read by the tool's user, which may differ from ours; the list is
+	// public and holds nothing secret.
+	if err := os.Chmod(dir, 0o755); err != nil { // #nosec G302 -- read by the tool's user; public data
+		return "", err
+	}
+	if err := os.WriteFile(filepath.Join(dir, wordlistFile), b, 0o644); err != nil { // #nosec G306 -- read by the tool's user; public data
+		return "", err
+	}
+	return dir, nil
 }
 
 // configFor substitutes {target} and {target-regex} in every string of a

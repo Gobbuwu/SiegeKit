@@ -19,6 +19,7 @@ import (
 	"strings"
 
 	"github.com/Gobbuwu/SiegeKit/internal/sandbox"
+	"github.com/Gobbuwu/SiegeKit/internal/wordlists"
 )
 
 // MaxFileSize is the largest manifest accepted, in bytes.
@@ -37,10 +38,10 @@ var (
 	GPUModes   = []string{"none", "optional", "required"}
 	Networks   = []string{"none", "target-only"}
 	Formats    = []string{"sarif", "json", "jsonl", "xml", "text"}
-	Placeholds = []string{"target", "target-base", "outdir", "workdir", "threads", "ratelimit", "data", "config"}
+	Placeholds = []string{"target", "target-base", "outdir", "workdir", "threads", "ratelimit", "data", "config", "wordlist"}
 	// ConfigPlaceholds are the placeholders allowed in run.config strings.
 	ConfigPlaceholds = []string{"target", "target-regex"}
-	Parsers          = []string{"sarif", "sarif-gitleaks", "sarif-checkov", "sarif-zap", "bandit-json", "nuclei-jsonl"}
+	Parsers          = []string{"sarif", "sarif-gitleaks", "sarif-checkov", "sarif-zap", "bandit-json", "nuclei-jsonl", "ffuf-json"}
 )
 
 var (
@@ -157,6 +158,20 @@ type Run struct {
 	// values may use {target} and {target-regex}, which are substituted as
 	// JSON strings, so a target cannot change the file's structure.
 	Config map[string]any `json:"config,omitempty"`
+	// Wordlist names the path lists SiegeKit ships (package wordlists) for
+	// local and deployed targets; {wordlist} in Args is the chosen list's
+	// path, mounted read-only (ADR 0027).
+	Wordlist *Wordlist `json:"wordlist,omitempty"`
+}
+
+// WordlistMount is where SiegeKit mounts a plugin's run.wordlist; no
+// artifact may use it.
+const WordlistMount = "/siegekit/files/wordlist"
+
+// Wordlist is a URL plugin's path list for each target mode.
+type Wordlist struct {
+	Local    string `json:"local"`
+	Deployed string `json:"deployed"`
 }
 
 // Output is what the tool produces and which parser reads it.
@@ -300,6 +315,22 @@ func (m *Manifest) Validate() error {
 		if m.Run.Config != nil {
 			checkConfig(&p, "run.config", m.Run.Config, 0)
 		}
+		usesList := slices.ContainsFunc(m.Run.Args, func(a string) bool { return strings.Contains(a, "{wordlist}") })
+		switch w := m.Run.Wordlist; {
+		case w == nil && usesList:
+			add("run.args uses {wordlist} but the manifest has no run.wordlist")
+		case w != nil && !usesList:
+			add("run.wordlist is set but no run.args entry uses {wordlist}")
+		case w != nil:
+			if !slices.Equal(m.Targets, []string{"url"}) {
+				add("run.wordlist is only allowed for plugins whose only target is url")
+			}
+			for mode, name := range map[string]string{"local": w.Local, "deployed": w.Deployed} {
+				if !slices.Contains(wordlists.Names, name) {
+					add("run.wordlist.%s %q is not a list SiegeKit ships (%s)", mode, name, strings.Join(wordlists.Names, ", "))
+				}
+			}
+		}
 	}
 	if m.LocalOnly && m.Mode != "active" {
 		add("localOnly is only allowed for active plugins")
@@ -344,6 +375,9 @@ func (m *Manifest) Validate() error {
 		}
 		if m.Output.Parser == "nuclei-jsonl" && m.Output.Format != "jsonl" {
 			add("output.parser \"nuclei-jsonl\" needs output.format \"jsonl\"")
+		}
+		if m.Output.Parser == "ffuf-json" && m.Output.Format != "json" {
+			add("output.parser \"ffuf-json\" needs output.format \"json\"")
 		}
 	}
 
@@ -422,6 +456,9 @@ func (m *Manifest) validateTool(p *[]string) {
 				*p = append(*p, fmt.Sprintf("%s.mount %s is also used by %s", f, a.Mount, prev))
 			}
 			mounts[a.Platform+" "+a.Mount] = f
+			if a.Mount == WordlistMount {
+				*p = append(*p, fmt.Sprintf("%s.mount %s is reserved for run.wordlist", f, a.Mount))
+			}
 		}
 		checkEnum(p, f+".platform", a.Platform, Platforms)
 		checkEnum(p, f+".kind", a.Kind, Kinds)

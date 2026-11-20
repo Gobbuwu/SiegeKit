@@ -1,20 +1,24 @@
 package runner
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"net/netip"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
 	"github.com/Gobbuwu/SiegeKit/internal/egress"
+	"github.com/Gobbuwu/SiegeKit/internal/files"
 	"github.com/Gobbuwu/SiegeKit/internal/manifest"
 	"github.com/Gobbuwu/SiegeKit/internal/report"
 	"github.com/Gobbuwu/SiegeKit/internal/sandbox"
 	"github.com/Gobbuwu/SiegeKit/internal/target"
+	"github.com/Gobbuwu/SiegeKit/internal/wordlists"
 )
 
 const zapReport = `{"version":"2.1.0","runs":[{"tool":{"driver":{"name":"ZAP","rules":[{"id":"10021","name":"X-Content-Type-Options Header Missing",
@@ -150,5 +154,48 @@ func TestSkipReason(t *testing.T) {
 	destructive.Destructive = &d
 	if !strings.Contains(SkipReason(&destructive, true), "does not run on deployed targets") {
 		t.Error("destructive plugin not skipped on a deployed target")
+	}
+}
+
+// TestWordlist checks that a URL plugin gets the shipped list for the
+// target's mode, mounted read-only at {wordlist} (ADR 0027).
+func TestWordlist(t *testing.T) {
+	m := builtin(t, "ffuf")
+	root := t.TempDir()
+	for _, a := range FilesFor(m) {
+		if err := os.MkdirAll(files.Dir(root, a), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(files.Dir(root, a)+".ok", nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, deployed := range []bool{false, true} {
+		opt := urlOpts(t)
+		opt.FilesRoot, opt.Deployed = root, deployed
+		want, _ := wordlists.Get("seclists-common.txt")
+		if deployed {
+			opt.Limits = DeployedLimits
+			want, _ = wordlists.Get("deployed.txt")
+		}
+		var got []byte
+		r, err := RunURL(context.Background(), func(_ context.Context, sp sandbox.Spec, _ egress.Config) (*ActiveResult, error) {
+			if !slices.Contains(sp.Args, WordlistMount+"/paths.txt") || !slices.Contains(sp.Args, "http://app.test:8000/FUZZ") {
+				t.Errorf("args %v", sp.Args)
+			}
+			for _, f := range sp.Files {
+				if f.Mount == WordlistMount {
+					got, _ = os.ReadFile(filepath.Join(f.Host, "paths.txt"))
+				}
+			}
+			os.WriteFile(filepath.Join(sp.OutDir, "ffuf.json"), []byte(`{"results":[{"status":200,"length":3,"url":"http://app.test:8000/.env"}]}`), 0o600)
+			return &ActiveResult{Result: &sandbox.Result{Status: sandbox.Completed}, Stats: egress.Stats{Requests: 1}}, nil
+		}, []*manifest.Manifest{m}, opt)
+		if err != nil || r.Plugins[0].Status != report.Ran || len(r.Findings) != 1 {
+			t.Errorf("deployed %v: %+v %v", deployed, r, err)
+		}
+		if !bytes.Equal(got, want) {
+			t.Errorf("deployed %v: mounted list of %d bytes, want %d", deployed, len(got), len(want))
+		}
 	}
 }

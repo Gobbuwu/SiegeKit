@@ -179,6 +179,7 @@ func TestPinnedImageVersions(t *testing.T) {
 		"gosec": {"-fmt", "sarif", "-out", "/out/v.sarif", "-no-fail", "/target/..."}, "trivy": {"--version"}, "gitleaks-history": {"version"},
 		"zap": {"zap.sh", "-Xmx512m", "-cmd", "-silent", "-dir", "/tmp/zap", "-version"}, "zap-active": {"zap.sh", "-Xmx512m", "-cmd", "-silent", "-dir", "/tmp/zap", "-version"},
 		"nuclei": {"-version", "-duc"}, "nuclei-intrusive": {"-version", "-duc"},
+		"ffuf": {"/siegekit/files/ffuf/ffuf", "-V"},
 	}
 	all, err := plugins.Builtin()
 	if err != nil {
@@ -196,6 +197,13 @@ func TestPinnedImageVersions(t *testing.T) {
 			t.Logf("%s: no image for this platform", m.ID)
 			continue
 		}
+		// A tool shipped as a pinned file (ffuf) runs from its mount.
+		var fileMounts []sandbox.FileMount
+		if len(FilesFor(m)) > 0 {
+			if fileMounts, err = FileMounts(m, pinnedFiles(t, m.ID)); err != nil {
+				t.Fatalf("%s: %v", m.ID, err)
+			}
+		}
 		out := t.TempDir()
 		// A minimal Go module, so gosec has a package to report on.
 		src := t.TempDir()
@@ -203,7 +211,7 @@ func TestPinnedImageVersions(t *testing.T) {
 		os.WriteFile(filepath.Join(src, "main.go"), []byte("package main\n\nfunc main() {}\n"), 0o644)
 		os.Chmod(src, 0o755)
 		r, err := e.Run(context.Background(), sandbox.Spec{
-			Image: image, Args: args, OutDir: out, TargetDir: src, Network: "none",
+			Image: image, Args: args, OutDir: out, TargetDir: src, Network: "none", Files: fileMounts,
 			// ZAP needs more than 512 MiB just to start (OOM-killed at 512
 			// MiB even with a 256 MiB heap, measured 2026-11-19).
 			CPUs: 1, MemoryMiB: max(512, m.Resources.MemoryMiB), Timeout: 120 * time.Second,

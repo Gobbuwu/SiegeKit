@@ -9,6 +9,7 @@ import (
 	"testing/fstest"
 
 	"github.com/Gobbuwu/SiegeKit/internal/manifest"
+	"github.com/Gobbuwu/SiegeKit/internal/runner"
 	"github.com/Gobbuwu/SiegeKit/internal/sandbox"
 )
 
@@ -17,7 +18,7 @@ func TestBuiltin(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"bandit", "checkov", "gitleaks", "gitleaks-history", "gosec", "nuclei", "nuclei-intrusive", "trivy", "zap", "zap-active"}
+	want := []string{"bandit", "checkov", "ffuf", "gitleaks", "gitleaks-history", "gosec", "nuclei", "nuclei-intrusive", "trivy", "zap", "zap-active"}
 	if len(ms) != len(want) {
 		t.Fatalf("got %d plugins, want %v", len(ms), want)
 	}
@@ -46,6 +47,8 @@ func TestBuiltin(t *testing.T) {
 				checkZAP(t, m)
 			case "nuclei":
 				checkNuclei(t, m)
+			case "ffuf":
+				checkFFUF(t, m)
 			default:
 				t.Errorf("%s: no rules for active tool %s", m.ID, m.Tool.Name)
 			}
@@ -81,6 +84,26 @@ func checkNuclei(t *testing.T, m *manifest.Manifest) {
 	}
 	if !*m.Destructive && !slices.Contains(tags, "intrusive") {
 		t.Errorf("%s: a non-destructive Nuclei plugin must exclude intrusive templates", m.ID)
+	}
+}
+
+// checkFFUF holds the owner's M2.5 decisions (ADR 0025, 0027): the shipped
+// SecLists list on local targets and SiegeKit's short list on deployed
+// ones, through the relay, at SiegeKit's rate, with auto-calibration so an
+// app that answers every path does not flood the report.
+func checkFFUF(t *testing.T, m *manifest.Manifest) {
+	t.Helper()
+	args := strings.Join(m.Run.Args, " ")
+	for _, want := range []string{"-w {wordlist}", "-x http://127.0.0.1:" + strconv.Itoa(sandbox.RelayPort), "-rate {ratelimit}", "-ac", "-noninteractive", "-of json", "-u {target-base}/FUZZ"} {
+		if !strings.Contains(args, want) {
+			t.Errorf("%s: args lack %q", m.ID, want)
+		}
+	}
+	if w := m.Run.Wordlist; w == nil || w.Local != "seclists-common.txt" || w.Deployed != "deployed.txt" {
+		t.Errorf("%s: wordlist %+v", m.ID, w)
+	}
+	if img, _ := runner.ImageFor(m); img != sandbox.RelayImage {
+		t.Errorf("%s: runs in %s, not the pinned Alpine image", m.ID, img)
 	}
 }
 
