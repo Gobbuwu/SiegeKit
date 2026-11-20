@@ -246,10 +246,10 @@ func TestSelectFamilies(t *testing.T) {
 		only, skip []string
 		want       []string
 	}{
-		{"repo", []string{"secrets"}, nil, []string{"gitleaks", "gitleaks-history", "dotenv-gitignore"}},
+		{"repo", []string{"secrets"}, nil, []string{"gitleaks", "gitleaks-history", "dotenv-gitignore", "weak-passwords"}},
 		{"repo", []string{"sast", "trivy"}, nil, []string{"bandit", "gosec", "trivy"}},
 		{"repo", nil, []string{"secrets", "iac"}, []string{"bandit", "gosec", "trivy"}},
-		{"repo", []string{"secrets"}, []string{"gitleaks-history"}, []string{"gitleaks", "dotenv-gitignore"}},
+		{"repo", []string{"secrets"}, []string{"gitleaks-history"}, []string{"gitleaks", "dotenv-gitignore", "weak-passwords"}},
 		{"url", []string{"dast"}, []string{"zap-active"}, []string{"ffuf", "nuclei", "nuclei-default-login", "nuclei-intrusive", "schemathesis", "zap"}},
 	} {
 		ms, cs, err := Select(all, builtins, c.kind, c.only, c.skip)
@@ -317,16 +317,19 @@ func TestSelectAndRunBuiltinChecks(t *testing.T) {
 	if err != nil || len(ms) != 0 || len(cs) != 1 {
 		t.Fatalf("%d %d %v", len(ms), len(cs), err)
 	}
-	if _, cs, _ := Select(all, checks.Builtin(), "repo", nil, []string{"backend-rules"}); len(cs) != 1 || cs[0].ID != "dotenv-gitignore" {
+	if _, cs, _ := Select(all, checks.Builtin(), "repo", nil, []string{"backend-rules"}); len(cs) != 2 || cs[0].ID != "dotenv-gitignore" || cs[1].ID != "weak-passwords" {
 		t.Error("skip ignored")
 	}
 	o := opts(t)
 	os.WriteFile(filepath.Join(o.TargetDir, "database.rules.json"), []byte(`{"rules":{".read":true}}`), 0o644)
 	o.Checks = cs
-	failing := checks.Check{ID: "broken", Family: "iac", Run: func(context.Context, string) ([]findings.Finding, error) {
-		return nil, errors.New("boom")
+	failing := checks.Check{ID: "broken", Family: "iac", Run: func(context.Context, string) ([]findings.Finding, string, error) {
+		return nil, "", errors.New("boom")
 	}}
-	o.Checks = append(o.Checks, failing)
+	saying := checks.Check{ID: "saying", Family: "secrets", Run: func(context.Context, string) ([]findings.Finding, string, error) {
+		return nil, "nothing seen", nil
+	}}
+	o.Checks = append(o.Checks, failing, saying)
 	r, err := Run(context.Background(), &fake{}, nil, o)
 	if err != nil {
 		t.Fatal(err)
@@ -336,6 +339,9 @@ func TestSelectAndRunBuiltinChecks(t *testing.T) {
 	}
 	if r.Plugins[1].Status != report.Failed || r.Plugins[1].Reason != "boom" || r.Complete() {
 		t.Errorf("%+v", r.Plugins[1])
+	}
+	if r.Plugins[2].Status != report.Ran || r.Plugins[2].Result != "nothing seen" {
+		t.Errorf("%+v", r.Plugins[2])
 	}
 }
 

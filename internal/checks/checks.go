@@ -26,13 +26,22 @@ type Check struct {
 	Family  string
 	Targets []string
 	// Run scans root (an absolute directory) and returns findings with
-	// relative URIs.
-	Run func(ctx context.Context, root string) ([]findings.Finding, error)
+	// relative URIs, plus a one-line result for the report when the check
+	// has more to say than its findings (empty otherwise).
+	Run func(ctx context.Context, root string) ([]findings.Finding, string, error)
+}
+
+// noResult adapts a check that only returns findings.
+func noResult(run func(context.Context, string) ([]findings.Finding, error)) func(context.Context, string) ([]findings.Finding, string, error) {
+	return func(ctx context.Context, root string) ([]findings.Finding, string, error) {
+		fs, err := run(ctx, root)
+		return fs, "", err
+	}
 }
 
 // Builtin returns every built-in check.
 func Builtin() []Check {
-	return []Check{backendRules, dotenv}
+	return []Check{backendRules, dotenv, weakPasswords}
 }
 
 // Limits on what a check reads, so a hostile repository cannot exhaust memory

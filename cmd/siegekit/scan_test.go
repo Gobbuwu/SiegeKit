@@ -123,7 +123,7 @@ func TestScan(t *testing.T) {
 	if code := run([]string{"scan", "--yes", "--update", target, "--report-dir", reports}, &out, &errb); code != exitOK {
 		t.Fatalf("exit %d: %s %s", code, out.String(), errb.String())
 	}
-	if !strings.Contains(out.String(), "No issues found by the 7 check(s) that ran.") || !strings.Contains(out.String(), "Saved run") {
+	if !strings.Contains(out.String(), "No issues found by the 8 check(s) that ran.") || !strings.Contains(out.String(), "Saved run") {
 		t.Errorf("output: %s", out.String())
 	}
 	for _, name := range []string{"report.html", "report.json", "report.sarif"} {

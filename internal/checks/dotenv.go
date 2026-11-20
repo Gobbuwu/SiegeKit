@@ -20,7 +20,7 @@ var dotenv = Check{
 	Name:    "Environment files left out of git",
 	Family:  "secrets",
 	Targets: []string{"repo"},
-	Run:     runDotenv,
+	Run:     noResult(runDotenv),
 }
 
 // envTemplates are committed on purpose and hold no real values.
