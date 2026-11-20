@@ -82,6 +82,8 @@ type fakeActive struct {
 	leaks     string
 	scanned   []string
 	servedCfg []egress.Config
+	// content holds the bodies of collected files by name; others are "x".
+	content map[string]string
 }
 
 // noLeaks is an empty Gitleaks report.
@@ -132,7 +134,11 @@ func useActive(t *testing.T) *fakeActive {
 	servedCollect = func(_ context.Context, cfg egress.Config, _ float64, dir string) (served.Result, error) {
 		f.servedCfg = append(f.servedCfg, cfg)
 		for _, file := range f.collected.Files {
-			if err := os.WriteFile(filepath.Join(dir, file.Name), []byte("x"), 0o644); err != nil {
+			body, ok := f.content[file.Name]
+			if !ok {
+				body = "x"
+			}
+			if err := os.WriteFile(filepath.Join(dir, file.Name), []byte(body), 0o644); err != nil {
 				return served.Result{}, err
 			}
 		}
@@ -370,7 +376,8 @@ func TestScanURLRunsActivePlugins(t *testing.T) {
 		t.Fatal(err)
 	}
 	var r report.Run
-	if err := json.Unmarshal(b, &r); err != nil || r.Target != "http://localhost:3000/app" || len(r.Findings) != 1 || r.Plugins[4].Requests != 3 || r.Plugins[3].ID != "access-control" || r.Plugins[3].Status != report.Skipped || r.Plugins[2].ID != "served-secrets" || r.Plugins[2].Status != report.Ran ||
+	if err := json.Unmarshal(b, &r); err != nil || r.Target != "http://localhost:3000/app" || len(r.Findings) != 1 || r.Plugins[5].Requests != 3 || r.Plugins[4].ID != "access-control" || r.Plugins[4].Status != report.Skipped ||
+		r.Plugins[3].ID != "backend-live" || r.Plugins[3].Status != report.Skipped || !strings.Contains(r.Plugins[3].Reason, "no backend URL was given") || r.Plugins[2].ID != "served-secrets" || r.Plugins[2].Status != report.Ran ||
 		r.Plugins[1].ID != "rate-limit" || r.Plugins[1].Status != report.Skipped || !strings.Contains(r.Plugins[1].Reason, "no URL was given") || r.Plugins[0].ID != "login-throttle" || r.Plugins[0].Status != report.Skipped || !strings.Contains(r.Plugins[0].Reason, "no login was given") {
 		t.Errorf("report %+v %v", r, err)
 	}
@@ -421,12 +428,12 @@ func TestScanURLDestructiveNeedsConfirmation(t *testing.T) {
 			if tc.runs == 3 { // the four destructive plugins were skipped
 				b, err := os.ReadFile(filepath.Join("siegekit-report", "report.json"))
 				var r report.Run
-				if err != nil || json.Unmarshal(b, &r) != nil || len(r.Plugins) != 11 {
+				if err != nil || json.Unmarshal(b, &r) != nil || len(r.Plugins) != 12 {
 					t.Fatalf("report %+v %v", r.Plugins, err)
 				}
 				for _, p := range r.Plugins {
 					destructive := slices.Contains([]string{"nuclei-default-login", "nuclei-intrusive", "schemathesis", "zap-active"}, p.ID)
-					if destructive && (p.Status != report.Skipped || p.Reason == "") || !destructive && p.ID != "login-throttle" && p.ID != "rate-limit" && p.ID != "access-control" && p.Status != report.Ran {
+					if destructive && (p.Status != report.Skipped || p.Reason == "") || !destructive && p.ID != "login-throttle" && p.ID != "rate-limit" && p.ID != "access-control" && p.ID != "backend-live" && p.Status != report.Ran {
 						t.Errorf("plugin %+v", p)
 					}
 				}
@@ -611,12 +618,12 @@ func TestScanURLProfile(t *testing.T) {
 	}
 	b, err := os.ReadFile(filepath.Join("siegekit-report", "report.json"))
 	var r report.Run
-	if err != nil || json.Unmarshal(b, &r) != nil || len(r.Plugins) != 11 {
+	if err != nil || json.Unmarshal(b, &r) != nil || len(r.Plugins) != 12 {
 		t.Fatalf("report %+v %v", r.Plugins, err)
 	}
 	for _, p := range r.Plugins {
-		if p.ID == "access-control" { // GET and HEAD only, so in the quick profile; skipped here for want of a HAR
-			if p.Status != report.Skipped || !strings.Contains(p.Reason, "no HAR file") {
+		if p.ID == "access-control" || p.ID == "backend-live" { // GET and HEAD only, so in the quick profile; skipped here for want of input
+			if p.Status != report.Skipped || !strings.Contains(p.Reason, "no HAR file") && !strings.Contains(p.Reason, "no backend URL") {
 				t.Errorf("plugin %+v", p)
 			}
 			continue

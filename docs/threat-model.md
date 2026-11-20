@@ -27,6 +27,7 @@
 - B4: tool output (untrusted) back into the core's parsers.
 - B5: tool artifacts downloaded from upstream.
 - B6: SiegeKit's own source and build pipeline.
+- B7: SiegeKit's own requests to a host other than the target: the hosted backend named with `--backend-url` (ADR 0037).
 
 ## Threats and mitigations
 
@@ -55,6 +56,7 @@
 | T21 | B3 | Elevation | An active tool reaches services on the user's host or local network (databases, SSH, routers) through the container network instead of the target. | The tool container has no network of its own: it joins a relay container started with `--network none`, whose only way out is a Unix socket to the SiegeKit proxy, which allows only the target. Tested: no routes, no DNS, the host bridge address unreachable. | 0018, 0019 |
 | T22 | B4 | Tampering (hidden results) | The scanned repository hides findings with suppression comments or tool settings files (`# nosec`, `gitleaks:allow`, `.gitleaksignore`), so a check reports 0 findings. | Suppressions are obeyed but every report counts them and lists the settings files used; the AI assistant guide forbids adding them without the person's agreement. | 0020 |
 | T23 | B5 | Tampering / Elevation | A pinned tool file (release archive or binary) is replaced at the source or in transit, or a crafted archive writes outside its directory (links, `..`, absolute paths) or fills the disk. | Downloaded by SiegeKit only after consent, over HTTPS from GitHub hosts only (redirects checked too); exact size and SHA-256 checked before unpacking; only regular files and directories unpacked, no links, absolute or parent paths, at most 2 GiB and 200,000 entries; nothing kept on failure; mounted read-only and run only in the sandbox. Upstream signatures not checked yet. | 0024, 0008 |
+| T24 | B1/B7 | Spoofing / Information disclosure | `--backend-url` points the backend check at someone else's Supabase or Firebase project, or an AI agent sets it, so SiegeKit reads a third party's data. | The backend must appear in the target's own served scripts; a person types its host name in a terminal (no flag skips it); blocked and mixed addresses refused; GET only, at most one row per table, at most 200 names, 5 per second; only column names or key counts reported; own audit entry. | 0037 |
 
 ## Misuse by a determined attacker
 

@@ -23,6 +23,7 @@ func TestRun(t *testing.T) {
 		{"missing file", []string{"plugins", "validate", "does-not-exist.json"}, exitInvalid, "FAIL"},
 		{"list", []string{"plugins", "list"}, exitOK, "login-throttle       dast     active   built into SiegeKit"},
 		{"list rate-limit", []string{"plugins", "list"}, exitOK, "rate-limit           dast     active   built into SiegeKit"},
+		{"list backend-live", []string{"plugins", "list"}, exitOK, "backend-live         dast     active   built into SiegeKit"},
 		{"list access-control", []string{"plugins", "list"}, exitOK, "access-control       dast     active   built into SiegeKit"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

@@ -2,7 +2,7 @@
 
 - Status: Accepted
 - Date: 2026-11-18
-- Amended by: [0015](0015-built-in-checks.md) (static backend-rules check written in Go), [0035](0035-access-control-replay.md) (item 1: requests from a browser recording, what counts as a finding), [0036](0036-rate-limit-check.md) (item 2: the rate-limit check)
+- Amended by: [0015](0015-built-in-checks.md) (static backend-rules check written in Go), [0035](0035-access-control-replay.md) (item 1: requests from a browser recording, what counts as a finding), [0036](0036-rate-limit-check.md) (item 2: the rate-limit check), [0037](0037-backend-live-check.md) (item 3, live part)
 
 ## Context
 
@@ -27,7 +27,7 @@ Same approach as the login check in ADR 0010, for any endpoint the user names (f
 ### 3. Hosted-backend rules (M1 static, M2 live)
 
 - Static (M1): SiegeKit-maintained Semgrep rules flag Firebase/Firestore rules files that allow public reads or writes, and SQL migrations that create Supabase tables without enabling row-level security.
-- Live (M2, verified target only): using the public client key found in the app's own bundle, SiegeKit attempts **read-only** list queries against the backend and reports any table or collection readable without a signed-in user.
+- Live (M2, verified target only): using the public client key found in the app's own bundle, SiegeKit attempts **read-only** list queries against the backend and reports any table or collection readable without a signed-in user. Amended by [0037](0037-backend-live-check.md): `--backend-url`, every target (read-only), the backend named in the app's scripts and its host typed by a person, Supabase tables and Realtime Database paths only, names but no values reported.
 
 ### 4. AI feature checks (M3)
 

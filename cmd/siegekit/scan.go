@@ -127,6 +127,16 @@ Flags:
   --rate-limit-requests N
                     requests to send, one per second, stopping at the first
                     sign of a limit (default 20, at most 50)
+  --backend-url URL the Supabase or Firebase Realtime Database URL the app
+                    reads from the browser, for the backend-live check: one
+                    GET per table or path with the app's own public key.
+                    A backend that is not on this machine must appear in
+                    the app's scripts, and you type its host name in a
+                    terminal; no flag skips that
+  --source DIR      the app's repository: table names from its Supabase
+                    migrations, paths from database.rules.json, and an
+                    OpenAPI file for Schemathesis when the app serves none
+                    (read locally, nothing is sent)
 
 Before installing a missing dependency (a tool's container image or its
 data), SiegeKit lists it with its size and the tests that need it and asks.
@@ -161,6 +171,8 @@ func scan(args []string, stdout, stderr io.Writer) int {
 	fl.IntVar(&rl.requests, "rate-limit-requests", ratelimit.DefaultRequests, "")
 	har := fl.String("har", "", "")
 	harUser := fl.String("har-user", "", "")
+	backendURL := fl.String("backend-url", "", "")
+	source := fl.String("source", "", "")
 	// Allow flags before and after DIR.
 	var pos []string
 	for {
@@ -233,10 +245,11 @@ func scan(args []string, stdout, stderr io.Writer) int {
 			reportDir: *reportDir, noSave: *noSave, consent: consent{yes: *yes, none: *noInstall},
 			requireAll: *requireAll, openAPI: *openAPI, profile: *profile, login: lf,
 			har: *har, harUser: *harUser, rateLimit: rl,
+			backendURL: *backendURL, source: *source,
 		}, stdout, stderr)
 	}
-	if *deployed || *authorizedHost != "" || *openAPI != "" || lf.url != "" || attemptsSet || *har != "" || rl.url != "" {
-		fmt.Fprint(stderr, "siegekit scan: --deployed, --authorized-host, --openapi, --har, the --login flags and the --rate-limit flags only apply to URL targets\n")
+	if *deployed || *authorizedHost != "" || *openAPI != "" || lf.url != "" || attemptsSet || *har != "" || rl.url != "" || *backendURL != "" || *source != "" {
+		fmt.Fprint(stderr, "siegekit scan: --deployed, --authorized-host, --openapi, --har, --backend-url, --source, the --login flags and the --rate-limit flags only apply to URL targets\n")
 		return exitUsage
 	}
 	target, err := resolveDir(pos[0])

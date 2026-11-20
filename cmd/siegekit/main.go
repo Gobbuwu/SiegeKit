@@ -13,6 +13,7 @@ import (
 
 	"github.com/Gobbuwu/SiegeKit/docs"
 	"github.com/Gobbuwu/SiegeKit/internal/authz"
+	"github.com/Gobbuwu/SiegeKit/internal/backend"
 	"github.com/Gobbuwu/SiegeKit/internal/checks"
 	"github.com/Gobbuwu/SiegeKit/internal/login"
 	"github.com/Gobbuwu/SiegeKit/internal/manifest"
@@ -115,6 +116,7 @@ func list(stdout, stderr io.Writer) int {
 	}
 	fmt.Fprintf(stdout, "%-20s %-8s %-8s built into SiegeKit %s\n", login.ID, login.Family, "active", version)
 	fmt.Fprintf(stdout, "%-20s %-8s %-8s built into SiegeKit %s\n", ratelimit.ID, ratelimit.Family, "active", version)
+	fmt.Fprintf(stdout, "%-20s %-8s %-8s built into SiegeKit %s\n", backend.ID, backend.Family, "active", version)
 	fmt.Fprintf(stdout, "%-20s %-8s %-8s built into SiegeKit %s\n", authz.ID, authz.Family, "active", version)
 	fmt.Fprintf(stdout, "%-20s %-8s %-8s built into SiegeKit %s, reads with gitleaks\n", served.ID, served.Family, "active", version)
 	return exitOK
