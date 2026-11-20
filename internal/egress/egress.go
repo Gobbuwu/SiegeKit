@@ -243,6 +243,17 @@ type Answer struct {
 // SiegeKit uses it for its own checks: finding an OpenAPI spec (ADR 0025
 // item 4) and the login throttling check (ADR 0030).
 func Send(ctx context.Context, cfg Config, method, path, contentType string, body []byte, max int64) (*Answer, error) {
+	var h http.Header
+	if contentType != "" {
+		h = http.Header{"Content-Type": {contentType}}
+	}
+	return SendHeader(ctx, cfg, method, path, h, body, max)
+}
+
+// SendHeader is Send with request headers, such as a session cookie for
+// the access-control check (ADR 0035). User-Agent is always SiegeKit's own,
+// and Host, the connection, transfer and proxy headers cannot be set.
+func SendHeader(ctx context.Context, cfg Config, method, path string, header http.Header, body []byte, max int64) (*Answer, error) {
 	if !strings.HasPrefix(path, "/") || strings.HasPrefix(path, "//") {
 		return nil, fmt.Errorf("path %q must start with a single /", path)
 	}
@@ -261,10 +272,15 @@ func Send(ctx context.Context, cfg Config, method, path, contentType string, bod
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("User-Agent", "SiegeKit/"+cfg.Version)
-	if contentType != "" {
-		req.Header.Set("Content-Type", contentType)
+	for k, vs := range header {
+		if fixedHeader[http.CanonicalHeaderKey(k)] || strings.HasPrefix(http.CanonicalHeaderKey(k), "Proxy-") {
+			continue
+		}
+		for _, v := range vs {
+			req.Header.Add(k, v)
+		}
 	}
+	req.Header.Set("User-Agent", "SiegeKit/"+cfg.Version)
 	start := time.Now()
 	resp, err := tr.RoundTrip(req)
 	if err != nil {
@@ -282,6 +298,13 @@ func Send(ctx context.Context, cfg Config, method, path, contentType string, bod
 	}
 	a.Body = b
 	return a, nil
+}
+
+// fixedHeader are request headers SendHeader never takes from its caller:
+// SiegeKit labels every request, and the transport owns the rest.
+var fixedHeader = map[string]bool{
+	"Host": true, "User-Agent": true, "Content-Length": true, "Connection": true, "Keep-Alive": true,
+	"Transfer-Encoding": true, "Te": true, "Trailer": true, "Upgrade": true, "Accept-Encoding": true,
 }
 
 // Stats returns a copy of the counters.

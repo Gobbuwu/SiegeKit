@@ -108,6 +108,13 @@ Flags:
   --login-attempts N
                     logins to send with a random wrong password, one per
                     second (default 20, at most 50)
+  --har FILE        a browser recording (HAR file) made while using the app
+                    as test account A, for the access-control check: its
+                    GET and HEAD requests are replayed as A, as account B
+                    (session headers in SIEGEKIT_SESSION_B, one
+                    "Name: value" per line) and with no login
+  --har-user NAME   account A's login name, as it appears in the app's
+                    answers; reports A's data readable with no login
 
 Before installing a missing dependency (a tool's container image or its
 data), SiegeKit lists it with its size and the tests that need it and asks.
@@ -136,6 +143,8 @@ func scan(args []string, stdout, stderr io.Writer) int {
 	fl.StringVar(&lf.user, "login-user", "", "")
 	fl.StringVar(&lf.body, "login-body", "", "")
 	fl.IntVar(&lf.attempts, "login-attempts", login.DefaultAttempts, "")
+	har := fl.String("har", "", "")
+	harUser := fl.String("har-user", "", "")
 	// Allow flags before and after DIR.
 	var pos []string
 	for {
@@ -180,6 +189,10 @@ func scan(args []string, stdout, stderr io.Writer) int {
 		return exitInvalid
 	}
 
+	if *harUser != "" && *har == "" {
+		fmt.Fprint(stderr, "siegekit scan: --har-user needs --har\n")
+		return exitUsage
+	}
 	if sc := otherScheme(pos[0]); sc != "" {
 		if _, err := os.Stat(pos[0]); err != nil {
 			fmt.Fprintf(stderr, "siegekit scan: %s:// URLs cannot be scanned; give an http:// or https:// URL or a directory\n", sc)
@@ -196,10 +209,11 @@ func scan(args []string, stdout, stderr io.Writer) int {
 			only: splitList(*only), skip: splitList(*skip), threshold: threshold,
 			reportDir: *reportDir, noSave: *noSave, consent: consent{yes: *yes, none: *noInstall},
 			requireAll: *requireAll, openAPI: *openAPI, profile: *profile, login: lf,
+			har: *har, harUser: *harUser,
 		}, stdout, stderr)
 	}
-	if *deployed || *authorizedHost != "" || *openAPI != "" || lf.url != "" || attemptsSet {
-		fmt.Fprint(stderr, "siegekit scan: --deployed, --authorized-host, --openapi and the --login flags only apply to URL targets\n")
+	if *deployed || *authorizedHost != "" || *openAPI != "" || lf.url != "" || attemptsSet || *har != "" {
+		fmt.Fprint(stderr, "siegekit scan: --deployed, --authorized-host, --openapi, --har and the --login flags only apply to URL targets\n")
 		return exitUsage
 	}
 	target, err := resolveDir(pos[0])
