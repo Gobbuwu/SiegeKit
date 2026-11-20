@@ -246,8 +246,8 @@ func TestScanDependencyConsent(t *testing.T) {
 			pulled: []string{ref["bandit"]},
 			want: []string{"1. bandit 1.9.4 container image (42 MiB download), needed by: bandit",
 				"trivy was found on your system at /usr/local/bin/trivy, but SiegeKit uses its own sandboxed, pinned copy.",
-				"bandit             ran", "gitleaks           skipped    0 finding(s) - you declined gitleaks 8.30.1 container image",
-				"trivy              skipped    0 finding(s) - you declined trivy 0.76.2 container image",
+				"bandit               ran", "gitleaks             skipped    0 finding(s) - you declined gitleaks 8.30.1 container image",
+				"trivy                skipped    0 finding(s) - you declined trivy 0.76.2 container image",
 				"Skipped because a dependency is not installed: checkov, gitleaks, gitleaks-history, gosec, trivy.", "3. gitleaks 8.30.1 container image (42 MiB download), needed by: gitleaks, gitleaks-history\n  4. gosec"},
 		},
 		{
@@ -258,7 +258,7 @@ func TestScanDependencyConsent(t *testing.T) {
 		{
 			name: "images installed, data accepted", answer: "a\n",
 			eng: &fakeEngine{run: emptySARIF}, code: exitOK,
-			want:    []string{"Already installed (not downloaded again): bandit 1.9.4 container image", "1. trivy data (size not known in advance), needed by: trivy", "trivy              ran"},
+			want:    []string{"Already installed (not downloaded again): bandit 1.9.4 container image", "1. trivy data (size not known in advance), needed by: trivy", "trivy                ran"},
 			wantNot: []string{"was found on your system", "Skipped because"},
 		},
 		{
@@ -274,7 +274,7 @@ func TestScanDependencyConsent(t *testing.T) {
 		{
 			name: "engine not working",
 			eng:  &fakeEngine{run: emptySARIF, hasErr: errors.New("container engine is not working: daemon down")}, code: 4,
-			want: []string{"The container engine is not working", "backend-rules      ran", "gitleaks           failed"},
+			want: []string{"The container engine is not working", "backend-rules        ran", "gitleaks             failed"},
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

@@ -75,8 +75,8 @@ Flags:
   --skip a,b        do not run these plugins or families
   --profile NAME    full (default) runs every check; quick leaves out the
                     attack tests of URL scans (zap-active, nuclei-intrusive,
-                    schemathesis, login-throttle); ZAP's attack scan alone
-                    can take 30 minutes
+                    nuclei-default-login, schemathesis, login-throttle);
+                    ZAP's attack scan alone can take 30 minutes
   --fail-on LEVEL   exit 3 if a finding is at or above LEVEL
                     (critical, high, medium, low, info; default high)
   --report-dir DIR  where to write report.html, report.json and report.sarif
@@ -299,7 +299,7 @@ func finish(run *report.Run, reportDir string, noSave bool, name string, thresho
 	}
 	fmt.Fprintln(stdout)
 	for _, p := range run.Plugins {
-		line := fmt.Sprintf("  %-18s %-10s %d finding(s)", p.ID, p.Status, p.Findings)
+		line := fmt.Sprintf("  %-20s %-10s %d finding(s)", p.ID, p.Status, p.Findings)
 		if p.Reason != "" {
 			line += " - " + p.Reason
 		}

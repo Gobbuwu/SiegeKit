@@ -250,7 +250,7 @@ func TestSelectFamilies(t *testing.T) {
 		{"repo", []string{"sast", "trivy"}, nil, []string{"bandit", "gosec", "trivy"}},
 		{"repo", nil, []string{"secrets", "iac"}, []string{"bandit", "gosec", "trivy"}},
 		{"repo", []string{"secrets"}, []string{"gitleaks-history"}, []string{"gitleaks", "dotenv-gitignore"}},
-		{"url", []string{"dast"}, []string{"zap-active"}, []string{"ffuf", "nuclei", "nuclei-intrusive", "schemathesis", "zap"}},
+		{"url", []string{"dast"}, []string{"zap-active"}, []string{"ffuf", "nuclei", "nuclei-default-login", "nuclei-intrusive", "schemathesis", "zap"}},
 	} {
 		ms, cs, err := Select(all, builtins, c.kind, c.only, c.skip)
 		if got := ids(ms, cs); err != nil || !slices.Equal(got, c.want) {

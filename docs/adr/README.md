@@ -34,6 +34,7 @@ Each significant design decision is recorded as a short ADR before code is writt
 | [0028](0028-schemathesis.md) | Running Schemathesis (amends 0004, 0025) | Accepted |
 | [0029](0029-check-selection.md) | Choosing checks by family and profile (amends 0004) | Accepted |
 | [0030](0030-login-throttling.md) | The login throttling check (amends 0010, 0029) | Accepted |
+| [0031](0031-default-logins.md) | Default credentials with Nuclei (amends 0010, 0026, 0029) | Accepted |
 
 ADRs 0002 to 0011 were accepted at the M0 design sign-off on 2026-11-18.
 

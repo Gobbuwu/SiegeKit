@@ -189,13 +189,13 @@ func TestZAPFindsPlantedIssues(t *testing.T) {
 	findsPlanted(t, "", "zap", "zap-active")
 }
 
-// TestNucleiFindsPlantedIssues runs nuclei and nuclei-intrusive with the
-// pinned image and templates (downloaded and checked as in ADR 0024) against
-// the vulnerable test app (M2.5b). SIEGEKIT_TEST_FILES_ROOT names a
+// TestNucleiFindsPlantedIssues runs nuclei, nuclei-intrusive and
+// nuclei-default-login with the pinned image and templates (downloaded and
+// checked as in ADR 0024) against the vulnerable test app (M2.5b, M2.6b). SIEGEKIT_TEST_FILES_ROOT names a
 // directory that already holds the pinned files, for machines that cannot
 // download them.
 func TestNucleiFindsPlantedIssues(t *testing.T) {
-	findsPlanted(t, pinnedFiles(t, "nuclei", "nuclei-intrusive"), "nuclei", "nuclei-intrusive")
+	findsPlanted(t, pinnedFiles(t, "nuclei", "nuclei-intrusive", "nuclei-default-login"), "nuclei", "nuclei-intrusive", "nuclei-default-login")
 }
 
 // TestFFUFFindsPlantedIssues runs ffuf from its pinned release archive in
@@ -312,7 +312,7 @@ func findsPlanted(t *testing.T, filesRoot string, ids ...string) {
 		}
 	}
 	for i, p := range r.Plugins {
-		t.Logf("%s: %s %q, %d findings, %d requests, %d refused, rules %v", p.ID, p.Status, p.Reason, p.Findings, p.Requests, p.Refused, found[p.ID])
+		t.Logf("%s: %s %q, %d findings, %d requests, %d refused %v, rules %v", p.ID, p.Status, p.Reason, p.Findings, p.Requests, p.Refused, p.RefusedTo, found[p.ID])
 		if p.Status != report.Ran || p.Requests == 0 {
 			t.Errorf("%s did not run: %+v", p.ID, p)
 		}

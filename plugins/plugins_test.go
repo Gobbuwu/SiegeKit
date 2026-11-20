@@ -18,7 +18,7 @@ func TestBuiltin(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"bandit", "checkov", "ffuf", "gitleaks", "gitleaks-history", "gosec", "nuclei", "nuclei-intrusive", "schemathesis", "trivy", "zap", "zap-active"}
+	want := []string{"bandit", "checkov", "ffuf", "gitleaks", "gitleaks-history", "gosec", "nuclei", "nuclei-default-login", "nuclei-intrusive", "schemathesis", "trivy", "zap", "zap-active"}
 	if len(ms) != len(want) {
 		t.Fatalf("got %d plugins, want %v", len(ms), want)
 	}
@@ -63,7 +63,9 @@ func TestBuiltin(t *testing.T) {
 // checkNuclei holds the owner's M2.5 decisions (ADR 0025): pinned
 // templates only, no update checks, no out-of-band callbacks, the relay as
 // proxy, and on non-destructive plugins no intrusive, denial-of-service,
-// fuzzing, brute-force or default-login templates.
+// fuzzing, brute-force or default-login templates. Default-login templates
+// run only in nuclei-default-login: destructive, so local only, never
+// retried, so each credential is sent once (ADR 0010, ADR 0031).
 func checkNuclei(t *testing.T, m *manifest.Manifest) {
 	t.Helper()
 	args := strings.Join(m.Run.Args, " ")
@@ -79,7 +81,19 @@ func checkNuclei(t *testing.T, m *manifest.Manifest) {
 		}
 	}
 	tags := strings.Split(excluded, ",")
-	for _, tag := range []string{"dos", "fuzz", "dast", "local", "bruteforce", "txt-service", "default-login"} {
+	mustExclude := []string{"dos", "fuzz", "dast", "local", "bruteforce", "txt-service", "default-login"}
+	if m.ID == "nuclei-default-login" {
+		mustExclude = mustExclude[:6]
+		if !*m.Destructive || !strings.Contains(args, "-tags default-login") || !strings.Contains(args, "-retries 0") || slices.Contains(tags, "default-login") {
+			t.Errorf("%s: must be destructive and run only default-login templates, without retries", m.ID)
+		}
+		// The one fuzz-tagged template added back (owner decision
+		// 2026-11-20); password-list guessing stays out (ADR 0010).
+		if !strings.Contains(args, "-it /siegekit/files/nuclei-templates/nuclei-templates-10.5.2/http/default-logins/oracle/peoplesoft-default-login.yaml ") || strings.Contains(args, "wordpress-weak-credentials") || strings.Count(args, " -it ") != 1 {
+			t.Errorf("%s: must add back only the PeopleSoft template", m.ID)
+		}
+	}
+	for _, tag := range mustExclude {
 		if !slices.Contains(tags, tag) {
 			t.Errorf("%s: does not exclude %s templates", m.ID, tag)
 		}
