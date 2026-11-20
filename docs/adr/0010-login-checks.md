@@ -2,6 +2,7 @@
 
 - Status: Accepted
 - Date: 2026-11-18
+- Amended by: [0030](0030-login-throttling.md) (the login throttling check: flags, what counts as a limit, local targets only until M2.10)
 
 ## Context
 

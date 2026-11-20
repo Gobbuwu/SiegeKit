@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 )
 
 // vulnAppSpec is the OpenAPI spec of the app's small JSON API, served at
@@ -104,6 +105,25 @@ func vulnApp() http.Handler {
 			fmt.Fprintf(w, `{"id":%d,"name":"hat"}`, id)
 		}
 	})
+	// A login without a limit on failed attempts (CWE-307): every wrong
+	// password gets the same answer, however many there are (ADR 0030).
+	mux.HandleFunc("POST /account/sign-in", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusUnauthorized)
+		io.WriteString(w, `{"error":"Invalid email or password."}`)
+	})
+	// A login that locks the account after 2 failed attempts: not an issue,
+	// so the check must see the limit and report none.
+	var failed sync.Map
+	mux.HandleFunc("POST /account/sign-in-limited", func(w http.ResponseWriter, r *http.Request) {
+		r.ParseForm()
+		n, _ := failed.LoadOrStore(r.Form.Get("username"), new(atomic.Int32))
+		if n.(*atomic.Int32).Add(1) > 2 {
+			http.Error(w, "account locked", http.StatusLocked)
+			return
+		}
+		http.Error(w, "wrong password", http.StatusUnauthorized)
+	})
 	// PUT stores the file and GET serves it back, as a misconfigured WebDAV
 	// server would.
 	var mu sync.Mutex
@@ -163,5 +183,9 @@ var vulnAppIssues = map[string]map[string]string{
 	},
 	"schemathesis": {
 		"ST101 /api/items/{id}": "GET /api/items/{id} crashes (500) on an id below 1",
+	},
+	// SiegeKit's own check, run in the test process (TestLoginFindsPlantedIssue).
+	"login-throttle": {
+		"login-not-limited /account/sign-in": "failed logins are not limited at POST /account/sign-in",
 	},
 }

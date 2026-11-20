@@ -16,6 +16,8 @@ import (
 	"github.com/Gobbuwu/SiegeKit/internal/deps"
 	"github.com/Gobbuwu/SiegeKit/internal/egress"
 	"github.com/Gobbuwu/SiegeKit/internal/files"
+	"github.com/Gobbuwu/SiegeKit/internal/findings"
+	"github.com/Gobbuwu/SiegeKit/internal/login"
 	"github.com/Gobbuwu/SiegeKit/internal/manifest"
 	"github.com/Gobbuwu/SiegeKit/internal/openapi"
 	"github.com/Gobbuwu/SiegeKit/internal/report"
@@ -339,7 +341,7 @@ func TestScanURLRunsActivePlugins(t *testing.T) {
 		t.Fatal(err)
 	}
 	var r report.Run
-	if err := json.Unmarshal(b, &r); err != nil || r.Target != "http://localhost:3000/app" || len(r.Findings) != 1 || r.Plugins[0].Requests != 3 {
+	if err := json.Unmarshal(b, &r); err != nil || r.Target != "http://localhost:3000/app" || len(r.Findings) != 1 || r.Plugins[1].Requests != 3 || r.Plugins[0].ID != "login-throttle" || r.Plugins[0].Status != report.Skipped || !strings.Contains(r.Plugins[0].Reason, "no login was given") {
 		t.Errorf("report %+v %v", r, err)
 	}
 	if f := r.Findings[0]; f.Location.URI != "http://localhost:3000/app" || !slices.Equal(f.CWEs, []string{"CWE-1021"}) || !strings.HasPrefix(f.HelpURI, "https://developer.mozilla.org/") {
@@ -389,11 +391,11 @@ func TestScanURLDestructiveNeedsConfirmation(t *testing.T) {
 			if tc.runs == 3 { // the three destructive plugins were skipped
 				b, err := os.ReadFile(filepath.Join("siegekit-report", "report.json"))
 				var r report.Run
-				if err != nil || json.Unmarshal(b, &r) != nil || len(r.Plugins) != 6 {
+				if err != nil || json.Unmarshal(b, &r) != nil || len(r.Plugins) != 7 {
 					t.Fatalf("report %+v %v", r.Plugins, err)
 				}
 				for i, id := range []string{"nuclei-intrusive", "schemathesis", "zap-active"} {
-					if p := r.Plugins[2+i+i/2]; p.ID != id || p.Status != report.Skipped {
+					if p := r.Plugins[3+i+i/2]; p.ID != id || p.Status != report.Skipped {
 						t.Errorf("plugin %+v", p)
 					}
 				}
@@ -578,7 +580,7 @@ func TestScanURLProfile(t *testing.T) {
 	}
 	b, err := os.ReadFile(filepath.Join("siegekit-report", "report.json"))
 	var r report.Run
-	if err != nil || json.Unmarshal(b, &r) != nil || len(r.Plugins) != 6 {
+	if err != nil || json.Unmarshal(b, &r) != nil || len(r.Plugins) != 7 {
 		t.Fatalf("report %+v %v", r.Plugins, err)
 	}
 	for _, p := range r.Plugins {
@@ -600,5 +602,177 @@ func TestScanURLProfile(t *testing.T) {
 		if code := run(append(append([]string{"scan", "--no-save"}, c.args...), "http://localhost:3000/"), &out, &errb); code != c.code || !strings.Contains(errb.String(), c.want) || len(f.specs) != 0 {
 			t.Errorf("%v: exit %d, %d runs:\n%s", c.args, code, len(f.specs), errb.String())
 		}
+	}
+}
+
+// useLogin replaces the login throttling check and records its calls.
+func useLogin(t *testing.T, res login.Result, err error) *[]egress.Config {
+	t.Helper()
+	var calls []egress.Config
+	old := loginCheck
+	loginCheck = func(_ context.Context, cfg egress.Config, l *login.Login, attempts int) (login.Result, error) {
+		calls = append(calls, cfg)
+		if l.User != "tester" || l.Path != "/rest/user/login" || attempts != 7 {
+			t.Errorf("login check %+v, %d attempts", l, attempts)
+		}
+		return res, err
+	}
+	t.Cleanup(func() { loginCheck = old })
+	return &calls
+}
+
+var loginArgs = []string{"--login-url", "http://localhost:3000/rest/user/login", "--login-user", "tester", "--login-body", `{"email":"{user}","password":"{password}"}`, "--login-attempts", "7"}
+
+func TestScanURLLogin(t *testing.T) {
+	old := resolver
+	resolver = fakeResolver{"localhost": "127.0.0.1", "shop.example": "93.184.215.14"}
+	t.Cleanup(func() { resolver = old })
+	scan := func(tty bool, input string, args ...string) (int, string) {
+		t.Helper()
+		stdinIsTerminal = func() bool { return tty }
+		stdin = strings.NewReader(input)
+		var out, errb bytes.Buffer
+		code := run(append([]string{"scan", "--no-save"}, args...), &out, &errb)
+		return code, out.String() + errb.String()
+	}
+	readReport := func() report.Run {
+		t.Helper()
+		b, err := os.ReadFile(filepath.Join("siegekit-report", "report.json"))
+		var r report.Run
+		if err != nil || json.Unmarshal(b, &r) != nil || r.Plugins[0].ID != "login-throttle" {
+			t.Fatalf("report %+v %v", r.Plugins, err)
+		}
+		return r
+	}
+
+	// Mistakes are refused before any lookup, request or audit entry.
+	for _, c := range []struct {
+		args []string
+		code int
+		want string
+	}{
+		{[]string{"--login-url", "http://localhost:3000/login", "http://localhost:3000/"}, exitUsage, "needed together"},
+		{[]string{"--login-attempts", "5", "http://localhost:3000/"}, exitUsage, "--login-attempts needs"},
+		{append(slices.Clone(loginArgs[:6]), "--login-attempts", "51", "http://localhost:3000/"), exitUsage, "from 2 to 50"},
+		{append(slices.Clone(loginArgs[:6]), "--login-attempts", "1", "http://localhost:3000/"), exitUsage, "from 2 to 50"},
+		{append(slices.Clone(loginArgs), t.TempDir()), exitUsage, "only apply to URL targets"},
+		{[]string{"--login-url", "http://localhost:3001/login", "--login-user", "tester", "--login-body", "u={user}&p={password}", "http://localhost:3000/"}, exitInvalid, "not on the target's origin"},
+		{[]string{"--login-url", "http://localhost:3000/login", "--login-user", "tester", "--login-body", "u={user}", "http://localhost:3000/"}, exitInvalid, "must contain {user} and {password}"},
+	} {
+		f := useActive(t)
+		data := useData(t)
+		calls := useLogin(t, login.Result{}, nil)
+		code, out := scan(false, "", c.args...)
+		if code != c.code || !strings.Contains(out, c.want) || len(f.specs)+len(*calls) != 0 {
+			t.Errorf("%v: exit %d, %d runs, %d login checks\n%s", c.args, code, len(f.specs), len(*calls), out)
+		}
+		if _, err := os.Stat(filepath.Join(data, "siegekit", "audit.log")); err == nil {
+			t.Errorf("%v: audit entry written", c.args)
+		}
+	}
+
+	// Confirmed local run: the check runs first, with POST allowed, and a
+	// login without a limit is a medium finding.
+	f := useActive(t)
+	data := useData(t)
+	calls := useLogin(t, login.Result{Attempts: 7, Baseline: 401}, nil)
+	code, out := scan(false, "", append(slices.Clone(loginArgs), "--authorized-host", "localhost", "--only", "login-throttle,zap", "http://localhost:3000/")...)
+	if code != report.ExitClean || len(*calls) != 1 || (*calls)[0].ReadOnly || len(f.specs) != 1 ||
+		!strings.Contains(out, `login-throttle siegekit 0.0.0-dev: 7 logins for "tester" with a random wrong password, POST http://localhost:3000/rest/user/login, one per second; the account may be locked`) {
+		t.Fatalf("exit %d, %d checks, %d runs\n%s", code, len(*calls), len(f.specs), out)
+	}
+	b, err := os.ReadFile(filepath.Join(data, "siegekit", "audit.log"))
+	var e audit.Entry
+	if err != nil || json.Unmarshal(b, &e) != nil || !slices.Equal(e.Plugins, []string{"zap", "login-throttle"}) || e.Verification != "loopback + --authorized-host" {
+		t.Errorf("audit entry %+v %v", e, err)
+	}
+	r := readReport()
+	p := r.Plugins[0]
+	if p.Status != report.Ran || p.Requests != 7 || p.Findings != 1 || p.Input != `POST http://localhost:3000/rest/user/login as "tester"` || p.Result != "no limit seen in 7 attempts, all answered 401" {
+		t.Errorf("plugin %+v", p)
+	}
+	var lf *findings.Finding
+	for i := range r.Findings {
+		if r.Findings[i].RuleID == "login-not-limited" {
+			lf = &r.Findings[i]
+		}
+	}
+	if lf == nil || lf.Severity != findings.Medium || lf.Location.URI != "http://localhost:3000/rest/user/login" || len(r.Findings) != 2 {
+		t.Errorf("findings %+v", r.Findings)
+	}
+	// --fail-on medium makes it fail the run.
+	useActive(t)
+	useData(t)
+	useLogin(t, login.Result{Attempts: 7, Baseline: 401}, nil)
+	if code, out := scan(false, "", append(slices.Clone(loginArgs), "--authorized-host", "localhost", "--only", "login-throttle", "--fail-on", "medium", "http://localhost:3000/")...); code != report.ExitFindings {
+		t.Errorf("--fail-on medium: exit %d\n%s", code, out)
+	}
+
+	// A limit seen is a result, not a finding; a failed check makes the run
+	// incomplete.
+	useActive(t)
+	useData(t)
+	useLogin(t, login.Result{Attempts: 4, Limited: true, Signal: "answered 429", Baseline: 401}, nil)
+	scan(false, "", append(slices.Clone(loginArgs), "--authorized-host", "localhost", "--only", "login-throttle", "http://localhost:3000/")...)
+	if p := readReport().Plugins[0]; p.Status != report.Ran || p.Findings != 0 || p.Result != "limited after 4 of 7 attempts: answered 429" {
+		t.Errorf("limited: %+v", p)
+	}
+	useActive(t)
+	useData(t)
+	useLogin(t, login.Result{}, errors.New("the login URL answered 404 to a POST; check --login-url"))
+	if code, _ := scan(false, "", append(slices.Clone(loginArgs), "--authorized-host", "localhost", "--only", "login-throttle", "http://localhost:3000/")...); code != report.ExitIncomplete || readReport().Plugins[0].Status != report.Failed {
+		t.Errorf("failed check: exit %d %+v", code, readReport().Plugins[0])
+	}
+
+	// Loopback needs a person's confirmation: typed yes runs it, anything
+	// else skips it, and --profile quick leaves it out.
+	for _, c := range []struct {
+		name  string
+		tty   bool
+		input string
+		extra []string
+		runs  int
+		want  string
+	}{
+		{"typed yes", true, "yes\n", nil, 1, `login-throttle can lock the test account "tester". Type yes`},
+		{"typed no", true, "no\n", nil, 0, `not confirmed: "yes" was not typed`},
+		{"no terminal", false, "", nil, 0, "needs a person's confirmation"},
+		{"quick", true, "yes\n", []string{"--profile", "quick", "--only", "dast"}, 0, "not run with --profile quick"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			useActive(t)
+			useData(t)
+			calls := useLogin(t, login.Result{Attempts: 7, Baseline: 401}, nil)
+			extra := c.extra
+			if extra == nil {
+				extra = []string{"--only", "login-throttle"}
+			}
+			args := append(append(slices.Clone(loginArgs), extra...), "http://localhost:3000/")
+			code, out := scan(c.tty, c.input, args...)
+			if len(*calls) != c.runs || !strings.Contains(out, c.want) {
+				t.Errorf("exit %d, %d checks\n%s", code, len(*calls), out)
+			}
+		})
+	}
+	if code, out := scan(true, "yes\n", append(slices.Clone(loginArgs), "--profile", "quick", "--only", "zap,login-throttle", "http://localhost:3000/")...); code != exitInvalid || !strings.Contains(out, "--only names login-throttle, which --profile quick does not run") {
+		t.Errorf("--only with quick: exit %d\n%s", code, out)
+	}
+
+	// Deployed targets: never run, whatever is confirmed (ADR 0025).
+	useActive(t)
+	data = useData(t)
+	calls = useLogin(t, login.Result{Attempts: 7, Baseline: 401}, nil)
+	tok, err := verify.Token(filepath.Join(data, "siegekit", "verify"), "shop.example")
+	if err != nil {
+		t.Fatal(err)
+	}
+	useProver(t, &fakeProver{published: map[string]string{"shop.example": verify.Value(tok)}})
+	deployedArgs := []string{"--deployed", "--login-url", "https://shop.example/rest/user/login", "--login-user", "tester", "--login-body", "u={user}&p={password}", "--login-attempts", "7", "--only", "login-throttle,zap", "https://shop.example/"}
+	code, out = scan(true, "shop.example\n", deployedArgs...)
+	if code != exitOK || len(*calls) != 0 || !strings.Contains(out, "login-throttle not run - runs only on local targets") {
+		t.Errorf("deployed: exit %d, %d checks\n%s", code, len(*calls), out)
+	}
+	if p := readReport().Plugins[0]; p.Status != report.Skipped || p.Requests != 0 {
+		t.Errorf("deployed: %+v", p)
 	}
 }

@@ -17,6 +17,7 @@ import (
 	"github.com/Gobbuwu/SiegeKit/internal/checks"
 	"github.com/Gobbuwu/SiegeKit/internal/deps"
 	"github.com/Gobbuwu/SiegeKit/internal/findings"
+	"github.com/Gobbuwu/SiegeKit/internal/login"
 	"github.com/Gobbuwu/SiegeKit/internal/manifest"
 	"github.com/Gobbuwu/SiegeKit/internal/registry"
 	"github.com/Gobbuwu/SiegeKit/internal/report"
@@ -74,8 +75,8 @@ Flags:
   --skip a,b        do not run these plugins or families
   --profile NAME    full (default) runs every check; quick leaves out the
                     attack tests of URL scans (zap-active, nuclei-intrusive,
-                    schemathesis); ZAP's attack scan alone can take 30
-                    minutes
+                    schemathesis, login-throttle); ZAP's attack scan alone
+                    can take 30 minutes
   --fail-on LEVEL   exit 3 if a finding is at or above LEVEL
                     (critical, high, medium, low, info; default high)
   --report-dir DIR  where to write report.html, report.json and report.sarif
@@ -97,6 +98,16 @@ Flags:
                     Schemathesis; a URL must be on the target's origin.
                     Without it, SiegeKit looks at common spec paths on
                     local targets (one GET each)
+  --login-url URL   the app's login endpoint, on the target's origin, for
+                    the login throttling check (local targets only)
+  --login-user NAME a test account you own; the check may lock it
+  --login-body TEMPLATE
+                    the POST body, with {user} and {password}: JSON if it
+                    starts with {, otherwise a form, for example
+                    '{"email":"{user}","password":"{password}"}'
+  --login-attempts N
+                    logins to send with a random wrong password, one per
+                    second (default 20, at most 50)
 
 Before installing a missing dependency (a tool's container image or its
 data), SiegeKit lists it with its size and the tests that need it and asks.
@@ -120,6 +131,11 @@ func scan(args []string, stdout, stderr io.Writer) int {
 	requireAll := fl.Bool("require-all", false, "")
 	openAPI := fl.String("openapi", "", "")
 	profile := fl.String("profile", "full", "")
+	var lf loginFlags
+	fl.StringVar(&lf.url, "login-url", "", "")
+	fl.StringVar(&lf.user, "login-user", "", "")
+	fl.StringVar(&lf.body, "login-body", "", "")
+	fl.IntVar(&lf.attempts, "login-attempts", login.DefaultAttempts, "")
 	// Allow flags before and after DIR.
 	var pos []string
 	for {
@@ -148,6 +164,12 @@ func scan(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "siegekit scan: --profile must be one of %s\n", strings.Join(runner.Profiles, ", "))
 		return exitUsage
 	}
+	attemptsSet := false
+	fl.Visit(func(f *flag.Flag) { attemptsSet = attemptsSet || f.Name == "login-attempts" })
+	if err := lf.check(attemptsSet); err != nil {
+		fmt.Fprintf(stderr, "siegekit scan: %v\n", err)
+		return exitUsage
+	}
 	threshold, err := findings.ParseSeverity(*failOn)
 	if err != nil {
 		fmt.Fprintf(stderr, "siegekit scan: --fail-on: %v\n", err)
@@ -173,11 +195,11 @@ func scan(args []string, stdout, stderr io.Writer) int {
 			deployed: *deployed, authorizedHost: *authorizedHost,
 			only: splitList(*only), skip: splitList(*skip), threshold: threshold,
 			reportDir: *reportDir, noSave: *noSave, consent: consent{yes: *yes, none: *noInstall},
-			requireAll: *requireAll, openAPI: *openAPI, profile: *profile,
+			requireAll: *requireAll, openAPI: *openAPI, profile: *profile, login: lf,
 		}, stdout, stderr)
 	}
-	if *deployed || *authorizedHost != "" || *openAPI != "" {
-		fmt.Fprint(stderr, "siegekit scan: --deployed, --authorized-host and --openapi only apply to URL targets\n")
+	if *deployed || *authorizedHost != "" || *openAPI != "" || lf.url != "" || attemptsSet {
+		fmt.Fprint(stderr, "siegekit scan: --deployed, --authorized-host, --openapi and the --login flags only apply to URL targets\n")
 		return exitUsage
 	}
 	target, err := resolveDir(pos[0])
@@ -286,6 +308,9 @@ func finish(run *report.Run, reportDir string, noSave bool, name string, thresho
 		}
 		if p.Input != "" {
 			line += " (tested from " + p.Input + ")"
+		}
+		if p.Result != "" {
+			line += " (result: " + p.Result + ")"
 		}
 		if p.Requests > 0 || p.Refused > 0 {
 			line += fmt.Sprintf(" (%d request(s) answered by the target, %d refused by SiegeKit", p.Requests, p.Refused)

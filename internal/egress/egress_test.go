@@ -536,3 +536,38 @@ func TestGet(t *testing.T) {
 		t.Errorf("%d hits, want 2", u.hits.Load())
 	}
 }
+
+func TestSend(t *testing.T) {
+	var got struct {
+		method, ctype, body string
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		got.method, got.ctype, got.body = r.Method, r.Header.Get("Content-Type"), string(b)
+		w.Header().Set("Retry-After", "5")
+		w.WriteHeader(http.StatusTooManyRequests)
+		io.WriteString(w, "slow down")
+	}))
+	defer srv.Close()
+	tu, err := target.Parse(srv.URL + "/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := Config{Target: tu, Addrs: []netip.Addr{netip.MustParseAddr("127.0.0.1")}, Version: "test"}
+	a, err := Send(context.Background(), cfg, http.MethodPost, "/login", "application/json", []byte(`{"a":1}`), 100)
+	if err != nil || a.Status != http.StatusTooManyRequests || string(a.Body) != "slow down" || a.Header.Get("Retry-After") != "5" || a.Took <= 0 {
+		t.Fatalf("%+v %v", a, err)
+	}
+	if got.method != http.MethodPost || got.ctype != "application/json" || got.body != `{"a":1}` {
+		t.Errorf("sent %+v", got)
+	}
+	// Deployed targets are read-only: no POST leaves SiegeKit.
+	got.method = ""
+	cfg.ReadOnly = true
+	if _, err := Send(context.Background(), cfg, http.MethodPost, "/login", "", nil, 100); err == nil || got.method != "" {
+		t.Errorf("POST on a read-only target: %v, server saw %q", err, got.method)
+	}
+	if _, err := Send(context.Background(), cfg, http.MethodGet, "/login", "", nil, 100); err != nil || got.method != http.MethodGet {
+		t.Errorf("GET on a read-only target: %v, server saw %q", err, got.method)
+	}
+}
