@@ -28,6 +28,7 @@ import (
 	"github.com/Gobbuwu/SiegeKit/internal/report"
 	"github.com/Gobbuwu/SiegeKit/internal/runner"
 	"github.com/Gobbuwu/SiegeKit/internal/sandbox"
+	"github.com/Gobbuwu/SiegeKit/internal/served"
 	"github.com/Gobbuwu/SiegeKit/internal/target"
 	"github.com/Gobbuwu/SiegeKit/internal/verify"
 	"github.com/Gobbuwu/SiegeKit/plugins"
@@ -323,12 +324,29 @@ func runURL(ctx context.Context, u *target.URL, addrs []netip.Addr, mode target.
 	if err != nil {
 		return fail(err)
 	}
-	// SiegeKit's own login throttling check is selected like a plugin.
-	selected, own, err := runner.Select(all, []checks.Check{{ID: login.ID, Name: login.Name, Family: login.Family, Targets: []string{"url"}}}, "url", o.only, o.skip)
+	// SiegeKit's own login throttling and served-secrets checks are
+	// selected like plugins.
+	selected, own, err := runner.Select(all, []checks.Check{
+		{ID: login.ID, Name: login.Name, Family: login.Family, Targets: []string{"url"}},
+		{ID: served.ID, Name: served.Name, Family: served.Family, Targets: []string{"url"}},
+	}, "url", o.only, o.skip)
 	if err != nil {
 		return fail(err)
 	}
-	loginSelected := len(own) > 0
+	ownSelected := func(id string) bool {
+		return slices.ContainsFunc(own, func(c checks.Check) bool { return c.ID == id })
+	}
+	loginSelected, servedSelected := ownSelected(login.ID), ownSelected(served.ID)
+	// The served-secrets check runs Gitleaks over the files it fetched
+	// (ADR 0032).
+	var gitleaks *manifest.Manifest
+	if servedSelected {
+		i := slices.IndexFunc(all, func(m *manifest.Manifest) bool { return m.ID == servedTool })
+		if i < 0 {
+			return fail(fmt.Errorf("built-in plugin %s is missing", servedTool))
+		}
+		gitleaks = all[i]
+	}
 	if loginSelected && runner.ProfileSkip(true, o.profile) != "" && slices.Contains(o.only, login.ID) {
 		return fail(fmt.Errorf("--only names %s, which --profile %s does not run", login.ID, o.profile))
 	}
@@ -359,10 +377,22 @@ func runURL(ctx context.Context, u *target.URL, addrs []netip.Addr, mode target.
 			runnable = append(runnable, m)
 		}
 	}
-	// Active plugins need no tool data, but some need pinned files.
-	ex, un, _, err := prepare(ctx, runnable, deps.Roots{Files: rootsIn(dir).Files}, o.consent, stdout)
+	if servedSelected && hostOS != "linux" {
+		unavailable[served.ID] = runner.Unavailable{Status: report.Failed, Reason: "active tests run only on Linux for now (ADR 0018)"}
+	}
+	// Active plugins need no tool data, but some need pinned files. The
+	// served-secrets check needs the Gitleaks image.
+	toPrepare := runnable
+	if servedSelected && hostOS == "linux" {
+		toPrepare = append(slices.Clip(runnable), gitleaks)
+	}
+	ex, un, _, err := prepare(ctx, toPrepare, deps.Roots{Files: rootsIn(dir).Files}, o.consent, stdout)
 	if err != nil {
 		return fail(err)
+	}
+	if u, ok := un[servedTool]; ok {
+		unavailable[served.ID] = u
+		delete(un, servedTool)
 	}
 	maps.Copy(unavailable, un)
 	if loginSelected {
@@ -400,6 +430,15 @@ func runURL(ctx context.Context, u *target.URL, addrs []netip.Addr, mode target.
 			planned = append(planned, login.ID)
 			fmt.Fprintf(stdout, "  %-20s siegekit %s: %d logins for %q with a random wrong password, POST %s, one per second; the account may be locked\n",
 				login.ID, version, o.login.attempts, lg.User, lg.URL)
+		}
+	}
+	if servedSelected {
+		if r, ok := unavailable[served.ID]; ok {
+			fmt.Fprintf(stdout, "  %-20s not run - %s\n", served.ID, r.Reason)
+		} else {
+			planned = append(planned, served.ID)
+			fmt.Fprintf(stdout, "  %-20s %s %s: GET the start page and up to %d same-origin scripts, styles, JSON files and source maps it links, then scan them for secrets\n",
+				served.ID, gitleaks.Tool.Name, gitleaks.Tool.Version, served.MaxRequests-1)
 		}
 	}
 	fmt.Fprintf(stdout, "Limits: at most %.0f requests per second, stop after %d server errors in a row; only %s is reachable, and every request is labeled \"SiegeKit/%s\".\n",
@@ -510,6 +549,21 @@ func runURL(ctx context.Context, u *target.URL, addrs []netip.Addr, mode target.
 		}
 		loginResult = &pr
 	}
+	var servedResult *report.PluginResult
+	var servedFindings []findings.Finding
+	if servedSelected {
+		pr := report.PluginResult{ID: served.ID, Family: served.Family, Tool: gitleaks.Tool.Name, Version: gitleaks.Tool.Version}
+		if r, ok := unavailable[served.ID]; ok {
+			pr.Status, pr.Reason = r.Status, r.Reason
+		} else {
+			fmt.Fprintf(stdout, "%s: fetching the start page and the files it links.\n", served.ID)
+			pr, servedFindings = runServed(ctx, ex, gitleaks, egress.Config{Target: u, Addrs: addrs, VerifyTLS: o.deployed, Version: version, ReadOnly: true}, limits.Rate, rootsIn(dir).Files, pr)
+			if ctx.Err() != nil {
+				return fail(errors.New("interrupted; no report written"))
+			}
+		}
+		servedResult = &pr
+	}
 	var active runner.ActiveRunner
 	if e, ok := ex.(*sandbox.Engine); ok {
 		bin, err := os.Executable()
@@ -532,15 +586,70 @@ func runURL(ctx context.Context, u *target.URL, addrs []netip.Addr, mode target.
 	if err != nil {
 		return fail(err)
 	}
-	if loginResult != nil {
+	var first []report.PluginResult
+	for _, pr := range []*report.PluginResult{loginResult, servedResult} {
+		if pr != nil {
+			first = append(first, *pr)
+		}
+	}
+	if len(first) > 0 {
 		run.Started = started
-		run.Plugins = append([]report.PluginResult{*loginResult}, run.Plugins...)
-		if run.Findings = findings.Dedupe(append(loginFindings, run.Findings...)); run.Findings == nil {
+		run.Plugins = append(first, run.Plugins...)
+		if run.Findings = findings.Dedupe(slices.Concat(loginFindings, servedFindings, run.Findings)); run.Findings == nil {
 			run.Findings = []findings.Finding{}
 		}
 	}
 	return finish(run, o.reportDir, o.noSave, u.Host, o.threshold, o.requireAll, unavailable, stdout, stderr)
 }
+
+// servedTool is the plugin that reads the served files (ADR 0032).
+const servedTool = "gitleaks"
+
+// runServed fetches the served files into a private directory and runs
+// Gitleaks over them like a source directory, then places the findings at
+// the URLs the files came from (ADR 0032). cfg allows only GET and HEAD.
+func runServed(ctx context.Context, ex runner.Executor, gl *manifest.Manifest, cfg egress.Config, rate float64, filesRoot string, pr report.PluginResult) (report.PluginResult, []findings.Finding) {
+	failed := func(format string, a ...any) (report.PluginResult, []findings.Finding) {
+		pr.Status, pr.Reason = report.Failed, fmt.Sprintf(format, a...)
+		return pr, nil
+	}
+	pr.Input = "the start page " + cfg.Target.String() + " and the files it links"
+	work, err := os.MkdirTemp("", "siegekit-served-")
+	if err != nil {
+		return failed("%v", err)
+	}
+	defer os.RemoveAll(work)
+	// The tool runs as another user when SiegeKit runs as root (ADR 0021),
+	// so the directory it reads must be readable by others.
+	files := filepath.Join(work, "files")
+	if err := os.Mkdir(files, 0o700); err != nil {
+		return failed("%v", err)
+	}
+	if err := os.Chmod(files, 0o755); err != nil { // #nosec G302 -- read by the tool's user; the parent is private
+		return failed("%v", err)
+	}
+	res, err := servedCollect(ctx, cfg, rate, files)
+	pr.Requests = res.Requests
+	if err != nil {
+		return failed("%v", err)
+	}
+	pr.Result = res.Summary()
+	run, err := runner.Run(ctx, ex, []*manifest.Manifest{gl}, runner.Options{Version: version, TargetDir: files, WorkDir: work, FilesRoot: filesRoot})
+	if err != nil {
+		return failed("%v", err)
+	}
+	tool := run.Plugins[0]
+	pr.Status, pr.Reason, pr.Suppressed = tool.Status, tool.Reason, tool.Suppressed
+	if tool.Status != report.Ran {
+		return pr, nil
+	}
+	fs := served.Findings(run.Findings, res)
+	pr.Findings = len(fs)
+	return pr, fs
+}
+
+// servedCollect fetches the served files; tests replace it.
+var servedCollect = served.Collect
 
 func joinList[T fmt.Stringer](xs []T) string {
 	s := make([]string, len(xs))

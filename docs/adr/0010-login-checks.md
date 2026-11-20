@@ -2,7 +2,7 @@
 
 - Status: Accepted
 - Date: 2026-11-18
-- Amended by: [0030](0030-login-throttling.md) (the login throttling check: flags, what counts as a limit, local targets only until M2.10), [0031](0031-default-logins.md) (the default-credentials check: which templates, one attempt per credential)
+- Amended by: [0030](0030-login-throttling.md) (the login throttling check: flags, what counts as a limit, local targets only until M2.10), [0031](0031-default-logins.md) (the default-credentials check: which templates, one attempt per credential), [0032](0032-served-secrets.md) (SiegeKit fetches the served files itself instead of using the crawl)
 
 ## Context
 

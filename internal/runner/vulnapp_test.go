@@ -41,7 +41,19 @@ func vulnApp() http.Handler {
 <a href="/search?q=shoes">Search</a>
 <a href="/item?id=1">Item 1</a>
 <a href="/file?name=terms.txt">Terms</a>
-<form action="/search" method="get"><input name="q" value="hat"><input type="submit"></form>`)
+<form action="/search" method="get"><input name="q" value="hat"><input type="submit"></form>
+<script src="/static/app.js"></script>`)
+	})
+	// Keys in served files: a token in a script and a cloud key in its
+	// source map. They are assembled at run time so this repository never
+	// contains a string that secret scanners would flag.
+	mux.HandleFunc("/static/app.js", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/javascript")
+		fmt.Fprintf(w, "const api = {token: %q};\n//# sourceMappingURL=app.js.map\n", servedToken)
+	})
+	mux.HandleFunc("/static/app.js.map", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprintf(w, `{"version":3,"sources":["src/config.js"],"sourcesContent":["export const awsKey = '%s';"],"mappings":""}`, servedCloudKey)
 	})
 	// Reflected cross-site scripting: the query is echoed unescaped.
 	mux.HandleFunc("/search", func(w http.ResponseWriter, r *http.Request) {
@@ -162,6 +174,12 @@ func vulnApp() http.Handler {
 	return mux
 }
 
+// The planted keys of the served files, assembled at run time.
+var (
+	servedToken    = "gh" + "p_" + strings.Repeat("9zY8xW7vU6tS", 3)
+	servedCloudKey = "AK" + "IA" + "QWERTYZXCV234567"
+)
+
 // vulnAppIssues maps each planted issue to the rule (ZAP rule ID or Nuclei
 // template ID) that must report it, per plugin. A key "RULE /path" also
 // needs the finding's location to end in /path (ffuf reports every guessed
@@ -198,7 +216,13 @@ var vulnAppIssues = map[string]map[string]string{
 	"schemathesis": {
 		"ST101 /api/items/{id}": "GET /api/items/{id} crashes (500) on an id below 1",
 	},
-	// SiegeKit's own check, run in the test process (TestLoginFindsPlantedIssue).
+	// SiegeKit's own checks: served-secrets runs Gitleaks
+	// (TestServedFindsPlantedIssues), login-throttle runs in the test
+	// process (TestLoginFindsPlantedIssue).
+	"served-secrets": {
+		"github-pat /static/app.js":           "a GitHub token in a served script",
+		"aws-access-token /static/app.js.map": "an AWS access key in a served source map",
+	},
 	"login-throttle": {
 		"login-not-limited /account/sign-in": "failed logins are not limited at POST /account/sign-in",
 	},

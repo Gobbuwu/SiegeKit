@@ -223,6 +223,9 @@ func Get(ctx context.Context, cfg Config, path string, max int64) (int, []byte, 
 	return a.Status, a.Body, err
 }
 
+// ErrTooLarge is returned by Send when an answer is larger than its limit.
+var ErrTooLarge = errors.New("answer larger than")
+
 // Answer is the target's answer to one request sent by Send.
 type Answer struct {
 	Status int
@@ -275,7 +278,7 @@ func Send(ctx context.Context, cfg Config, method, path, contentType string, bod
 		return a, err
 	}
 	if int64(len(b)) > max {
-		return a, fmt.Errorf("answer larger than %d bytes", max)
+		return a, fmt.Errorf("%w %d bytes", ErrTooLarge, max)
 	}
 	a.Body = b
 	return a, nil
