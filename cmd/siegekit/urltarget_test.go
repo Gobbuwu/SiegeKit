@@ -13,7 +13,9 @@ import (
 	"testing"
 
 	"github.com/Gobbuwu/SiegeKit/internal/audit"
+	"github.com/Gobbuwu/SiegeKit/internal/deps"
 	"github.com/Gobbuwu/SiegeKit/internal/egress"
+	"github.com/Gobbuwu/SiegeKit/internal/files"
 	"github.com/Gobbuwu/SiegeKit/internal/manifest"
 	"github.com/Gobbuwu/SiegeKit/internal/report"
 	"github.com/Gobbuwu/SiegeKit/internal/runner"
@@ -59,7 +61,8 @@ const zapSARIF = `{"version":"2.1.0","runs":[{"tool":{"driver":{"name":"ZAP","ru
 "relationships":[{"target":{"id":"1021","toolComponent":{"name":"CWE"}}}]}]}},
 "results":[{"ruleId":"10020","level":"warning","message":{"text":"no X-Frame-Options"},"locations":[{"physicalLocation":{"artifactLocation":{"uri":"TARGET"},"region":{"startLine":1}}}]}]}]}`
 
-// fakeActive records active runs and writes a ZAP report for each.
+// fakeActive records active runs and writes an empty report for each
+// tool: a ZAP report with one alert, and Nuclei's JSON Lines with none.
 type fakeActive struct {
 	specs []sandbox.Spec
 	cfgs  []egress.Config
@@ -74,14 +77,46 @@ func useActive(t *testing.T) *fakeActive {
 		if err := os.WriteFile(filepath.Join(s.OutDir, "zap.json"), []byte(strings.Replace(zapSARIF, "TARGET", c.Target.String(), 1)), 0o600); err != nil {
 			return nil, err
 		}
+		if err := os.WriteFile(filepath.Join(s.OutDir, "nuclei.jsonl"), nil, 0o600); err != nil {
+			return nil, err
+		}
 		return &runner.ActiveResult{Result: &sandbox.Result{Status: sandbox.Completed}, Stats: egress.Stats{Requests: 3}}, nil
 	}
 	useEngine(t, &fakeEngine{}, nil)
-	oldReach := reachable
-	reachable = func(context.Context, egress.Config) error { return nil }
-	t.Cleanup(func() { activeRunner, reachable = old, oldReach })
+	// These tests check the Linux path on every host; macOS is refused
+	// (TestScanURLNotRun).
+	oldReach, oldFetch, oldOS := reachable, deps.FetchFile, hostOS
+	reachable, hostOS = func(context.Context, egress.Config) error { return nil }, "linux"
+	deps.FetchFile = func(context.Context, string, manifest.Artifact) error {
+		return errors.New("tests download nothing")
+	}
+	t.Cleanup(func() { activeRunner, reachable, deps.FetchFile, hostOS = old, oldReach, oldFetch, oldOS })
 	t.Chdir(t.TempDir()) // reports go to ./siegekit-report
 	return f
+}
+
+// useData gives the test its own data directory with every pinned file of
+// the built-in plugins already installed, so no test downloads anything.
+func useData(t *testing.T) string {
+	t.Helper()
+	data := t.TempDir()
+	t.Setenv("XDG_DATA_HOME", data)
+	all, err := plugins.Builtin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := rootsIn(filepath.Join(data, "siegekit")).Files
+	for _, m := range all {
+		for _, a := range runner.FilesFor(m) {
+			if err := os.MkdirAll(files.Dir(root, a), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(files.Dir(root, a)+".ok", nil, 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	return data
 }
 
 func TestScanURL(t *testing.T) {
@@ -223,8 +258,7 @@ func TestScanURLRunsActivePlugins(t *testing.T) {
 	resolver = fakeResolver{"localhost": "127.0.0.1"}
 	t.Cleanup(func() { resolver = old })
 	f := useActive(t)
-	data := t.TempDir()
-	t.Setenv("XDG_DATA_HOME", data)
+	data := useData(t)
 	var out, errb bytes.Buffer
 	code := run([]string{"scan", "--fail-on", "medium", "--authorized-host", "localhost", "http://localhost:3000/app"}, &out, &errb)
 	if code != report.ExitFindings {
@@ -240,9 +274,10 @@ func TestScanURLRunsActivePlugins(t *testing.T) {
 			t.Errorf("output lacks %q:\n%s", want, out.String())
 		}
 	}
-	// Both plugins ran through the egress proxy with the local limits, each
-	// with its configuration naming the target as a JSON string.
-	if len(f.specs) != 2 {
+	// All four plugins ran through the egress proxy with the local limits;
+	// the ZAP plugins got their configuration naming the target as a JSON
+	// string.
+	if len(f.specs) != 4 {
 		t.Fatalf("%d active runs", len(f.specs))
 	}
 	for i, s := range f.specs {
@@ -250,7 +285,7 @@ func TestScanURLRunsActivePlugins(t *testing.T) {
 		if c.Target.String() != "http://localhost:3000/app" || c.VerifyTLS || c.Rate != runner.LocalLimits.Rate || !slices.Equal(c.Addrs, []netip.Addr{netip.MustParseAddr("127.0.0.1")}) {
 			t.Errorf("run %d egress config %+v", i, c)
 		}
-		if !slices.Contains(s.Args, sandbox.ConfigMount) || s.ConfigFile == "" {
+		if strings.HasPrefix(s.Image, "docker.io/zaproxy/") && (!slices.Contains(s.Args, sandbox.ConfigMount) || s.ConfigFile == "") {
 			t.Errorf("run %d: config not passed: %v", i, s.Args)
 		}
 	}
@@ -260,7 +295,7 @@ func TestScanURLRunsActivePlugins(t *testing.T) {
 		t.Fatal(err)
 	}
 	var e audit.Entry
-	if err := json.Unmarshal(b, &e); err != nil || e.Target != "http://localhost:3000/app" || e.Mode != "local" || e.Verification != "loopback + --authorized-host" || e.Confirmed != "localhost" || !slices.Equal(e.Plugins, []string{"zap", "zap-active"}) {
+	if err := json.Unmarshal(b, &e); err != nil || e.Target != "http://localhost:3000/app" || e.Mode != "local" || e.Verification != "loopback + --authorized-host" || e.Confirmed != "localhost" || !slices.Equal(e.Plugins, []string{"nuclei", "nuclei-intrusive", "zap", "zap-active"}) {
 		t.Errorf("audit entry %+v %v", e, err)
 	}
 	// The report names the URL and the request counts.
@@ -294,16 +329,15 @@ func TestScanURLDestructiveNeedsConfirmation(t *testing.T) {
 		verification string
 		want         string
 	}{
-		{"no terminal", nil, false, "", 1, "loopback", "pass --authorized-host localhost if you"},
-		{"--yes does not count", []string{"--yes"}, false, "", 1, "loopback", "needs a person's confirmation"},
-		{"typed yes", nil, true, "yes\n", 2, "loopback + typed yes", "Type yes to run them"},
-		{"typed no", nil, true, "no\n", 1, "loopback", `"yes" was not typed`},
-		{"flag", []string{"--authorized-host", "LOCALHOST"}, false, "", 2, "loopback + --authorized-host", "zap-active"},
+		{"no terminal", nil, false, "", 2, "loopback", "pass --authorized-host localhost if you"},
+		{"--yes does not count", []string{"--yes"}, false, "", 2, "loopback", "needs a person's confirmation"},
+		{"typed yes", nil, true, "yes\n", 4, "loopback + typed yes", "Type yes to run them"},
+		{"typed no", nil, true, "no\n", 2, "loopback", `"yes" was not typed`},
+		{"flag", []string{"--authorized-host", "LOCALHOST"}, false, "", 4, "loopback + --authorized-host", "zap-active"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f := useActive(t)
-			data := t.TempDir()
-			t.Setenv("XDG_DATA_HOME", data)
+			data := useData(t)
 			stdinIsTerminal = func() bool { return tc.tty }
 			stdin = strings.NewReader(tc.input)
 			t.Cleanup(func() { stdinIsTerminal = func() bool { return false } })
@@ -317,10 +351,10 @@ func TestScanURLDestructiveNeedsConfirmation(t *testing.T) {
 			if err != nil || json.Unmarshal(b, &e) != nil || e.Verification != tc.verification || len(e.Plugins) != tc.runs {
 				t.Errorf("audit entry %+v %v", e, err)
 			}
-			if tc.runs == 1 {
+			if tc.runs == 2 { // the two destructive plugins were skipped
 				b, err := os.ReadFile(filepath.Join("siegekit-report", "report.json"))
 				var r report.Run
-				if err != nil || json.Unmarshal(b, &r) != nil || len(r.Plugins) != 2 || r.Plugins[1].ID != "zap-active" || r.Plugins[1].Status != report.Skipped {
+				if err != nil || json.Unmarshal(b, &r) != nil || len(r.Plugins) != 4 || r.Plugins[1].ID != "nuclei-intrusive" || r.Plugins[1].Status != report.Skipped || r.Plugins[3].ID != "zap-active" || r.Plugins[3].Status != report.Skipped {
 					t.Errorf("report %+v %v", r.Plugins, err)
 				}
 			}

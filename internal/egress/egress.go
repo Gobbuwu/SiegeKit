@@ -35,10 +35,16 @@ type Config struct {
 	Client netip.Prefix
 	// VerifyTLS checks the target's certificate (deployed mode). Local mode
 	// accepts self-signed development certificates.
-	VerifyTLS       bool
-	Rate            float64 // requests per second
-	Burst           int
-	MaxConns        int // open client connections
+	VerifyTLS bool
+	Rate      float64 // requests per second
+	Burst     int
+	// MaxConns limits connections to the target, so at most that many
+	// requests are in flight. Idle connections from the tool hold no slot:
+	// a tool keeps idle keep-alive connections open, and while the proxy
+	// counted them, new requests waited up to 27 s, past the tool's own
+	// timeout, and were lost without an error (measured with Nuclei,
+	// ADR 0026). The relay bounds the tool's open connections.
+	MaxConns        int
 	MaxServerErrors int // consecutive 5xx or upstream failures before stopping
 	Version         string
 	// ReadOnly allows only GET and HEAD requests. Non-destructive plugins
@@ -73,7 +79,6 @@ type Proxy struct {
 	leaf      tls.Certificate
 	transport *http.Transport
 	bucket    *bucket
-	slots     chan struct{}
 
 	mu          sync.Mutex
 	stats       Stats
@@ -105,7 +110,6 @@ func New(cfg Config) (*Proxy, error) {
 		cfg:       cfg,
 		authority: authorityOf(cfg.Target),
 		bucket:    newBucket(cfg.Rate, cfg.Burst),
-		slots:     make(chan struct{}, cfg.MaxConns),
 		stop:      make(chan struct{}),
 		hijacked:  map[net.Conn]struct{}{},
 	}
@@ -470,8 +474,7 @@ func (p *Proxy) untrack(c net.Conn) {
 	p.mu.Unlock()
 }
 
-// filterListener accepts connections only from the client network, and at
-// most MaxConns at a time.
+// filterListener accepts connections only from the client network.
 type filterListener struct {
 	net.Listener
 	p *Proxy
@@ -495,21 +498,8 @@ func (l *filterListener) Accept() (net.Conn, error) {
 			_ = c.Close()
 			continue
 		}
-		l.p.slots <- struct{}{}
-		return &slotConn{Conn: c, release: func() { <-l.p.slots }}, nil
+		return c, nil
 	}
-}
-
-type slotConn struct {
-	net.Conn
-	once    sync.Once
-	release func()
-}
-
-func (c *slotConn) Close() error {
-	err := c.Conn.Close()
-	c.once.Do(c.release)
-	return err
 }
 
 // oneConnListener hands out one connection, then blocks until it is closed,

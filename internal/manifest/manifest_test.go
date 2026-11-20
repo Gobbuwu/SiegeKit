@@ -127,11 +127,12 @@ func TestRejections(t *testing.T) {
 			a := m["tool"].(map[string]any)["artifacts"].([]any)[0].(map[string]any)
 			a["sha256"] = strings.Repeat("1", 64)
 		},
-		"output file traversal": func(m map[string]any) { m["output"].(map[string]any)["file"] = "../x" },
-		"output file dotdot":    func(m map[string]any) { m["output"].(map[string]any)["file"] = ".." },
-		"output file missing":   func(m map[string]any) { delete(m["output"].(map[string]any), "file") },
-		"unknown parser":        func(m map[string]any) { m["output"].(map[string]any)["parser"] = "custom" },
-		"sarif parser on json":  func(m map[string]any) { m["output"].(map[string]any)["format"] = "json" },
+		"output file traversal":  func(m map[string]any) { m["output"].(map[string]any)["file"] = "../x" },
+		"output file dotdot":     func(m map[string]any) { m["output"].(map[string]any)["file"] = ".." },
+		"output file missing":    func(m map[string]any) { delete(m["output"].(map[string]any), "file") },
+		"unknown parser":         func(m map[string]any) { m["output"].(map[string]any)["parser"] = "custom" },
+		"sarif parser on json":   func(m map[string]any) { m["output"].(map[string]any)["format"] = "json" },
+		"nuclei parser on sarif": func(m map[string]any) { m["output"].(map[string]any)["parser"] = "nuclei-jsonl" },
 		"data without section": func(m map[string]any) {
 			m["run"].(map[string]any)["args"] = []string{"--db", "{data}"}
 		},

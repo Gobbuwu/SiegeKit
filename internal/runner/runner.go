@@ -22,6 +22,7 @@ import (
 	"github.com/Gobbuwu/SiegeKit/internal/files"
 	"github.com/Gobbuwu/SiegeKit/internal/findings"
 	"github.com/Gobbuwu/SiegeKit/internal/manifest"
+	"github.com/Gobbuwu/SiegeKit/internal/nuclei"
 	"github.com/Gobbuwu/SiegeKit/internal/report"
 	"github.com/Gobbuwu/SiegeKit/internal/sandbox"
 	"github.com/Gobbuwu/SiegeKit/internal/sarif"
@@ -402,6 +403,9 @@ func substitute(args []string, cpus int, dataMount string) ([]string, error) {
 	)
 	out := make([]string, len(args))
 	for i, a := range args {
+		if strings.Contains(a, "{target-base}") {
+			return nil, errors.New("{target-base} is only available to plugins that scan URLs")
+		}
 		if strings.Contains(a, "{ratelimit}") {
 			return nil, errors.New("{ratelimit} is only available to active plugins, which are not supported yet")
 		}
@@ -434,6 +438,9 @@ func readReport(path string, m *manifest.Manifest, suppressed *int) ([]findings.
 	mount := sandbox.TargetMount
 	if m.Network == "target-only" {
 		mount = "" // locations are URLs; nothing is mounted at /target
+	}
+	if m.Output.Parser == "nuclei-jsonl" {
+		return nuclei.ToFindings(f, nuclei.Options{Plugin: m.ID, Family: m.Family})
 	}
 	if m.Output.Parser == "bandit-json" {
 		return bandit.ToFindings(f, bandit.Options{Plugin: m.ID, Family: m.Family, MountPath: mount, Suppressed: suppressed})

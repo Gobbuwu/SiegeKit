@@ -1,0 +1,78 @@
+{
+  "schemaVersion": 1,
+  "id": "nuclei-intrusive",
+  "name": "Nuclei intrusive checks",
+  "version": "1.0.0",
+  "description": "Runs Nuclei's templates tagged intrusive: checks that send attack payloads or can change data. Local targets only, after confirmation. Denial-of-service, fuzzing, brute-force and default-login templates stay out (ADR 0025).",
+  "family": "dast",
+  "mode": "active",
+  "destructive": true,
+  "targets": [
+    "url"
+  ],
+  "tool": {
+    "name": "nuclei",
+    "version": "3.11.1",
+    "license": "MIT",
+    "homepage": "https://github.com/projectdiscovery/nuclei",
+    "artifacts": [
+      {
+        "platform": "any",
+        "kind": "oci-image",
+        "ref": "docker.io/projectdiscovery/nuclei@sha256:582d5546902e67052097cb2d07296c642d50a1afc5e44623cb038845df9a32eb",
+        "sha256": "582d5546902e67052097cb2d07296c642d50a1afc5e44623cb038845df9a32eb"
+      },
+      {
+        "platform": "any",
+        "kind": "archive",
+        "ref": "https://github.com/projectdiscovery/nuclei-templates/archive/refs/tags/v10.5.2.tar.gz",
+        "sha256": "016b7abbf931d4d1a851a5a568e44510dc61691dc8a5202e3b24e701515ec574",
+        "size": 10105056,
+        "mount": "/siegekit/files/nuclei-templates"
+      }
+    ]
+  },
+  "resources": {
+    "cpus": 2,
+    "memoryMiB": 2048,
+    "gpu": "none",
+    "timeoutSeconds": 900,
+    "maxTimeoutSeconds": 3600
+  },
+  "network": "target-only",
+  "run": {
+    "args": [
+      "-u",
+      "{target-base}",
+      "-t",
+      "/siegekit/files/nuclei-templates/nuclei-templates-10.5.2",
+      "-pt",
+      "http",
+      "-et",
+      "/siegekit/files/nuclei-templates/nuclei-templates-10.5.2/http/cves/2019/CVE-2019-14696.yaml,/siegekit/files/nuclei-templates/nuclei-templates-10.5.2/http/cves/2021/CVE-2021-28164.yaml,/siegekit/files/nuclei-templates/nuclei-templates-10.5.2/http/fuzzing/wordpress-themes-detect.yaml,/siegekit/files/nuclei-templates/nuclei-templates-10.5.2/http/fuzzing/mdb-database-file.yaml,/siegekit/files/nuclei-templates/nuclei-templates-10.5.2/http/miscellaneous/crypto-address-detect.yaml,/siegekit/files/nuclei-templates/nuclei-templates-10.5.2/http/vulnerabilities/wp-functions-php-disclosure.yaml",
+      "-ni",
+      "-duc",
+      "-nc",
+      "-or",
+      "-proxy",
+      "http://127.0.0.1:8080",
+      "-rl",
+      "{ratelimit}",
+      "-c",
+      "8",
+      "-j",
+      "-o",
+      "{outdir}/nuclei.jsonl",
+      "-tags",
+      "intrusive",
+      "-etags",
+      "dos,fuzz,dast,local,bruteforce,txt-service,default-login"
+    ]
+  },
+  "output": {
+    "format": "jsonl",
+    "parser": "nuclei-jsonl",
+    "file": "nuclei.jsonl"
+  },
+  "localOnly": true
+}

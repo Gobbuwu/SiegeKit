@@ -18,8 +18,17 @@ These are the publishers' official images on Docker Hub or the GitHub Container 
 | [gosec](plugins/gosec/plugin.json) | `ghcr.io/securego/gosec@sha256:7bcf1edbab3e80d8006a28d53e7031a9c9775be8eec30679e4adc1f51d272121` | `2.30.0` (released 2026-10-23; the binary in this image reports version "dev", so the version rests on the tag the digest was resolved from) |
 | relay for active tests ([ADR 0021](docs/adr/0021-built-in-relay.md)) | `docker.io/library/alpine@sha256:f59abe656b692d901e184be3445e084786602108599d2a51d229c0f5a48c71bf` (Docker Official Image; used only as a root file system for SiegeKit's own relay binary; busybox GPL-2.0, musl MIT, other packages under their own licenses) | `3.24.4` (published 2026-11-08) |
 | [zap](plugins/zap/plugin.json) and [zap-active](plugins/zap-active/plugin.json) | `docker.io/zaproxy/zap-stable@sha256:9624669db72f54d86c4b46a7064518bd9bf79d8c61a4c31befa9923489f328af` (published by the ZAP organization, ZAProxy Ltd; about 1.1 GB) | `2.17.0` (published 2026-11-03) |
+| [nuclei](plugins/nuclei/plugin.json) and [nuclei-intrusive](plugins/nuclei-intrusive/plugin.json) | `docker.io/projectdiscovery/nuclei@sha256:582d5546902e67052097cb2d07296c642d50a1afc5e44623cb038845df9a32eb` (published by ProjectDiscovery; about 350 MB) | `v3.11.1` (published 2026-08-08) |
 
 The two GitHub Container Registry digests were resolved on 2026-11-19. Every pinned image's reported version is checked by `TestPinnedImageVersions` in CI.
+
+## Pinned files
+
+Downloaded by SiegeKit itself after the user agrees, from the publisher's GitHub releases, and checked against the exact size and SHA-256 before use ([ADR 0024](docs/adr/0024-pinned-file-downloads.md)).
+
+| Plugin | File | Size and SHA-256 | Source of the checksum |
+| --- | --- | --- | --- |
+| [nuclei](plugins/nuclei/plugin.json) and [nuclei-intrusive](plugins/nuclei-intrusive/plugin.json) | nuclei-templates `v10.5.2` (published 2026-11-12, MIT), GitHub's archive of the tag: `https://github.com/projectdiscovery/nuclei-templates/archive/refs/tags/v10.5.2.tar.gz` | 10,105,056 bytes, `016b7abbf931d4d1a851a5a568e44510dc61691dc8a5202e3b24e701515ec574` | Downloaded twice on a GitHub Actions runner on 2026-11-19, identical both times; the publisher attaches no release files ([ADR 0026](docs/adr/0026-nuclei.md)) |
 
 ## Test fixtures (CI only)
 
@@ -50,7 +59,7 @@ Trivy's vulnerability database is not pinned: `siegekit update` lets Trivy downl
 | [KICS](https://github.com/Checkmarx/kics) | IaC | not checked | Apache-2.0 | Later |
 | [Hadolint](https://github.com/hadolint/hadolint) | Dockerfiles | not checked | GPL-3.0 | Optional |
 | [ZAP](https://github.com/zaproxy/zaproxy) | DAST | 2.17.0 | Apache-2.0 | Pinned (M2) |
-| [Nuclei](https://github.com/projectdiscovery/nuclei) and [templates](https://github.com/projectdiscovery/nuclei-templates) | DAST, known CVEs | 3.11.1 | MIT | Planned (M2) |
+| [Nuclei](https://github.com/projectdiscovery/nuclei) and [templates](https://github.com/projectdiscovery/nuclei-templates) | DAST, known CVEs | 3.11.1, templates 10.5.2 | MIT | Pinned (M2.5b) |
 | [ffuf](https://github.com/ffuf/ffuf) | Content discovery | 2.3.0 | MIT | Planned (M2) |
 | [Schemathesis](https://github.com/schemathesis/schemathesis) | API fuzzing | 4.33.4 | MIT | Planned (M2) |
 | [sqlmap](https://github.com/sqlmapproject/sqlmap) | SQL injection | 1.10.11 | GPL-2.0 | Optional (M2) |

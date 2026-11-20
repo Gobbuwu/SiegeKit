@@ -8,6 +8,7 @@ import (
 	"testing"
 	"testing/fstest"
 
+	"github.com/Gobbuwu/SiegeKit/internal/manifest"
 	"github.com/Gobbuwu/SiegeKit/internal/sandbox"
 )
 
@@ -16,7 +17,7 @@ func TestBuiltin(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"bandit", "checkov", "gitleaks", "gitleaks-history", "gosec", "trivy", "zap", "zap-active"}
+	want := []string{"bandit", "checkov", "gitleaks", "gitleaks-history", "gosec", "nuclei", "nuclei-intrusive", "trivy", "zap", "zap-active"}
 	if len(ms) != len(want) {
 		t.Fatalf("got %d plugins, want %v", len(ms), want)
 	}
@@ -36,48 +37,88 @@ func TestBuiltin(t *testing.T) {
 				t.Errorf("%s: passive built-ins must be non-destructive, offline and scan directories", m.ID)
 			}
 		case "active":
-			// Only the plugins the owner placed in M2.4 (ADR 0023): the
-			// attack scan never runs on deployed targets.
+			// Attack scans never run on deployed targets (ADR 0023, 0025).
 			if m.Network != "target-only" || !slices.Equal(m.Targets, []string{"url"}) || *m.Destructive != m.LocalOnly {
 				t.Errorf("%s: active built-ins scan URLs through the egress proxy; destructive ones are local only", m.ID)
 			}
-			// ZAP must use the relay's port as its outbound proxy.
-			if !slices.Contains(m.Run.Args, "network.connection.httpProxy.port="+strconv.Itoa(sandbox.RelayPort)) {
-				t.Errorf("%s: outbound proxy port is not the relay's", m.ID)
-			}
-			// zap.sh sizes the Java heap from the host's memory on cgroup v2
-			// hosts, not from the container limit, so the container is
-			// killed (exit 137, seen in CI 2026-11-19). The heap must be
-			// set and leave room for /tmp and the JVM's own memory.
-			heap := 0
-			for _, a := range m.Run.Args {
-				if v, ok := strings.CutPrefix(a, "-Xmx"); ok {
-					heap, _ = strconv.Atoi(strings.TrimSuffix(v, "m"))
-				}
-			}
-			// ZAP's spider fills in and submits forms, POST forms included,
-			// unless told not to (found by the security review of M2.4a,
-			// reproduced 2026-11-19). A plugin that runs on deployed targets
-			// must not submit forms.
-			if !*m.Destructive {
-				jobs, _ := m.Run.Config["jobs"].([]any)
-				for _, j := range jobs {
-					job, _ := j.(map[string]any)
-					if job["type"] != "spider" {
-						continue
-					}
-					p, _ := job["parameters"].(map[string]any)
-					if p["processForm"] != false || p["postForm"] != false {
-						t.Errorf("%s: a non-destructive spider must set processForm and postForm to false", m.ID)
-					}
-				}
-			}
-			if heap <= 0 || heap > m.Resources.MemoryMiB/2 {
-				t.Errorf("%s: Java heap %d MiB must be set and at most half of %d MiB", m.ID, heap, m.Resources.MemoryMiB)
+			switch m.Tool.Name {
+			case "zap":
+				checkZAP(t, m)
+			case "nuclei":
+				checkNuclei(t, m)
+			default:
+				t.Errorf("%s: no rules for active tool %s", m.ID, m.Tool.Name)
 			}
 		default:
 			t.Errorf("%s: mode %s", m.ID, m.Mode)
 		}
+	}
+}
+
+// checkNuclei holds the owner's M2.5 decisions (ADR 0025): pinned
+// templates only, no update checks, no out-of-band callbacks, the relay as
+// proxy, and on non-destructive plugins no intrusive, denial-of-service,
+// fuzzing, brute-force or default-login templates.
+func checkNuclei(t *testing.T, m *manifest.Manifest) {
+	t.Helper()
+	args := strings.Join(m.Run.Args, " ")
+	for _, want := range []string{"-duc", "-ni", "-pt http", "-t /siegekit/files/nuclei-templates/", "-proxy http://127.0.0.1:" + strconv.Itoa(sandbox.RelayPort), "-rl {ratelimit}"} {
+		if !strings.Contains(args, want) {
+			t.Errorf("%s: args lack %q", m.ID, want)
+		}
+	}
+	excluded := ""
+	for i, a := range m.Run.Args {
+		if a == "-etags" && i+1 < len(m.Run.Args) {
+			excluded = m.Run.Args[i+1]
+		}
+	}
+	tags := strings.Split(excluded, ",")
+	for _, tag := range []string{"dos", "fuzz", "dast", "local", "bruteforce", "txt-service", "default-login"} {
+		if !slices.Contains(tags, tag) {
+			t.Errorf("%s: does not exclude %s templates", m.ID, tag)
+		}
+	}
+	if !*m.Destructive && !slices.Contains(tags, "intrusive") {
+		t.Errorf("%s: a non-destructive Nuclei plugin must exclude intrusive templates", m.ID)
+	}
+}
+
+func checkZAP(t *testing.T, m *manifest.Manifest) {
+	t.Helper()
+	// ZAP must use the relay's port as its outbound proxy.
+	if !slices.Contains(m.Run.Args, "network.connection.httpProxy.port="+strconv.Itoa(sandbox.RelayPort)) {
+		t.Errorf("%s: outbound proxy port is not the relay's", m.ID)
+	}
+	// zap.sh sizes the Java heap from the host's memory on cgroup v2
+	// hosts, not from the container limit, so the container is
+	// killed (exit 137, seen in CI 2026-11-19). The heap must be
+	// set and leave room for /tmp and the JVM's own memory.
+	heap := 0
+	for _, a := range m.Run.Args {
+		if v, ok := strings.CutPrefix(a, "-Xmx"); ok {
+			heap, _ = strconv.Atoi(strings.TrimSuffix(v, "m"))
+		}
+	}
+	// ZAP's spider fills in and submits forms, POST forms included,
+	// unless told not to (found by the security review of M2.4a,
+	// reproduced 2026-11-19). A plugin that runs on deployed targets
+	// must not submit forms.
+	if !*m.Destructive {
+		jobs, _ := m.Run.Config["jobs"].([]any)
+		for _, j := range jobs {
+			job, _ := j.(map[string]any)
+			if job["type"] != "spider" {
+				continue
+			}
+			p, _ := job["parameters"].(map[string]any)
+			if p["processForm"] != false || p["postForm"] != false {
+				t.Errorf("%s: a non-destructive spider must set processForm and postForm to false", m.ID)
+			}
+		}
+	}
+	if heap <= 0 || heap > m.Resources.MemoryMiB/2 {
+		t.Errorf("%s: Java heap %d MiB must be set and at most half of %d MiB", m.ID, heap, m.Resources.MemoryMiB)
 	}
 }
 

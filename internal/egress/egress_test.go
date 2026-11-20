@@ -14,6 +14,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -451,5 +452,57 @@ func TestReachable(t *testing.T) {
 		if err := Reachable(context.Background(), cfg); err == nil || !strings.Contains(err.Error(), "the target did not answer") {
 			t.Errorf("%s closed: %v", scheme, err)
 		}
+	}
+}
+
+// TestConnectionLimit checks that MaxConns limits requests in flight to the
+// target, and that idle connections the tool keeps open do not make new
+// requests wait (ADR 0026).
+func TestConnectionLimit(t *testing.T) {
+	var inFlight, peak atomic.Int32
+	u := newUpstream(t, false, func() int {
+		n := inFlight.Add(1)
+		defer inFlight.Add(-1)
+		for {
+			p := peak.Load()
+			if n <= p || peak.CompareAndSwap(p, n) {
+				break
+			}
+		}
+		time.Sleep(50 * time.Millisecond)
+		return http.StatusOK
+	})
+	_, c, base := start(t, u, "http", "app.test", func(c *Config) { c.MaxConns = 2 })
+	client := func() *http.Client {
+		return &http.Client{Timeout: 5 * time.Second, Transport: c.Transport.(*http.Transport).Clone()}
+	}
+	// Four tools' clients each leave an idle keep-alive connection open.
+	for i := 0; i < 4; i++ {
+		if code, _, err := get(t, client(), base+"/", nil); err != nil || code != http.StatusOK {
+			t.Fatalf("client %d: %d %v", i, code, err)
+		}
+	}
+	start := time.Now()
+	if code, _, err := get(t, client(), base+"/", nil); err != nil || code != http.StatusOK {
+		t.Fatalf("new client behind idle connections: %d %v", code, err)
+	}
+	if d := time.Since(start); d > 2*time.Second {
+		t.Errorf("new request waited %v behind idle connections", d)
+	}
+	// Many requests at once reach the target at most MaxConns at a time.
+	peak.Store(0)
+	var wg sync.WaitGroup
+	for i := 0; i < 10; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if code, _, err := get(t, client(), base+"/", nil); err != nil || code != http.StatusOK {
+				t.Errorf("concurrent request: %d %v", code, err)
+			}
+		}()
+	}
+	wg.Wait()
+	if p := peak.Load(); p < 1 || p > 2 {
+		t.Errorf("peak requests in flight at the target: %d, want at most 2", p)
 	}
 }
