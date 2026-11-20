@@ -22,7 +22,7 @@ func TestAgentsGuideListsEveryField(t *testing.T) {
 	if !strings.Contains(docs.Agents, "currently 1") {
 		t.Error("guide does not state the current schemaVersion")
 	}
-	for _, v := range []any{report.Run{}, report.Comparison{}, report.PluginResult{}, findings.Finding{}, findings.Location{}, findings.Source{}} {
+	for _, v := range []any{report.Run{}, report.Environment{}, report.Engine{}, report.Comparison{}, report.PluginResult{}, findings.Finding{}, findings.Location{}, findings.Source{}} {
 		rt := reflect.TypeOf(v)
 		for i := range rt.NumField() {
 			name, _, _ := strings.Cut(rt.Field(i).Tag.Get("json"), ",")

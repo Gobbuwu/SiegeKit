@@ -18,6 +18,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -458,6 +459,63 @@ func (e *Engine) HasImage(ctx context.Context, image string) (bool, error) {
 func isNoSuchImage(msg string) bool {
 	m := strings.ToLower(msg)
 	return strings.Contains(m, "no such image") || strings.Contains(m, "image not known") || strings.Contains(m, "no such object")
+}
+
+// Info names the container engine a run used. Results measured with one
+// engine, mode or cgroup version do not carry over to another (Docker adds
+// noexec to /tmp, Podman does not), so every report and measurement names it
+// (ADR 0038).
+type Info struct {
+	Engine   string // "docker" or "podman"
+	Version  string
+	Rootless bool
+	Cgroup   string // "v1" or "v2"; empty when the engine does not say
+}
+
+// Describe asks the engine what it is. Podman's format is tried first, so a
+// "docker" command that is really Podman (podman-docker) is named as Podman.
+func (e *Engine) Describe(ctx context.Context) (Info, error) {
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	info := func(format string) (string, error) {
+		cmd := exec.CommandContext(ctx, e.Bin, "info", "--format", format) // #nosec G204 -- e.Bin is the engine found on PATH; the format is fixed
+		cmd.Env = minimalEnv()
+		var out, errOut tailBuffer
+		cmd.Stdout, cmd.Stderr = &out, &errOut
+		if err := cmd.Run(); err != nil {
+			return "", errors.New(lastLine(errOut.String(), err))
+		}
+		return strings.TrimSpace(out.String()), nil
+	}
+	if out, err := info("{{.Version.Version}}\t{{.Host.CgroupsVersion}}\t{{.Host.Security.Rootless}}"); err == nil {
+		return parseInfo("podman", out)
+	}
+	out, err := info("{{.ServerVersion}}\t{{.CgroupVersion}}\t{{range .SecurityOptions}}{{.}},{{end}}")
+	if err != nil {
+		return Info{}, fmt.Errorf("container engine is not working: %v", err)
+	}
+	return parseInfo("docker", out)
+}
+
+// parseInfo reads the tab-separated answer of Describe's formats.
+func parseInfo(engine, out string) (Info, error) {
+	f := strings.Split(out, "\t")
+	if len(f) != 3 || f[0] == "" || len(f[0]) > 64 || strings.ContainsAny(out, "\n\r") {
+		return Info{}, fmt.Errorf("unexpected %s info: %q", engine, out)
+	}
+	i := Info{Engine: engine, Version: f[0]}
+	switch strings.TrimPrefix(f[1], "v") {
+	case "1":
+		i.Cgroup = "v1"
+	case "2":
+		i.Cgroup = "v2"
+	}
+	if engine == "podman" {
+		i.Rootless = f[2] == "true"
+	} else {
+		i.Rootless = slices.Contains(strings.Split(f[2], ","), "name=rootless")
+	}
+	return i, nil
 }
 
 // Pull downloads image, a reference pinned by digest.

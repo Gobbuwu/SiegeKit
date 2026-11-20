@@ -54,6 +54,8 @@ type URLOptions struct {
 	WorkDir  string // parent for the private temporary directory; "" means the OS default
 	// FilesRoot is where pinned files are kept (ADR 0024).
 	FilesRoot string
+	// Environment names the machine and engine for the report (ADR 0038).
+	Environment *report.Environment
 	// Unavailable records plugins that cannot run because a dependency is
 	// missing (ADR 0016), keyed by plugin ID.
 	Unavailable map[string]Unavailable
@@ -80,7 +82,7 @@ func RunURL(ctx context.Context, run ActiveRunner, selected []*manifest.Manifest
 	if opt.Deployed {
 		mode = "deployed"
 	}
-	out := &report.Run{SiegeKitVersion: opt.Version, Target: opt.Target.String(), Mode: mode, Started: time.Now().UTC()}
+	out := &report.Run{SiegeKitVersion: opt.Version, Target: opt.Target.String(), Mode: mode, Started: time.Now().UTC(), Environment: opt.Environment}
 	var all []findings.Finding
 	for _, m := range selected {
 		if err := ctx.Err(); err != nil {

@@ -52,9 +52,9 @@ All verified by reading the code and, where marked, a real run. None is a securi
 
 ## Unverified (could not be checked here)
 
-- HTTPS targets with ZAP; Podman; macOS (GitHub assigned no macOS runner since 12:54 UTC).
+- HTTPS targets with ZAP; Podman; macOS (GitHub assigned no macOS runner since 12:54 UTC). Corrected 2026-11-20: CI already ran on rootless Podman (ADR 0038).
 - Deployed mode end to end against a real public host (no public DNS here).
-- Why Juice Shop's attack scan sent 3,443 requests locally but 944 in CI.
+- Why Juice Shop's attack scan sent 3,443 requests locally but 944 in CI. Answered 2026-11-20 (ADR 0038): CI runs on rootless Podman, where ZAP's browser starts and uses up the process limit, and the attack scan stops early. This item was not carried into the M2 record, so it went unchecked for a day.
 - ZAP memory on apps larger than Juice Shop.
 
 ## Fix plan: one PR, after #28 to #31 merge

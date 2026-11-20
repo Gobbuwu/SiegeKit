@@ -27,7 +27,7 @@ The [re-check](recheck-2026-11-19.md) found items that earlier ADRs decided but 
 | Pick checks by family (`--only secrets`) and `--profile` (ADR 0004) | Done in M2.5e (ADR 0029: `quick` and `full`). ADR 0022 changes ADR 0004 so that only URL scans ask before running; directory scans print the plan without asking. |
 | Compare runs: "new" and "fixed" since the last scan (ADR 0007, 0013) | M2, a small PR. Done: every scan is compared with the last saved run of the same target, in the terminal summary, `report.json` (`comparison`) and the HTML report. Findings whose check did not complete are listed as "not checked again", never as fixed. |
 | OSV-Scanner and OpenSSF Scorecard in CI; image signature checks (ADR 0008) | M2: OSV-Scanner and Scorecard in CI with M2.8; image signature checks as their own PR, after checking which publishers sign their images. |
-| Warning when the container engine is not rootless (ADR 0006) | No change until rootless engines are tested. |
+| Warning when the container engine is not rootless (ADR 0006) | Not built. Rootless Podman turned out to be tested all along: CI runs on it (ADR 0038). Rootless Docker is not tested. The warning waits for the engine matrix (design "checks that finish or say so", part 1). |
 | Restrict update containers to the publisher's hosts through the egress proxy (ADR 0014, threat model T19) | M2. |
 | Container-image targets (secrets in images, base-image packages) | M3. |
 | End-of-life runtime check | Declined: not a security issue in itself, and no data source has been confirmed. |

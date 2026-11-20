@@ -44,7 +44,7 @@ Facts checked before this ADR, with the pinned image `zaproxy/zap-stable:2.17.0`
 - On deployed targets the egress proxy allows only GET and HEAD from plugins that are not destructive (owner decision, 2026-11-19), so a tool's default cannot submit data there. `TestReadOnly` checks that POST, PUT, DELETE, PATCH, OPTIONS and other methods are refused over HTTP and HTTPS.
 - On deployed targets, ZAP checks only what the crawled responses show. Injection flaws on a deployed target are not tested until M2.10, which the report's "Not tested" list says.
 - ZAP's spider follows links in HTML. It finds little in single-page apps that build their pages in JavaScript: on OWASP Juice Shop v20.4.0 (2026-11-19) the attack scan sent 3,443 requests but reported only informational alerts, and none of Juice Shop's known injection flaws. ZAP's Ajax spider (a browser in the container) or an OpenAPI import would reach those pages; neither is in this ADR, and the CI gate checks Juice Shop only for issues the passive checks find.
-- Requests go through the relay one connection at a time per ZAP thread. Measured in the container test: the spider and passive checks on the fixture took about 20 seconds, and the attack scan sent 773 requests in under 30 seconds.
+- Requests go through the relay one connection at a time per ZAP thread. Measured in the container test: the spider and passive checks on the fixture took about 20 seconds, and the attack scan sent 773 requests in under 30 seconds. The environment was not recorded; most likely the development sandbox (rootful Docker 29.10.0, cgroup v1). Times and request counts differ by engine (ADR 0038).
 
 ## Alternatives considered
 

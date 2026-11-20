@@ -7,7 +7,7 @@
 
 ## Context
 
-ADR 0025 placed Nuclei in two plugins. Building them (M2.5b) showed facts that ADR 0025 did not cover. All of them were measured on 2026-11-19 with the pinned image and templates against SiegeKit's test app and a counting test server.
+ADR 0025 placed Nuclei in two plugins. Building them (M2.5b) showed facts that ADR 0025 did not cover. All of them were measured on 2026-11-19 with the pinned image and templates against SiegeKit's test app and a counting test server. Where each ran was not recorded except as below ("CI" is rootless Podman with cgroup v2, "local" rootful Docker 29.10.0 with cgroup v1; ADR 0038).
 
 - **Templates.** nuclei-templates publishes no release files, only its git tags, so the pin is GitHub's generated archive of tag `v10.5.2`: 10,105,056 bytes, SHA-256 `016b7abb…c574`. It was downloaded twice on a GitHub Actions runner with identical bytes (this development sandbox cannot download GitHub's generated archives). The archive holds regular files only.
 - **Skip list.** Nuclei skips some templates by default through the file `.nuclei-ignore`, but it reads that file only from its own configuration folder, not from a template folder given with `-t`. In a container it is therefore not applied.

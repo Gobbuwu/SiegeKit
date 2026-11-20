@@ -12,7 +12,7 @@ SiegeKit runs third-party tools against untrusted input: source code that may co
 
 Every plugin runs in its own short-lived container:
 
-- **Engine:** Docker or Podman, detected at start. Rootless mode is recommended and shown as a warning when not used. On macOS the engine's Linux VM is used.
+- **Engine:** Docker or Podman, detected at start (Podman first when both are installed). Rootless mode is recommended and shown as a warning when not used; the warning is not built yet (see the M2 plan). Every report names the engine, rootless or not, and the cgroup version ([ADR 0038](0038-run-environment.md)). On macOS the engine's Linux VM is used.
 - **Filesystem:** the target is mounted read-only; only a per-run output directory is writable. No home directory, SSH keys, cloud credentials or container-engine socket are mounted.
 - **Privileges:** runs as a non-root user inside the container, all Linux capabilities dropped, `no-new-privileges` set, read-only root filesystem where the tool allows it.
 - **Resources:** CPU, memory and process-count limits from the manifest; wall-clock timeout enforced by SiegeKit, which kills the container on expiry.
