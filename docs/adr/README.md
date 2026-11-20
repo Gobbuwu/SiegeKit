@@ -30,6 +30,7 @@ Each significant design decision is recorded as a short ADR before code is writt
 | [0024](0024-pinned-file-downloads.md) | Pinned file downloads (amends 0004, 0008, 0016) | Accepted |
 | [0025](0025-m2-5-web-tools.md) | Nuclei, ffuf and Schemathesis (M2.5) (amends 0023) | Accepted |
 | [0026](0026-nuclei.md) | Running Nuclei (amends 0004, 0018, 0021, 0023, 0025) | Accepted |
+| [0027](0027-ffuf.md) | Running ffuf (amends 0004, 0024) | Accepted |
 
 ADRs 0002 to 0011 were accepted at the M0 design sign-off on 2026-11-18.
 

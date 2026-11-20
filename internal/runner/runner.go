@@ -19,6 +19,7 @@ import (
 
 	"github.com/Gobbuwu/SiegeKit/internal/bandit"
 	"github.com/Gobbuwu/SiegeKit/internal/checks"
+	"github.com/Gobbuwu/SiegeKit/internal/ffuf"
 	"github.com/Gobbuwu/SiegeKit/internal/files"
 	"github.com/Gobbuwu/SiegeKit/internal/findings"
 	"github.com/Gobbuwu/SiegeKit/internal/manifest"
@@ -403,8 +404,8 @@ func substitute(args []string, cpus int, dataMount string) ([]string, error) {
 	)
 	out := make([]string, len(args))
 	for i, a := range args {
-		if strings.Contains(a, "{target-base}") {
-			return nil, errors.New("{target-base} is only available to plugins that scan URLs")
+		if strings.Contains(a, "{target-base}") || strings.Contains(a, "{wordlist}") {
+			return nil, errors.New("{target-base} and {wordlist} are only available to plugins that scan URLs")
 		}
 		if strings.Contains(a, "{ratelimit}") {
 			return nil, errors.New("{ratelimit} is only available to active plugins, which are not supported yet")
@@ -441,6 +442,9 @@ func readReport(path string, m *manifest.Manifest, suppressed *int) ([]findings.
 	}
 	if m.Output.Parser == "nuclei-jsonl" {
 		return nuclei.ToFindings(f, nuclei.Options{Plugin: m.ID, Family: m.Family})
+	}
+	if m.Output.Parser == "ffuf-json" {
+		return ffuf.ToFindings(f, ffuf.Options{Plugin: m.ID, Family: m.Family})
 	}
 	if m.Output.Parser == "bandit-json" {
 		return bandit.ToFindings(f, bandit.Options{Plugin: m.ID, Family: m.Family, MountPath: mount, Suppressed: suppressed})

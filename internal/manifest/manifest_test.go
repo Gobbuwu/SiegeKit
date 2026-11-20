@@ -133,6 +133,22 @@ func TestRejections(t *testing.T) {
 		"unknown parser":         func(m map[string]any) { m["output"].(map[string]any)["parser"] = "custom" },
 		"sarif parser on json":   func(m map[string]any) { m["output"].(map[string]any)["format"] = "json" },
 		"nuclei parser on sarif": func(m map[string]any) { m["output"].(map[string]any)["parser"] = "nuclei-jsonl" },
+		"ffuf parser on sarif":   func(m map[string]any) { m["output"].(map[string]any)["parser"] = "ffuf-json" },
+		"wordlist placeholder without wordlist": func(m map[string]any) {
+			m["run"].(map[string]any)["args"] = []string{"-w", "{wordlist}"}
+		},
+		"wordlist not used": func(m map[string]any) {
+			m["run"].(map[string]any)["wordlist"] = map[string]any{"local": "deployed.txt", "deployed": "deployed.txt"}
+		},
+		"wordlist on repo target": func(m map[string]any) {
+			m["run"].(map[string]any)["args"] = []string{"-w", "{wordlist}"}
+			m["run"].(map[string]any)["wordlist"] = map[string]any{"local": "deployed.txt", "deployed": "deployed.txt"}
+		},
+		"unknown wordlist": func(m map[string]any) {
+			m["targets"] = []string{"url"}
+			m["run"].(map[string]any)["args"] = []string{"-w", "{wordlist}"}
+			m["run"].(map[string]any)["wordlist"] = map[string]any{"local": "big.txt", "deployed": "deployed.txt"}
+		},
 		"data without section": func(m map[string]any) {
 			m["run"].(map[string]any)["args"] = []string{"--db", "{data}"}
 		},

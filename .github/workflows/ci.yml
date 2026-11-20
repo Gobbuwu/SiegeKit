@@ -69,6 +69,7 @@ jobs:
           go test -run='^$' -fuzz=FuzzSARIF -fuzztime=60s ./internal/sarif
           go test -run='^$' -fuzz=FuzzBandit -fuzztime=30s ./internal/bandit
           go test -run='^$' -fuzz=FuzzNuclei -fuzztime=30s ./internal/nuclei
+          go test -run='^$' -fuzz=FuzzFFUF -fuzztime=30s ./internal/ffuf
           go test -run='^$' -fuzz=FuzzBackendRules -fuzztime=30s ./internal/checks
           go test -run='^$' -fuzz=FuzzDotenv -fuzztime=30s ./internal/checks
           go test -run='^$' -fuzz=FuzzParse -fuzztime=60s ./internal/target

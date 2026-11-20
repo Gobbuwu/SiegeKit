@@ -193,16 +193,31 @@ func TestZAPFindsPlantedIssues(t *testing.T) {
 // directory that already holds the pinned files, for machines that cannot
 // download them.
 func TestNucleiFindsPlantedIssues(t *testing.T) {
+	findsPlanted(t, pinnedFiles(t, "nuclei", "nuclei-intrusive"), "nuclei", "nuclei-intrusive")
+}
+
+// TestFFUFFindsPlantedIssues runs ffuf from its pinned release archive in
+// the pinned Alpine image, with the local list, against the vulnerable test
+// app (M2.5c).
+func TestFFUFFindsPlantedIssues(t *testing.T) {
+	findsPlanted(t, pinnedFiles(t, "ffuf"), "ffuf")
+}
+
+// pinnedFiles returns a directory holding the pinned files of the plugins
+// ids, downloaded and checked as in ADR 0024 unless SIEGEKIT_TEST_FILES_ROOT
+// names a directory that already holds them (for machines that cannot
+// download them). It skips the test unless container tests are on.
+func pinnedFiles(t *testing.T, ids ...string) string {
+	t.Helper()
 	if os.Getenv("SIEGEKIT_CONTAINER_TESTS") != "1" {
 		t.Skip("set SIEGEKIT_CONTAINER_TESTS=1 to run container tests")
 	}
-	ms := []*manifest.Manifest{builtin(t, "nuclei"), builtin(t, "nuclei-intrusive")}
 	root := os.Getenv("SIEGEKIT_TEST_FILES_ROOT")
 	if root == "" {
 		root = t.TempDir()
 	}
-	for _, m := range ms {
-		for _, a := range FilesFor(m) {
+	for _, id := range ids {
+		for _, a := range FilesFor(builtin(t, id)) {
 			if !files.Installed(root, a) {
 				if err := files.Fetch(context.Background(), files.Client(), root, a); err != nil {
 					t.Fatal(err)
@@ -210,12 +225,9 @@ func TestNucleiFindsPlantedIssues(t *testing.T) {
 			}
 		}
 	}
-	findsPlanted(t, root, "nuclei", "nuclei-intrusive")
+	return root
 }
 
-// findsPlanted runs the plugins ids against the vulnerable test app behind
-// the relay and the egress proxy, and checks that each planted issue listed
-// for them in vulnAppIssues is found.
 func findsPlanted(t *testing.T, filesRoot string, ids ...string) {
 	t.Helper()
 	e, cfg, _, _ := activeSetup(t, http.StatusOK)
@@ -274,6 +286,9 @@ func findsPlanted(t *testing.T, filesRoot string, ids ...string) {
 				found[s.Plugin] = map[string]bool{}
 			}
 			found[s.Plugin][s.RuleID] = true
+			if u, err := url.Parse(f.Location.URI); err == nil {
+				found[s.Plugin][s.RuleID+" "+u.Path] = true
+			}
 		}
 	}
 	for i, p := range r.Plugins {

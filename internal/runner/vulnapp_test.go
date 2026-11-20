@@ -97,7 +97,9 @@ func vulnApp() http.Handler {
 }
 
 // vulnAppIssues maps each planted issue to the rule (ZAP rule ID or Nuclei
-// template ID) that must report it, per plugin.
+// template ID) that must report it, per plugin. A key "RULE /path" also
+// needs the finding's location to end in /path (ffuf reports every guessed
+// path under one rule).
 var vulnAppIssues = map[string]map[string]string{
 	"zap": {
 		"10020": "missing anti-clickjacking header",
@@ -119,5 +121,9 @@ var vulnAppIssues = map[string]map[string]string{
 	},
 	"nuclei-intrusive": {
 		"put-method-enabled": "PUT uploads a file that the server then serves",
+	},
+	"ffuf": {
+		"path-found /.env":        "exposed /.env",
+		"path-found /.git/config": "exposed /.git/config",
 	},
 }

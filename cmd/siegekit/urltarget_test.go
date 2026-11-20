@@ -62,7 +62,7 @@ const zapSARIF = `{"version":"2.1.0","runs":[{"tool":{"driver":{"name":"ZAP","ru
 "results":[{"ruleId":"10020","level":"warning","message":{"text":"no X-Frame-Options"},"locations":[{"physicalLocation":{"artifactLocation":{"uri":"TARGET"},"region":{"startLine":1}}}]}]}]}`
 
 // fakeActive records active runs and writes an empty report for each
-// tool: a ZAP report with one alert, and Nuclei's JSON Lines with none.
+// tool: a ZAP report with one alert, and Nuclei's and ffuf's with none.
 type fakeActive struct {
 	specs []sandbox.Spec
 	cfgs  []egress.Config
@@ -78,6 +78,9 @@ func useActive(t *testing.T) *fakeActive {
 			return nil, err
 		}
 		if err := os.WriteFile(filepath.Join(s.OutDir, "nuclei.jsonl"), nil, 0o600); err != nil {
+			return nil, err
+		}
+		if err := os.WriteFile(filepath.Join(s.OutDir, "ffuf.json"), []byte(`{"results":[]}`), 0o600); err != nil {
 			return nil, err
 		}
 		return &runner.ActiveResult{Result: &sandbox.Result{Status: sandbox.Completed}, Stats: egress.Stats{Requests: 3}}, nil
@@ -274,10 +277,10 @@ func TestScanURLRunsActivePlugins(t *testing.T) {
 			t.Errorf("output lacks %q:\n%s", want, out.String())
 		}
 	}
-	// All four plugins ran through the egress proxy with the local limits;
+	// All five plugins ran through the egress proxy with the local limits;
 	// the ZAP plugins got their configuration naming the target as a JSON
 	// string.
-	if len(f.specs) != 4 {
+	if len(f.specs) != 5 {
 		t.Fatalf("%d active runs", len(f.specs))
 	}
 	for i, s := range f.specs {
@@ -295,7 +298,7 @@ func TestScanURLRunsActivePlugins(t *testing.T) {
 		t.Fatal(err)
 	}
 	var e audit.Entry
-	if err := json.Unmarshal(b, &e); err != nil || e.Target != "http://localhost:3000/app" || e.Mode != "local" || e.Verification != "loopback + --authorized-host" || e.Confirmed != "localhost" || !slices.Equal(e.Plugins, []string{"nuclei", "nuclei-intrusive", "zap", "zap-active"}) {
+	if err := json.Unmarshal(b, &e); err != nil || e.Target != "http://localhost:3000/app" || e.Mode != "local" || e.Verification != "loopback + --authorized-host" || e.Confirmed != "localhost" || !slices.Equal(e.Plugins, []string{"ffuf", "nuclei", "nuclei-intrusive", "zap", "zap-active"}) {
 		t.Errorf("audit entry %+v %v", e, err)
 	}
 	// The report names the URL and the request counts.
@@ -329,11 +332,11 @@ func TestScanURLDestructiveNeedsConfirmation(t *testing.T) {
 		verification string
 		want         string
 	}{
-		{"no terminal", nil, false, "", 2, "loopback", "pass --authorized-host localhost if you"},
-		{"--yes does not count", []string{"--yes"}, false, "", 2, "loopback", "needs a person's confirmation"},
-		{"typed yes", nil, true, "yes\n", 4, "loopback + typed yes", "Type yes to run them"},
-		{"typed no", nil, true, "no\n", 2, "loopback", `"yes" was not typed`},
-		{"flag", []string{"--authorized-host", "LOCALHOST"}, false, "", 4, "loopback + --authorized-host", "zap-active"},
+		{"no terminal", nil, false, "", 3, "loopback", "pass --authorized-host localhost if you"},
+		{"--yes does not count", []string{"--yes"}, false, "", 3, "loopback", "needs a person's confirmation"},
+		{"typed yes", nil, true, "yes\n", 5, "loopback + typed yes", "Type yes to run them"},
+		{"typed no", nil, true, "no\n", 3, "loopback", `"yes" was not typed`},
+		{"flag", []string{"--authorized-host", "LOCALHOST"}, false, "", 5, "loopback + --authorized-host", "zap-active"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f := useActive(t)
@@ -351,10 +354,10 @@ func TestScanURLDestructiveNeedsConfirmation(t *testing.T) {
 			if err != nil || json.Unmarshal(b, &e) != nil || e.Verification != tc.verification || len(e.Plugins) != tc.runs {
 				t.Errorf("audit entry %+v %v", e, err)
 			}
-			if tc.runs == 2 { // the two destructive plugins were skipped
+			if tc.runs == 3 { // the two destructive plugins were skipped
 				b, err := os.ReadFile(filepath.Join("siegekit-report", "report.json"))
 				var r report.Run
-				if err != nil || json.Unmarshal(b, &r) != nil || len(r.Plugins) != 4 || r.Plugins[1].ID != "nuclei-intrusive" || r.Plugins[1].Status != report.Skipped || r.Plugins[3].ID != "zap-active" || r.Plugins[3].Status != report.Skipped {
+				if err != nil || json.Unmarshal(b, &r) != nil || len(r.Plugins) != 5 || r.Plugins[2].ID != "nuclei-intrusive" || r.Plugins[2].Status != report.Skipped || r.Plugins[4].ID != "zap-active" || r.Plugins[4].Status != report.Skipped {
 					t.Errorf("report %+v %v", r.Plugins, err)
 				}
 			}

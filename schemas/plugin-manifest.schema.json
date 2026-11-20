@@ -286,9 +286,9 @@
           "minItems": 1,
           "items": {
             "type": "string",
-            "pattern": "^([^{}]|\\{(target|target-base|outdir|workdir|threads|ratelimit|data|config)\\})*$"
+            "pattern": "^([^{}]|\\{(target|target-base|outdir|workdir|threads|ratelimit|data|config|wordlist)\\})*$"
           },
-          "description": "Argument vector passed directly to the tool, never through a shell. Only the listed placeholders are allowed; {data} needs a data section and {config} needs run.config."
+          "description": "Argument vector passed directly to the tool, never through a shell. Only the listed placeholders are allowed; {data} needs a data section, {config} needs run.config and {wordlist} needs run.wordlist."
         },
         "env": {
           "type": "object",
@@ -304,6 +304,29 @@
             "maxLength": 16384
           },
           "description": "Extra environment variables for the tool. Values are passed as written (no placeholders). Names that change how programs load code or reach the network, or that SiegeKit sets itself, are refused."
+        },
+        "wordlist": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "local",
+            "deployed"
+          ],
+          "description": "Path lists that SiegeKit ships, one for local and one for deployed targets; {wordlist} in args is the chosen list's path, mounted read-only (ADR 0027). Only for plugins whose only target is url.",
+          "properties": {
+            "local": {
+              "enum": [
+                "deployed.txt",
+                "seclists-common.txt"
+              ]
+            },
+            "deployed": {
+              "enum": [
+                "deployed.txt",
+                "seclists-common.txt"
+              ]
+            }
+          }
         },
         "config": {
           "type": "object",
@@ -381,7 +404,8 @@
             "sarif-checkov",
             "sarif-zap",
             "bandit-json",
-            "nuclei-jsonl"
+            "nuclei-jsonl",
+            "ffuf-json"
           ]
         },
         "file": {
