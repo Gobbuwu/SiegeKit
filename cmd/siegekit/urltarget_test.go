@@ -23,6 +23,7 @@ import (
 	"github.com/Gobbuwu/SiegeKit/internal/report"
 	"github.com/Gobbuwu/SiegeKit/internal/runner"
 	"github.com/Gobbuwu/SiegeKit/internal/sandbox"
+	"github.com/Gobbuwu/SiegeKit/internal/served"
 	"github.com/Gobbuwu/SiegeKit/internal/target"
 	"github.com/Gobbuwu/SiegeKit/internal/verify"
 	"github.com/Gobbuwu/SiegeKit/plugins"
@@ -75,7 +76,16 @@ type fakeActive struct {
 	got    []string
 	// spec holds the files in the OpenAPI mount of the last run.
 	spec map[string]string
+	// collected is what the served-secrets check fetched; leaks is the
+	// Gitleaks report it gets. scanned lists the files Gitleaks was given.
+	collected served.Result
+	leaks     string
+	scanned   []string
+	servedCfg []egress.Config
 }
+
+// noLeaks is an empty Gitleaks report.
+const noLeaks = `{"version":"2.1.0","runs":[{"tool":{"driver":{"name":"gitleaks"}},"results":[]}]}`
 
 const testSpec = `{"openapi":"3.0.3","info":{"title":"t","version":"1"},"servers":[{"url":"/api"}],"paths":{"/items":{"get":{"responses":{"200":{"description":"ok"}}}}}}`
 
@@ -109,7 +119,26 @@ func useActive(t *testing.T) *fakeActive {
 		}
 		return &runner.ActiveResult{Result: &sandbox.Result{Status: sandbox.Completed}, Stats: egress.Stats{Requests: 3}}, nil
 	}
-	useEngine(t, &fakeEngine{}, nil)
+	f.collected = served.Result{Files: []served.File{{Name: "001-page.html", URL: "start", Kind: served.Page}}, Requests: 1}
+	f.leaks = noLeaks
+	useEngine(t, &fakeEngine{run: fakeExec(func(s sandbox.Spec) (*sandbox.Result, error) {
+		es, _ := os.ReadDir(s.TargetDir)
+		for _, e := range es {
+			f.scanned = append(f.scanned, e.Name())
+		}
+		return &sandbox.Result{Status: sandbox.Completed}, os.WriteFile(filepath.Join(s.OutDir, "gitleaks.sarif"), []byte(f.leaks), 0o644)
+	})}, nil)
+	oldCollect := servedCollect
+	servedCollect = func(_ context.Context, cfg egress.Config, _ float64, dir string) (served.Result, error) {
+		f.servedCfg = append(f.servedCfg, cfg)
+		for _, file := range f.collected.Files {
+			if err := os.WriteFile(filepath.Join(dir, file.Name), []byte("x"), 0o644); err != nil {
+				return served.Result{}, err
+			}
+		}
+		return f.collected, nil
+	}
+	t.Cleanup(func() { servedCollect = oldCollect })
 	// These tests check the Linux path on every host; macOS is refused
 	// (TestScanURLNotRun).
 	f.served = map[string]string{"/openapi.json": testSpec}
@@ -332,7 +361,7 @@ func TestScanURLRunsActivePlugins(t *testing.T) {
 		t.Fatal(err)
 	}
 	var e audit.Entry
-	if err := json.Unmarshal(b, &e); err != nil || e.Target != "http://localhost:3000/app" || e.Mode != "local" || e.Verification != "loopback + --authorized-host" || e.Confirmed != "localhost" || !slices.Equal(e.Plugins, []string{"ffuf", "nuclei", "nuclei-default-login", "nuclei-intrusive", "schemathesis", "zap", "zap-active"}) {
+	if err := json.Unmarshal(b, &e); err != nil || e.Target != "http://localhost:3000/app" || e.Mode != "local" || e.Verification != "loopback + --authorized-host" || e.Confirmed != "localhost" || !slices.Equal(e.Plugins, []string{"ffuf", "nuclei", "nuclei-default-login", "nuclei-intrusive", "schemathesis", "zap", "zap-active", "served-secrets"}) {
 		t.Errorf("audit entry %+v %v", e, err)
 	}
 	// The report names the URL and the request counts.
@@ -341,7 +370,7 @@ func TestScanURLRunsActivePlugins(t *testing.T) {
 		t.Fatal(err)
 	}
 	var r report.Run
-	if err := json.Unmarshal(b, &r); err != nil || r.Target != "http://localhost:3000/app" || len(r.Findings) != 1 || r.Plugins[1].Requests != 3 || r.Plugins[0].ID != "login-throttle" || r.Plugins[0].Status != report.Skipped || !strings.Contains(r.Plugins[0].Reason, "no login was given") {
+	if err := json.Unmarshal(b, &r); err != nil || r.Target != "http://localhost:3000/app" || len(r.Findings) != 1 || r.Plugins[2].Requests != 3 || r.Plugins[1].ID != "served-secrets" || r.Plugins[1].Status != report.Ran || r.Plugins[0].ID != "login-throttle" || r.Plugins[0].Status != report.Skipped || !strings.Contains(r.Plugins[0].Reason, "no login was given") {
 		t.Errorf("report %+v %v", r, err)
 	}
 	if f := r.Findings[0]; f.Location.URI != "http://localhost:3000/app" || !slices.Equal(f.CWEs, []string{"CWE-1021"}) || !strings.HasPrefix(f.HelpURI, "https://developer.mozilla.org/") {
@@ -385,13 +414,13 @@ func TestScanURLDestructiveNeedsConfirmation(t *testing.T) {
 			}
 			b, err := os.ReadFile(filepath.Join(data, "siegekit", "audit.log"))
 			var e audit.Entry
-			if err != nil || json.Unmarshal(b, &e) != nil || e.Verification != tc.verification || len(e.Plugins) != tc.runs {
+			if err != nil || json.Unmarshal(b, &e) != nil || e.Verification != tc.verification || len(e.Plugins) != tc.runs+1 || e.Plugins[tc.runs] != "served-secrets" {
 				t.Errorf("audit entry %+v %v", e, err)
 			}
 			if tc.runs == 3 { // the four destructive plugins were skipped
 				b, err := os.ReadFile(filepath.Join("siegekit-report", "report.json"))
 				var r report.Run
-				if err != nil || json.Unmarshal(b, &r) != nil || len(r.Plugins) != 8 {
+				if err != nil || json.Unmarshal(b, &r) != nil || len(r.Plugins) != 9 {
 					t.Fatalf("report %+v %v", r.Plugins, err)
 				}
 				for _, p := range r.Plugins {
@@ -581,11 +610,11 @@ func TestScanURLProfile(t *testing.T) {
 	}
 	b, err := os.ReadFile(filepath.Join("siegekit-report", "report.json"))
 	var r report.Run
-	if err != nil || json.Unmarshal(b, &r) != nil || len(r.Plugins) != 8 {
+	if err != nil || json.Unmarshal(b, &r) != nil || len(r.Plugins) != 9 {
 		t.Fatalf("report %+v %v", r.Plugins, err)
 	}
 	for _, p := range r.Plugins {
-		quick := p.ID == "ffuf" || p.ID == "nuclei" || p.ID == "zap"
+		quick := p.ID == "ffuf" || p.ID == "nuclei" || p.ID == "zap" || p.ID == "served-secrets"
 		if quick && p.Status != report.Ran || !quick && (p.Status != report.Skipped || !strings.Contains(p.Reason, "--profile quick")) {
 			t.Errorf("plugin %+v", p)
 		}

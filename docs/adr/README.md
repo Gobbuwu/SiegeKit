@@ -35,6 +35,8 @@ Each significant design decision is recorded as a short ADR before code is writt
 | [0029](0029-check-selection.md) | Choosing checks by family and profile (amends 0004) | Accepted |
 | [0030](0030-login-throttling.md) | The login throttling check (amends 0010, 0029) | Accepted |
 | [0031](0031-default-logins.md) | Default credentials with Nuclei (amends 0010, 0026, 0029) | Accepted |
+| [0032](0032-served-secrets.md) | Secrets in served files (amends 0010) | Accepted |
+| [0033](0033-mobile-app-targets.md) | Mobile app targets (amends 0004, when built in M3) | Accepted |
 
 ADRs 0002 to 0011 were accepted at the M0 design sign-off on 2026-11-18.
 
