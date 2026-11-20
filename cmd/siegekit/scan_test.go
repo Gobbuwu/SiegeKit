@@ -159,7 +159,7 @@ func TestScanErrors(t *testing.T) {
 		{"bad level", []string{"--fail-on", "severe", dir}, nil, nil, exitUsage, "unknown severity"},
 		{"missing dir", []string{filepath.Join(dir, "missing")}, nil, nil, exitInvalid, "no such file"},
 		{"not a dir", []string{file}, nil, nil, exitInvalid, "not a directory"},
-		{"unknown plugin", []string{"--only", "nmap", dir}, nil, nil, exitInvalid, `unknown plugin "nmap"`},
+		{"unknown plugin", []string{"--only", "nmap", dir}, nil, nil, exitInvalid, `unknown plugin or family "nmap"`},
 		{"yes and no-install", []string{"--yes", "--no-install", dir}, nil, nil, exitUsage, "cannot be used together"},
 		{"no engine", []string{"--no-save", "--report-dir", filepath.Join(dir, "r0"), dir}, nil, errors.New("no container engine found"), exitOK, "SiegeKit does not install one"},
 		{"incomplete", []string{"--no-save", "--report-dir", filepath.Join(dir, "r"), dir}, fakeExec(func(sandbox.Spec) (*sandbox.Result, error) {

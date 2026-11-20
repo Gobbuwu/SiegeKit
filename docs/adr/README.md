@@ -32,6 +32,7 @@ Each significant design decision is recorded as a short ADR before code is writt
 | [0026](0026-nuclei.md) | Running Nuclei (amends 0004, 0018, 0021, 0023, 0025) | Accepted |
 | [0027](0027-ffuf.md) | Running ffuf (amends 0004, 0024) | Accepted |
 | [0028](0028-schemathesis.md) | Running Schemathesis (amends 0004, 0025) | Accepted |
+| [0029](0029-check-selection.md) | Choosing checks by family and profile (amends 0004) | Accepted |
 
 ADRs 0002 to 0011 were accepted at the M0 design sign-off on 2026-11-18.
 

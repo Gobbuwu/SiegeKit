@@ -69,8 +69,13 @@ for private addresses), so a script or AI assistant cannot confirm a live
 system on its own.
 
 Flags:
-  --only a,b        run only these plugins
-  --skip a,b        do not run these plugins
+  --only a,b        run only these plugins or families (sast, sca,
+                    secrets, iac, dast), for example --only secrets,trivy
+  --skip a,b        do not run these plugins or families
+  --profile NAME    full (default) runs every check; quick leaves out the
+                    attack tests of URL scans (zap-active, nuclei-intrusive,
+                    schemathesis); ZAP's attack scan alone can take 30
+                    minutes
   --fail-on LEVEL   exit 3 if a finding is at or above LEVEL
                     (critical, high, medium, low, info; default high)
   --report-dir DIR  where to write report.html, report.json and report.sarif
@@ -114,6 +119,7 @@ func scan(args []string, stdout, stderr io.Writer) int {
 	noInstall := fl.Bool("no-install", false, "")
 	requireAll := fl.Bool("require-all", false, "")
 	openAPI := fl.String("openapi", "", "")
+	profile := fl.String("profile", "full", "")
 	// Allow flags before and after DIR.
 	var pos []string
 	for {
@@ -136,6 +142,10 @@ func scan(args []string, stdout, stderr io.Writer) int {
 	}
 	if *yes && *noInstall {
 		fmt.Fprint(stderr, "siegekit scan: --yes and --no-install cannot be used together\n")
+		return exitUsage
+	}
+	if !slices.Contains(runner.Profiles, *profile) {
+		fmt.Fprintf(stderr, "siegekit scan: --profile must be one of %s\n", strings.Join(runner.Profiles, ", "))
 		return exitUsage
 	}
 	threshold, err := findings.ParseSeverity(*failOn)
@@ -163,7 +173,7 @@ func scan(args []string, stdout, stderr io.Writer) int {
 			deployed: *deployed, authorizedHost: *authorizedHost,
 			only: splitList(*only), skip: splitList(*skip), threshold: threshold,
 			reportDir: *reportDir, noSave: *noSave, consent: consent{yes: *yes, none: *noInstall},
-			requireAll: *requireAll, openAPI: *openAPI,
+			requireAll: *requireAll, openAPI: *openAPI, profile: *profile,
 		}, stdout, stderr)
 	}
 	if *deployed || *authorizedHost != "" || *openAPI != "" {

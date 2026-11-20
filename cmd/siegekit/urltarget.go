@@ -84,6 +84,7 @@ type urlScan struct {
 	consent        consent
 	requireAll     bool
 	openAPI        string // --openapi: a file or a URL on the target's origin
+	profile        string // --profile: full or quick
 }
 
 // scanURL applies the target rules of ADR 0005, then runs the active
@@ -298,9 +299,14 @@ func runURL(ctx context.Context, u *target.URL, addrs []netip.Addr, mode target.
 	unavailable := map[string]runner.Unavailable{}
 	var runnable []*manifest.Manifest
 	for _, m := range selected {
+		if r := runner.ProfileReason(m, o.profile); r != "" && slices.Contains(o.only, m.ID) {
+			return fail(fmt.Errorf("--only names %s, which --profile %s does not run", m.ID, o.profile))
+		}
 		switch r := runner.SkipReason(m, o.deployed); {
 		case r != "":
 			unavailable[m.ID] = runner.Unavailable{Status: report.Skipped, Reason: r}
+		case runner.ProfileReason(m, o.profile) != "":
+			unavailable[m.ID] = runner.Unavailable{Status: report.Skipped, Reason: runner.ProfileReason(m, o.profile)}
 		case hostOS != "linux":
 			unavailable[m.ID] = runner.Unavailable{Status: report.Failed, Reason: "active tests run only on Linux for now (ADR 0018)"}
 		default:

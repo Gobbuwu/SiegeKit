@@ -35,39 +35,56 @@ type Executor interface {
 	Run(ctx context.Context, s sandbox.Spec) (*sandbox.Result, error)
 }
 
-// Select returns the plugins and built-in checks that scan targetKind,
-// filtered by only (if not empty) and skip. Naming one that does not exist,
-// or one that cannot scan targetKind, is an error so a typo never silently
-// drops a check.
+// Select returns the plugins and built-in checks that apply to targetKind,
+// narrowed by --only and --skip. Each name is a plugin or check ID, or a
+// family such as "secrets" or "dast" (ADR 0004), which stands for every
+// plugin and check of that family. A name that is unknown, or that has
+// nothing for this kind of target, is an error.
 func Select(all []*manifest.Manifest, builtins []checks.Check, targetKind string, only, skip []string) ([]*manifest.Manifest, []checks.Check, error) {
-	targets := map[string][]string{}
+	type entry struct {
+		family  string
+		targets []string
+	}
+	byID := map[string]entry{}
 	for _, m := range all {
-		targets[m.ID] = m.Targets
+		byID[m.ID] = entry{m.Family, m.Targets}
 	}
 	for _, c := range builtins {
-		targets[c.ID] = c.Targets
+		byID[c.ID] = entry{c.Family, c.Targets}
 	}
-	for _, id := range slices.Concat(only, skip) {
-		t, ok := targets[id]
-		if !ok {
-			return nil, nil, fmt.Errorf("unknown plugin %q", id)
+	for _, name := range slices.Concat(only, skip) {
+		if e, ok := byID[name]; ok {
+			if !slices.Contains(e.targets, targetKind) {
+				return nil, nil, fmt.Errorf("plugin %q cannot scan a %s target", name, targetKind)
+			}
+			continue
 		}
-		if !slices.Contains(t, targetKind) {
-			return nil, nil, fmt.Errorf("plugin %q cannot scan a %s target", id, targetKind)
+		if !slices.Contains(manifest.Families, name) {
+			return nil, nil, fmt.Errorf("unknown plugin or family %q (families: %s)", name, strings.Join(manifest.Families, ", "))
+		}
+		found := false
+		for _, e := range byID {
+			found = found || e.family == name && slices.Contains(e.targets, targetKind)
+		}
+		if !found {
+			return nil, nil, fmt.Errorf("no %s plugin can scan a %s target", name, targetKind)
 		}
 	}
-	want := func(id string, t []string) bool {
-		return slices.Contains(t, targetKind) && !slices.Contains(skip, id) && (len(only) == 0 || slices.Contains(only, id))
+	named := func(list []string, id, family string) bool {
+		return slices.Contains(list, id) || slices.Contains(list, family)
+	}
+	want := func(id, family string, t []string) bool {
+		return slices.Contains(t, targetKind) && !named(skip, id, family) && (len(only) == 0 || named(only, id, family))
 	}
 	var ms []*manifest.Manifest
 	for _, m := range all {
-		if want(m.ID, m.Targets) {
+		if want(m.ID, m.Family, m.Targets) {
 			ms = append(ms, m)
 		}
 	}
 	var cs []checks.Check
 	for _, c := range builtins {
-		if want(c.ID, c.Targets) {
+		if want(c.ID, c.Family, c.Targets) {
 			cs = append(cs, c)
 		}
 	}
@@ -75,6 +92,19 @@ func Select(all []*manifest.Manifest, builtins []checks.Check, targetKind string
 		return nil, nil, errors.New("no plugins selected")
 	}
 	return ms, cs, nil
+}
+
+// Profiles are the values of --profile (owner decision 2026-11-20): full,
+// the default, runs every selected check; quick leaves out the attack tests
+// (destructive plugins), which only URL scans of local targets run.
+var Profiles = []string{"full", "quick"}
+
+// ProfileReason says why m does not run in profile, or "".
+func ProfileReason(m *manifest.Manifest, profile string) string {
+	if profile == "quick" && m.Destructive != nil && *m.Destructive {
+		return "not run with --profile quick, which leaves out attack tests; use --profile full (the default) to run it"
+	}
+	return ""
 }
 
 // Options for one run.
