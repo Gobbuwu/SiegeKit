@@ -149,6 +149,26 @@ func TestRejections(t *testing.T) {
 			m["run"].(map[string]any)["args"] = []string{"-w", "{wordlist}"}
 			m["run"].(map[string]any)["wordlist"] = map[string]any{"local": "big.txt", "deployed": "deployed.txt"}
 		},
+		"schemathesis parser on sarif": func(m map[string]any) { m["output"].(map[string]any)["parser"] = "schemathesis-json" },
+		"schemathesis parser without spec": func(m map[string]any) {
+			m["output"].(map[string]any)["format"] = "json"
+			m["output"].(map[string]any)["parser"] = "schemathesis-json"
+		},
+		"openapi on repo target": func(m map[string]any) {
+			m["run"].(map[string]any)["args"] = []string{"run", "{openapi}"}
+		},
+		"findings exit code 0": func(m map[string]any) {
+			m["run"].(map[string]any)["findingsExitCodes"] = []int{0}
+		},
+		"findings exit code repeated": func(m map[string]any) {
+			m["run"].(map[string]any)["findingsExitCodes"] = []int{1, 1}
+		},
+		"findings exit code 126": func(m map[string]any) {
+			m["run"].(map[string]any)["findingsExitCodes"] = []int{126}
+		},
+		"too many findings exit codes": func(m map[string]any) {
+			m["run"].(map[string]any)["findingsExitCodes"] = []int{1, 2, 3, 4, 5}
+		},
 		"data without section": func(m map[string]any) {
 			m["run"].(map[string]any)["args"] = []string{"--db", "{data}"}
 		},

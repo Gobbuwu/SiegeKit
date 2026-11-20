@@ -38,10 +38,10 @@ var (
 	GPUModes   = []string{"none", "optional", "required"}
 	Networks   = []string{"none", "target-only"}
 	Formats    = []string{"sarif", "json", "jsonl", "xml", "text"}
-	Placeholds = []string{"target", "target-base", "outdir", "workdir", "threads", "ratelimit", "data", "config", "wordlist"}
+	Placeholds = []string{"target", "target-base", "target-origin", "outdir", "workdir", "threads", "ratelimit", "data", "config", "wordlist", "openapi"}
 	// ConfigPlaceholds are the placeholders allowed in run.config strings.
 	ConfigPlaceholds = []string{"target", "target-regex"}
-	Parsers          = []string{"sarif", "sarif-gitleaks", "sarif-checkov", "sarif-zap", "bandit-json", "nuclei-jsonl", "ffuf-json"}
+	Parsers          = []string{"sarif", "sarif-gitleaks", "sarif-checkov", "sarif-zap", "bandit-json", "nuclei-jsonl", "ffuf-json", "schemathesis-json"}
 )
 
 var (
@@ -162,11 +162,19 @@ type Run struct {
 	// local and deployed targets; {wordlist} in Args is the chosen list's
 	// path, mounted read-only (ADR 0027).
 	Wordlist *Wordlist `json:"wordlist,omitempty"`
+	// FindingsExitCodes are exit codes other than 0 with which the tool
+	// says it ran and found issues, such as Schemathesis's 1 (ADR 0028).
+	// The report is still read and checked.
+	FindingsExitCodes []int `json:"findingsExitCodes,omitempty"`
 }
 
 // WordlistMount is where SiegeKit mounts a plugin's run.wordlist; no
 // artifact may use it.
 const WordlistMount = "/siegekit/files/wordlist"
+
+// OpenAPIMount is where SiegeKit mounts the OpenAPI spec for {openapi}
+// (ADR 0028); no artifact may use it.
+const OpenAPIMount = "/siegekit/files/openapi"
 
 // Wordlist is a URL plugin's path list for each target mode.
 type Wordlist struct {
@@ -331,6 +339,21 @@ func (m *Manifest) Validate() error {
 				}
 			}
 		}
+		usesSpec := slices.ContainsFunc(m.Run.Args, func(a string) bool { return strings.Contains(a, "{openapi}") })
+		if usesSpec && !slices.Equal(m.Targets, []string{"url"}) {
+			add("{openapi} is only allowed for plugins whose only target is url")
+		}
+		if m.Output != nil && m.Output.Parser == "schemathesis-json" && !usesSpec {
+			add("output.parser \"schemathesis-json\" needs {openapi} in run.args")
+		}
+		if len(m.Run.FindingsExitCodes) > 4 {
+			add("run.findingsExitCodes has more than 4 entries")
+		}
+		for i, c := range m.Run.FindingsExitCodes {
+			if c < 1 || c > 125 || slices.Index(m.Run.FindingsExitCodes, c) != i {
+				add("run.findingsExitCodes[%d] %d must be a distinct exit code from 1 to 125", i, c)
+			}
+		}
 	}
 	if m.LocalOnly && m.Mode != "active" {
 		add("localOnly is only allowed for active plugins")
@@ -378,6 +401,9 @@ func (m *Manifest) Validate() error {
 		}
 		if m.Output.Parser == "ffuf-json" && m.Output.Format != "json" {
 			add("output.parser \"ffuf-json\" needs output.format \"json\"")
+		}
+		if m.Output.Parser == "schemathesis-json" && m.Output.Format != "json" {
+			add("output.parser \"schemathesis-json\" needs output.format \"json\"")
 		}
 	}
 
@@ -458,6 +484,9 @@ func (m *Manifest) validateTool(p *[]string) {
 			mounts[a.Platform+" "+a.Mount] = f
 			if a.Mount == WordlistMount {
 				*p = append(*p, fmt.Sprintf("%s.mount %s is reserved for run.wordlist", f, a.Mount))
+			}
+			if a.Mount == OpenAPIMount {
+				*p = append(*p, fmt.Sprintf("%s.mount %s is reserved for the OpenAPI spec", f, a.Mount))
 			}
 		}
 		checkEnum(p, f+".platform", a.Platform, Platforms)

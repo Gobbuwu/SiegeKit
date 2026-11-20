@@ -286,9 +286,9 @@
           "minItems": 1,
           "items": {
             "type": "string",
-            "pattern": "^([^{}]|\\{(target|target-base|outdir|workdir|threads|ratelimit|data|config|wordlist)\\})*$"
+            "pattern": "^([^{}]|\\{(target|target-base|target-origin|outdir|workdir|threads|ratelimit|data|config|wordlist|openapi)\\})*$"
           },
-          "description": "Argument vector passed directly to the tool, never through a shell. Only the listed placeholders are allowed; {data} needs a data section, {config} needs run.config and {wordlist} needs run.wordlist."
+          "description": "Argument vector passed directly to the tool, never through a shell. Only the listed placeholders are allowed; {data} needs a data section, {config} needs run.config and {wordlist} needs run.wordlist. {openapi} is the OpenAPI spec's path (ADR 0028) and is only for plugins whose only target is url."
         },
         "env": {
           "type": "object",
@@ -304,6 +304,17 @@
             "maxLength": 16384
           },
           "description": "Extra environment variables for the tool. Values are passed as written (no placeholders). Names that change how programs load code or reach the network, or that SiegeKit sets itself, are refused."
+        },
+        "findingsExitCodes": {
+          "type": "array",
+          "maxItems": 4,
+          "uniqueItems": true,
+          "items": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 125
+          },
+          "description": "Exit codes other than 0 with which the tool says it ran and found issues (ADR 0028). The report is still read and checked."
         },
         "wordlist": {
           "type": "object",
@@ -405,7 +416,8 @@
             "sarif-zap",
             "bandit-json",
             "nuclei-jsonl",
-            "ffuf-json"
+            "ffuf-json",
+            "schemathesis-json"
           ]
         },
         "file": {

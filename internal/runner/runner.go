@@ -27,6 +27,7 @@ import (
 	"github.com/Gobbuwu/SiegeKit/internal/report"
 	"github.com/Gobbuwu/SiegeKit/internal/sandbox"
 	"github.com/Gobbuwu/SiegeKit/internal/sarif"
+	"github.com/Gobbuwu/SiegeKit/internal/schemathesis"
 )
 
 // Executor runs one sandboxed tool. *sandbox.Engine implements it.
@@ -311,13 +312,13 @@ func runPlugin(ctx context.Context, ex Executor, m *manifest.Manifest, opt Optio
 		return fail(report.TimedOut, "stopped after %d seconds", m.Resources.TimeoutSeconds)
 	case res.Status == sandbox.Failed:
 		return fail(report.Failed, "%s", lastLine(res.Stderr))
-	case res.ExitCode != 0:
-		// Built-in plugins are configured to exit 0 when they find issues, so
-		// any other exit code means the tool itself failed.
+	case res.ExitCode != 0 && !slices.Contains(m.Run.FindingsExitCodes, res.ExitCode):
+		// Built-in plugins exit 0, or with a code their manifest lists, when
+		// they find issues, so any other exit code means the tool failed.
 		return fail(report.Failed, "tool exited with code %d: %s", res.ExitCode, lastLine(res.Stderr))
 	}
 	var suppressed int
-	fs, err := readReport(filepath.Join(out, m.Output.File), m, &suppressed)
+	fs, err := readReport(filepath.Join(out, m.Output.File), m, &suppressed, reportContext{})
 	if err != nil {
 		return fail(report.Failed, "%v", err)
 	}
@@ -404,8 +405,10 @@ func substitute(args []string, cpus int, dataMount string) ([]string, error) {
 	)
 	out := make([]string, len(args))
 	for i, a := range args {
-		if strings.Contains(a, "{target-base}") || strings.Contains(a, "{wordlist}") {
-			return nil, errors.New("{target-base} and {wordlist} are only available to plugins that scan URLs")
+		for _, p := range []string{"{target-base}", "{target-origin}", "{wordlist}", "{openapi}"} {
+			if strings.Contains(a, p) {
+				return nil, fmt.Errorf("%s is only available to plugins that scan URLs", p)
+			}
 		}
 		if strings.Contains(a, "{ratelimit}") {
 			return nil, errors.New("{ratelimit} is only available to active plugins, which are not supported yet")
@@ -418,9 +421,16 @@ func substitute(args []string, cpus int, dataMount string) ([]string, error) {
 	return out, nil
 }
 
+// reportContext is what a URL plugin's parser needs to know about the run.
+type reportContext struct {
+	Origin    string // the target's scheme, host and port
+	BasePath  string // the OpenAPI spec's base path, if BaseKnown
+	BaseKnown bool
+}
+
 // readReport opens the tool's report without following symlinks, because the
 // output directory was writable by the tool (threat model T7).
-func readReport(path string, m *manifest.Manifest, suppressed *int) ([]findings.Finding, error) {
+func readReport(path string, m *manifest.Manifest, suppressed *int, rc reportContext) ([]findings.Finding, error) {
 	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0) // #nosec G304 -- the report the tool wrote in our private output directory; symlinks refused
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, fmt.Errorf("tool wrote no report %q", filepath.Base(path))
@@ -445,6 +455,9 @@ func readReport(path string, m *manifest.Manifest, suppressed *int) ([]findings.
 	}
 	if m.Output.Parser == "ffuf-json" {
 		return ffuf.ToFindings(f, ffuf.Options{Plugin: m.ID, Family: m.Family})
+	}
+	if m.Output.Parser == "schemathesis-json" {
+		return schemathesis.ToFindings(f, schemathesis.Options{Plugin: m.ID, Family: m.Family, Origin: rc.Origin, BasePath: rc.BasePath, BaseKnown: rc.BaseKnown})
 	}
 	if m.Output.Parser == "bandit-json" {
 		return bandit.ToFindings(f, bandit.Options{Plugin: m.ID, Family: m.Family, MountPath: mount, Suppressed: suppressed})

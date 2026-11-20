@@ -18,7 +18,7 @@ Each row is a common security concern, the plugins planned to check it, and the 
 | Session cookie flags, security headers, TLS settings | ZAP crawl and passive checks on every URL target (delivered in M2.4, [ADR 0023](adr/0023-active-web-scans.md)); Nuclei header and cookie templates on every URL target (delivered in M2.5b). TLS settings: not yet, Nuclei's SSL templates cannot pass the egress proxy | M2 |
 | Injection (SQL, command, template), XSS, SSRF patterns | Bandit (Python) and gosec (Go) code, M1; Opengrep for other languages, M2; ZAP attack scan on the running app, local targets only (delivered in M2.4; deployed targets wait for M2.10); Nuclei, sqlmap, M2 | M1, M2 |
 | Known CVEs in deployed software | Nuclei CVE templates on every URL target; intrusive ones on local targets only (delivered in M2.5b) | M2 |
-| API endpoints that crash or leak errors on bad input | Schemathesis | M2 |
+| API endpoints that crash or leak errors on bad input | Schemathesis on local URL targets with an OpenAPI or Swagger 2.0 spec, from `--openapi` or found at one of 10 common paths (delivered in M2.5d, [ADR 0028](adr/0028-schemathesis.md)). APIs without a spec are not tested by it | M2 |
 | Misconfigured Dockerfiles, Kubernetes, Terraform | Checkov (M1); Hadolint (optional, not scheduled). Trivy runs only its dependency scanner. | M1 |
 | Crashes and memory bugs on malformed input | Go fuzzing, Atheris, cargo-fuzz, AFL++ (optional) | M3 |
 | Weak password hashes in data you supply | hashcat (GPU), John the Ripper (CPU), offline only | M3 |

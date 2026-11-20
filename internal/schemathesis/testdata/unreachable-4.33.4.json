@@ -1,0 +1,77 @@
+{
+  "schemathesis_version": "4.33.4",
+  "command": "st run /w/spec.json --origin http://127.0.0.1:18099 -n 5 --report json --report-json-path /w/down.json",
+  "seed": 64011686738304759556476238696718386146,
+  "started_at": "2026-11-20T01:47:29.653770+00:00",
+  "running_time": 3.521905402000016,
+  "stop_reason": "completed",
+  "complete": true,
+  "exit_code": 1,
+  "operations": {
+    "total": 2,
+    "selected": 2,
+    "tested": 0,
+    "errored": 2,
+    "skipped": 0,
+    "skip_reasons": [
+      "No examples in schema"
+    ]
+  },
+  "phases": {
+    "examples": {
+      "status": "skip",
+      "skip_reason": null
+    },
+    "coverage": {
+      "status": "error",
+      "skip_reason": null
+    },
+    "fuzzing": {
+      "status": "error",
+      "skip_reason": null
+    },
+    "stateful": {
+      "status": "skip",
+      "skip_reason": "not_applicable"
+    }
+  },
+  "test_cases": {
+    "generated": 63,
+    "with_failures": 0,
+    "unique_failures": 0,
+    "without_checks": 0,
+    "errored": 63
+  },
+  "failures": [],
+  "errors": [
+    {
+      "title": "Network Error",
+      "count": 2
+    }
+  ],
+  "baseline": null,
+  "filtered": 0,
+  "warnings": {
+    "missing_auth": [],
+    "base_url_mismatch": [],
+    "missing_test_data": [],
+    "validation_mismatch": [],
+    "missing_deserializer": [],
+    "unused_openapi_auth": [],
+    "unsupported_regex": [],
+    "method_not_allowed": [],
+    "constants_extraction": [],
+    "unmatched_filter": [],
+    "unresolvable_reference": [],
+    "unsupported_field": [],
+    "low_valid_rate": [],
+    "rate_limited": [],
+    "not_served": [],
+    "dictionary_mismatch": []
+  },
+  "valid_rates": {},
+  "auth": {
+    "reauth_count": 0,
+    "reauth_broke": false
+  }
+}

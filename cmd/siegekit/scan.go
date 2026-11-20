@@ -87,6 +87,11 @@ Flags:
                     (private addresses only, not --deployed)
   --require-all     treat tests skipped for a missing dependency as an
                     incomplete run (exit code 4 unless there are findings)
+  --openapi FILE_OR_URL
+                    the API's OpenAPI or Swagger 2.0 spec (JSON or YAML) for
+                    Schemathesis; a URL must be on the target's origin.
+                    Without it, SiegeKit looks at common spec paths on
+                    local targets (one GET each)
 
 Before installing a missing dependency (a tool's container image or its
 data), SiegeKit lists it with its size and the tests that need it and asks.
@@ -108,6 +113,7 @@ func scan(args []string, stdout, stderr io.Writer) int {
 	yes := fl.Bool("yes", false, "")
 	noInstall := fl.Bool("no-install", false, "")
 	requireAll := fl.Bool("require-all", false, "")
+	openAPI := fl.String("openapi", "", "")
 	// Allow flags before and after DIR.
 	var pos []string
 	for {
@@ -157,11 +163,11 @@ func scan(args []string, stdout, stderr io.Writer) int {
 			deployed: *deployed, authorizedHost: *authorizedHost,
 			only: splitList(*only), skip: splitList(*skip), threshold: threshold,
 			reportDir: *reportDir, noSave: *noSave, consent: consent{yes: *yes, none: *noInstall},
-			requireAll: *requireAll,
+			requireAll: *requireAll, openAPI: *openAPI,
 		}, stdout, stderr)
 	}
-	if *deployed || *authorizedHost != "" {
-		fmt.Fprint(stderr, "siegekit scan: --deployed and --authorized-host only apply to URL targets\n")
+	if *deployed || *authorizedHost != "" || *openAPI != "" {
+		fmt.Fprint(stderr, "siegekit scan: --deployed, --authorized-host and --openapi only apply to URL targets\n")
 		return exitUsage
 	}
 	target, err := resolveDir(pos[0])
@@ -267,6 +273,9 @@ func finish(run *report.Run, reportDir string, noSave bool, name string, thresho
 		}
 		if n := p.IgnoreNote(); n != "" {
 			line += " (repository ignores: " + n + ")"
+		}
+		if p.Input != "" {
+			line += " (tested from " + p.Input + ")"
 		}
 		if p.Requests > 0 || p.Refused > 0 {
 			line += fmt.Sprintf(" (%d request(s) answered by the target, %d refused by SiegeKit", p.Requests, p.Refused)

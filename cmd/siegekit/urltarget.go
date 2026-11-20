@@ -22,6 +22,7 @@ import (
 	"github.com/Gobbuwu/SiegeKit/internal/egress"
 	"github.com/Gobbuwu/SiegeKit/internal/findings"
 	"github.com/Gobbuwu/SiegeKit/internal/manifest"
+	"github.com/Gobbuwu/SiegeKit/internal/openapi"
 	"github.com/Gobbuwu/SiegeKit/internal/report"
 	"github.com/Gobbuwu/SiegeKit/internal/runner"
 	"github.com/Gobbuwu/SiegeKit/internal/sandbox"
@@ -43,6 +44,9 @@ var activeRunner runner.ActiveRunner
 // reachable checks that the target answers before the first plugin runs;
 // tests replace it.
 var reachable = egress.Reachable
+
+// specGet fetches an OpenAPI spec from the target; tests replace it.
+var specGet = egress.Get
 
 // prover checks deployed-mode proof of control; tests replace it.
 var prover interface {
@@ -79,6 +83,7 @@ type urlScan struct {
 	noSave         bool
 	consent        consent
 	requireAll     bool
+	openAPI        string // --openapi: a file or a URL on the target's origin
 }
 
 // scanURL applies the target rules of ADR 0005, then runs the active
@@ -100,6 +105,14 @@ func scanURL(raw string, o urlScan, stdout, stderr io.Writer) int {
 	u, err := target.Parse(raw)
 	if err != nil {
 		return refuse("%v", err)
+	}
+	// A spec file is read now, so a wrong path is reported before any
+	// request; a spec URL is fetched after the run is allowed.
+	var spec specSource
+	if o.openAPI != "" {
+		if spec, err = openAPISource(o.openAPI, u); err != nil {
+			return refuse("--openapi: %v", err)
+		}
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -173,13 +186,93 @@ func scanURL(raw string, o urlScan, stdout, stderr io.Writer) int {
 	if verification != "loopback" {
 		confirmed = u.Host
 	}
-	return runURL(ctx, u, d.Addrs, mode, verification, confirmed, o, stdout, stderr)
+	return runURL(ctx, u, d.Addrs, mode, verification, confirmed, o, spec, stdout, stderr)
+}
+
+// specSource is what --openapi named: a spec read from a file, or a path
+// on the target's origin.
+type specSource struct {
+	spec *openapi.Spec
+	path string
+}
+
+// openAPISource reads a spec file, or checks that a spec URL is on the
+// target's origin: SiegeKit sends requests only to the target (ADR 0005).
+func openAPISource(arg string, u *target.URL) (specSource, error) {
+	if isURL(arg) {
+		su, err := target.Parse(arg)
+		if err != nil {
+			return specSource{}, err
+		}
+		if su.Origin() != u.Origin() {
+			return specSource{}, fmt.Errorf("%s is not on the target's origin %s; SiegeKit sends requests only to the target, so download the spec and pass the file", su, u.Origin())
+		}
+		return specSource{path: su.Path}, nil
+	}
+	f, err := os.Open(arg) // #nosec G304 -- the spec file the user named
+	if err != nil {
+		return specSource{}, err
+	}
+	defer f.Close()
+	b, err := io.ReadAll(io.LimitReader(f, openapi.MaxSize+1))
+	if err != nil {
+		return specSource{}, err
+	}
+	format, err := openapi.Check(b)
+	if err != nil {
+		return specSource{}, fmt.Errorf("%s: %w", arg, err)
+	}
+	return specSource{spec: &openapi.Spec{Data: b, Format: format, Source: arg}}, nil
+}
+
+// findSpec returns the spec for plugins that use one (ADR 0025 item 4,
+// ADR 0028): the --openapi file, the --openapi URL, or on local targets the
+// first valid spec at openapi.DefaultPaths. It returns nil and the reason
+// when there is none; failed is true when the spec the user named could
+// not be used.
+func findSpec(ctx context.Context, cfg egress.Config, src specSource, deployed bool) (spec *openapi.Spec, reason string, failed bool) {
+	if src.spec != nil {
+		return src.spec, "", false
+	}
+	fetch := func(p string) (*openapi.Spec, error) {
+		status, b, err := specGet(ctx, cfg, p, openapi.MaxSize)
+		if err != nil {
+			return nil, err
+		}
+		if status != 200 {
+			return nil, fmt.Errorf("answered %d", status)
+		}
+		format, err := openapi.Check(b)
+		if err != nil {
+			return nil, err
+		}
+		return &openapi.Spec{Data: b, Format: format, Source: cfg.Target.Origin() + p}, nil
+	}
+	if src.path != "" {
+		s, err := fetch(src.path)
+		if err != nil {
+			return nil, fmt.Sprintf("the OpenAPI spec at %s could not be used: %v", cfg.Target.Origin()+src.path, err), true
+		}
+		return s, "", false
+	}
+	if deployed {
+		return nil, "no OpenAPI spec was given with --openapi (SiegeKit looks for one only on local targets)", false
+	}
+	for _, p := range openapi.DefaultPaths {
+		if err := ctx.Err(); err != nil {
+			return nil, err.Error(), true
+		}
+		if s, err := fetch(p); err == nil {
+			return s, "", false
+		}
+	}
+	return nil, fmt.Sprintf("no OpenAPI spec was given with --openapi and none was found at %s", strings.Join(openapi.DefaultPaths, ", ")), false
 }
 
 // runURL selects the active plugins, asks before installing their images
 // (ADR 0016), prints the plan (ADR 0022), records the run in the audit log
 // (ADR 0005) and runs it.
-func runURL(ctx context.Context, u *target.URL, addrs []netip.Addr, mode target.Mode, verification, confirmed string, o urlScan, stdout, stderr io.Writer) int {
+func runURL(ctx context.Context, u *target.URL, addrs []netip.Addr, mode target.Mode, verification, confirmed string, o urlScan, src specSource, stdout, stderr io.Writer) int {
 	fail := func(err error) int {
 		fmt.Fprintf(stderr, "siegekit scan: %v\n", err)
 		return exitInvalid
@@ -225,6 +318,8 @@ func runURL(ctx context.Context, u *target.URL, addrs []netip.Addr, mode target.
 		limits = runner.DeployedLimits
 	}
 	var planned []string
+	var spec *openapi.Spec
+	noSpec := ""
 	fmt.Fprintf(stdout, "\nPlan: %s, %s mode, addresses %s.\n", u, mode, joinList(addrs))
 	for _, m := range selected {
 		if r, ok := unavailable[m.ID]; ok {
@@ -282,8 +377,29 @@ func runURL(ctx context.Context, u *target.URL, addrs []netip.Addr, mode target.
 			return fail(fmt.Errorf("no test was sent: %w", err))
 		}
 		// One GET first, so a target that is down is not sent a full scan.
-		if err := reachable(ctx, egress.Config{Target: u, Addrs: addrs, VerifyTLS: o.deployed, Version: version}); err != nil {
+		cfg := egress.Config{Target: u, Addrs: addrs, VerifyTLS: o.deployed, Version: version}
+		if err := reachable(ctx, cfg); err != nil {
 			return fail(fmt.Errorf("%s: %w; no test was sent. Check that the app is running at this address", u, err))
+		}
+		if slices.ContainsFunc(selected, func(m *manifest.Manifest) bool {
+			return slices.Contains(planned, m.ID) && runner.UsesOpenAPI(m)
+		}) {
+			s, reason, failed := findSpec(ctx, cfg, src, o.deployed)
+			switch {
+			case s != nil:
+				spec = s
+				fmt.Fprintf(stdout, "OpenAPI spec: %s.\n", s.Source)
+			case failed:
+				fmt.Fprintf(stdout, "OpenAPI spec: %s.\n", reason)
+				for _, m := range selected {
+					if runner.UsesOpenAPI(m) {
+						unavailable[m.ID] = runner.Unavailable{Status: report.Failed, Reason: reason}
+					}
+				}
+			default:
+				noSpec = reason
+				fmt.Fprintf(stdout, "OpenAPI spec: %s; tests that need one do not run.\n", reason)
+			}
 		}
 	}
 	var active runner.ActiveRunner
@@ -300,7 +416,7 @@ func runURL(ctx context.Context, u *target.URL, addrs []netip.Addr, mode target.
 	}
 	run, err := runner.RunURL(ctx, active, selected, runner.URLOptions{
 		Version: version, Target: u, Addrs: addrs, Deployed: o.deployed, Limits: limits, Unavailable: unavailable,
-		FilesRoot: rootsIn(dir).Files,
+		FilesRoot: rootsIn(dir).Files, OpenAPI: spec, NoOpenAPI: noSpec,
 	})
 	if errors.Is(err, context.Canceled) {
 		return fail(errors.New("interrupted; no report written"))

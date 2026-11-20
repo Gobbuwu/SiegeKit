@@ -3,7 +3,7 @@
 - Status: Accepted
 - Date: 2026-11-19
 - Amends: [0023](0023-active-web-scans.md) (destructive plugins on deployed targets: no opt-in before M2.10)
-- Amended by: [0026](0026-nuclei.md) (which templates each Nuclei plugin runs, measured request counts)
+- Amended by: [0026](0026-nuclei.md) (which templates each Nuclei plugin runs, measured request counts), [0028](0028-schemathesis.md) (how the OpenAPI spec is fetched and checked)
 
 ## Context
 

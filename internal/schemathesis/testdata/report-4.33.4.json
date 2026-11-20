@@ -1,0 +1,121 @@
+{
+  "schemathesis_version": "4.33.4",
+  "command": "st run /w/spec.json --origin http://127.0.0.1:18090 -n 30 --seed 1 --report json,ndjson --report-json-path /w/out2.json --report-ndjson-path /w/ev.ndjson",
+  "seed": 1,
+  "started_at": "2026-11-20T01:50:07.042356+00:00",
+  "running_time": 3.7929131189999907,
+  "stop_reason": "completed",
+  "complete": true,
+  "exit_code": 1,
+  "operations": {
+    "total": 2,
+    "selected": 2,
+    "tested": 2,
+    "errored": 0,
+    "skipped": 0,
+    "skip_reasons": []
+  },
+  "phases": {
+    "examples": {
+      "status": "skip",
+      "skip_reason": null
+    },
+    "coverage": {
+      "status": "failure",
+      "skip_reason": null
+    },
+    "fuzzing": {
+      "status": "failure",
+      "skip_reason": null
+    },
+    "stateful": {
+      "status": "skip",
+      "skip_reason": "not_applicable"
+    }
+  },
+  "test_cases": {
+    "generated": 42,
+    "with_failures": 3,
+    "unique_failures": 6,
+    "without_checks": 0,
+    "errored": 0
+  },
+  "failures": [
+    {
+      "type": "ServerError",
+      "code": "ST101",
+      "title": "Server error",
+      "severity": "critical",
+      "count": 3,
+      "operations": [
+        "GET /items/{id}",
+        "TRACE /items",
+        "TRACE /items/{id}"
+      ]
+    },
+    {
+      "type": "UndefinedStatusCode",
+      "code": "ST103",
+      "title": "Undocumented status code",
+      "severity": "medium",
+      "count": 1,
+      "operations": [
+        "GET /items/{id}"
+      ]
+    },
+    {
+      "type": "UnsupportedMethodResponse",
+      "code": "ST204",
+      "title": "Wrong response to undeclared method",
+      "severity": "medium",
+      "count": 2,
+      "operations": [
+        "TRACE /items",
+        "TRACE /items/{id}"
+      ]
+    }
+  ],
+  "errors": [],
+  "baseline": null,
+  "filtered": 0,
+  "warnings": {
+    "missing_auth": [],
+    "base_url_mismatch": [],
+    "missing_test_data": [],
+    "validation_mismatch": [],
+    "missing_deserializer": [],
+    "unused_openapi_auth": [],
+    "unsupported_regex": [],
+    "method_not_allowed": [],
+    "constants_extraction": [],
+    "unmatched_filter": [],
+    "unresolvable_reference": [],
+    "unsupported_field": [],
+    "low_valid_rate": [],
+    "rate_limited": [],
+    "not_served": [],
+    "dictionary_mismatch": []
+  },
+  "valid_rates": {
+    "POST /items": {
+      "fuzzing": {
+        "accepted": 12,
+        "unreachable": 0,
+        "conflicts": 0,
+        "rejected": 0
+      }
+    },
+    "GET /items/{id}": {
+      "fuzzing": {
+        "accepted": 5,
+        "unreachable": 0,
+        "conflicts": 0,
+        "rejected": 0
+      }
+    }
+  },
+  "auth": {
+    "reauth_count": 0,
+    "reauth_broke": false
+  }
+}

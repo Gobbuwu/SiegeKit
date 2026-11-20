@@ -1,0 +1,64 @@
+{
+  "schemaVersion": 1,
+  "id": "schemathesis",
+  "name": "Schemathesis API tests (local targets only)",
+  "version": "1.0.0",
+  "description": "Generates requests from the API's OpenAPI spec, including invalid input, and checks that the API does not answer with server errors and answers as the spec says. It sends POST, PUT and DELETE requests and can change data, so it runs only on local targets. Needs a spec: --openapi, or one found at a common path.",
+  "family": "dast",
+  "mode": "active",
+  "destructive": true,
+  "targets": [
+    "url"
+  ],
+  "tool": {
+    "name": "schemathesis",
+    "version": "4.33.4",
+    "license": "MIT",
+    "homepage": "https://schemathesis.io/",
+    "artifacts": [
+      {
+        "platform": "any",
+        "kind": "oci-image",
+        "ref": "docker.io/schemathesis/schemathesis@sha256:708d934c8208a8f785bdf1b1610476e691f1efda0b7a3cb9ce7536d0f3280eec",
+        "sha256": "708d934c8208a8f785bdf1b1610476e691f1efda0b7a3cb9ce7536d0f3280eec"
+      }
+    ]
+  },
+  "resources": {
+    "cpus": 1,
+    "memoryMiB": 1024,
+    "gpu": "none",
+    "timeoutSeconds": 900,
+    "maxTimeoutSeconds": 3600
+  },
+  "network": "target-only",
+  "run": {
+    "args": [
+      "run",
+      "{openapi}",
+      "--origin",
+      "{target-origin}",
+      "--proxy",
+      "http://127.0.0.1:8080",
+      "--rate-limit",
+      "{ratelimit}/s",
+      "--no-shrink",
+      "--report",
+      "json",
+      "--report-json-path",
+      "{outdir}/schemathesis.json"
+    ],
+    "env": {
+      "SCHEMATHESIS_COVERAGE": "false"
+    },
+    "findingsExitCodes": [
+      1
+    ]
+  },
+  "output": {
+    "format": "json",
+    "parser": "schemathesis-json",
+    "file": "schemathesis.json"
+  },
+  "localOnly": true
+}

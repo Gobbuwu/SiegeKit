@@ -506,3 +506,33 @@ func TestConnectionLimit(t *testing.T) {
 		t.Errorf("peak requests in flight at the target: %d, want at most 2", p)
 	}
 }
+
+func TestGet(t *testing.T) {
+	u := newUpstream(t, false, func() int { return http.StatusNotFound })
+	tu, err := target.Parse(fmt.Sprintf("http://app.test:%d/start/", u.port()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := Config{Target: tu, Addrs: []netip.Addr{netip.MustParseAddr("127.0.0.1")}, Version: "test"}
+	status, b, err := Get(context.Background(), cfg, "/openapi.json", 100)
+	if err != nil || status != http.StatusNotFound || string(b) != "hello from target" {
+		t.Fatalf("%d %q %v", status, b, err)
+	}
+	// The path is on the origin, not under the target's path, and the
+	// request goes to the pinned address with the target's host name.
+	r := u.last.Load().(*http.Request)
+	if r.URL.Path != "/openapi.json" || r.Host != fmt.Sprintf("app.test:%d", u.port()) || r.Header.Get("User-Agent") != "SiegeKit/test" {
+		t.Errorf("%s %s %q", r.Host, r.URL, r.Header.Get("User-Agent"))
+	}
+	if _, _, err := Get(context.Background(), cfg, "/openapi.json", 5); err == nil || !strings.Contains(err.Error(), "larger than 5 bytes") {
+		t.Errorf("size limit: %v", err)
+	}
+	for _, p := range []string{"openapi.json", "//evil.test/x", ""} {
+		if _, _, err := Get(context.Background(), cfg, p, 100); err == nil {
+			t.Errorf("path %q accepted", p)
+		}
+	}
+	if u.hits.Load() != 2 {
+		t.Errorf("%d hits, want 2", u.hits.Load())
+	}
+}

@@ -138,6 +138,7 @@ func TestAgentFacingFields(t *testing.T) {
 func TestHTMLShowsProxyCounts(t *testing.T) {
 	r := run(Ran)
 	r.Plugins[1].Requests, r.Plugins[1].Refused, r.Plugins[1].RefusedTo = 94, 2, []string{"CONNECT other.test:443", "GET <b>x"}
+	r.Plugins[1].Input = "OpenAPI spec <x>.yaml"
 	var b bytes.Buffer
 	if err := WriteHTML(&b, r); err != nil {
 		t.Fatal(err)
@@ -146,6 +147,9 @@ func TestHTMLShowsProxyCounts(t *testing.T) {
 	want := "Requests answered by the target: 94. Refused by SiegeKit: 2 (<code>CONNECT other.test:443</code>, <code>GET &lt;b&gt;x</code>)."
 	if !strings.Contains(out, want) {
 		t.Errorf("HTML lacks %q", want)
+	}
+	if !strings.Contains(out, "<br>Tested from: OpenAPI spec &lt;x&gt;.yaml") {
+		t.Error("HTML lacks the escaped input")
 	}
 	if strings.Count(out, "Requests answered by the target") != 1 {
 		t.Error("counts shown for a check with no requests")

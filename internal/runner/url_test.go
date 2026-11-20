@@ -15,6 +15,7 @@ import (
 	"github.com/Gobbuwu/SiegeKit/internal/egress"
 	"github.com/Gobbuwu/SiegeKit/internal/files"
 	"github.com/Gobbuwu/SiegeKit/internal/manifest"
+	"github.com/Gobbuwu/SiegeKit/internal/openapi"
 	"github.com/Gobbuwu/SiegeKit/internal/report"
 	"github.com/Gobbuwu/SiegeKit/internal/sandbox"
 	"github.com/Gobbuwu/SiegeKit/internal/target"
@@ -196,6 +197,57 @@ func TestWordlist(t *testing.T) {
 		}
 		if !bytes.Equal(got, want) {
 			t.Errorf("deployed %v: mounted list of %d bytes, want %d", deployed, len(got), len(want))
+		}
+	}
+}
+
+// TestOpenAPISpec checks that Schemathesis is skipped without a spec, gets
+// the spec mounted read-only and the target's origin, that its exit code 1
+// (failures found) is read as a result while others are failures, and that
+// finding locations carry the spec's base path (ADR 0028).
+func TestOpenAPISpec(t *testing.T) {
+	m := builtin(t, "schemathesis")
+	never := func(context.Context, sandbox.Spec, egress.Config) (*ActiveResult, error) {
+		t.Fatal("ran without a spec")
+		return nil, nil
+	}
+	opt := urlOpts(t)
+	opt.NoOpenAPI = "none found at the default paths"
+	r, err := RunURL(context.Background(), never, []*manifest.Manifest{m}, opt)
+	if err != nil || r.Plugins[0].Status != report.Skipped || r.Plugins[0].Reason != opt.NoOpenAPI {
+		t.Fatalf("%+v %v", r, err)
+	}
+	opt.OpenAPI = &openapi.Spec{Data: []byte(`{"openapi":"3.0.3","servers":[{"url":"/api/"}],"paths":{}}`), Format: "json", Source: "http://app.test:8000/openapi.json"}
+	const rep = `{"complete":true,"operations":{"selected":1,"tested":1},"errors":[],"failures":[{"code":"ST101","title":"Server error","operations":["GET /items/{id}"]}]}`
+	for _, exit := range []int{0, 1, 2} {
+		var got []byte
+		r, err := RunURL(context.Background(), func(_ context.Context, sp sandbox.Spec, _ egress.Config) (*ActiveResult, error) {
+			if !slices.Contains(sp.Args, OpenAPIMount+"/spec.json") || !slices.Contains(sp.Args, "http://app.test:8000") {
+				t.Errorf("args %v", sp.Args)
+			}
+			for _, f := range sp.Files {
+				if f.Mount == OpenAPIMount {
+					got, _ = os.ReadFile(filepath.Join(f.Host, "spec.json"))
+				}
+			}
+			os.WriteFile(filepath.Join(sp.OutDir, "schemathesis.json"), []byte(rep), 0o600)
+			return &ActiveResult{Result: &sandbox.Result{Status: sandbox.Completed, ExitCode: exit}, Stats: egress.Stats{Requests: 1}}, nil
+		}, []*manifest.Manifest{m}, opt)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Equal(got, opt.OpenAPI.Data) {
+			t.Errorf("mounted spec %q", got)
+		}
+		p := r.Plugins[0]
+		if exit == 2 {
+			if p.Status != report.Failed || !strings.Contains(p.Reason, "exited with code 2") {
+				t.Errorf("exit 2: %+v", p)
+			}
+			continue
+		}
+		if p.Status != report.Ran || p.Input != "OpenAPI spec http://app.test:8000/openapi.json" || len(r.Findings) != 1 || r.Findings[0].Location.URI != "http://app.test:8000/api/items/{id}" {
+			t.Errorf("exit %d: %+v %+v", exit, p, r.Findings)
 		}
 	}
 }

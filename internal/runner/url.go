@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -17,6 +18,7 @@ import (
 	"github.com/Gobbuwu/SiegeKit/internal/egress"
 	"github.com/Gobbuwu/SiegeKit/internal/findings"
 	"github.com/Gobbuwu/SiegeKit/internal/manifest"
+	"github.com/Gobbuwu/SiegeKit/internal/openapi"
 	"github.com/Gobbuwu/SiegeKit/internal/report"
 	"github.com/Gobbuwu/SiegeKit/internal/sandbox"
 	"github.com/Gobbuwu/SiegeKit/internal/target"
@@ -55,6 +57,10 @@ type URLOptions struct {
 	// Unavailable records plugins that cannot run because a dependency is
 	// missing (ADR 0016), keyed by plugin ID.
 	Unavailable map[string]Unavailable
+	// OpenAPI is the spec for plugins that use {openapi}. When it is nil
+	// they are skipped, with NoOpenAPI as the reason (ADR 0028).
+	OpenAPI   *openapi.Spec
+	NoOpenAPI string
 }
 
 // RunURL runs each selected active plugin against the target in turn, each
@@ -144,9 +150,28 @@ func runActive(ctx context.Context, run ActiveRunner, m *manifest.Manifest, opt 
 		}
 		fileMounts = append(fileMounts, sandbox.FileMount{Host: dir, Mount: WordlistMount})
 	}
+	rc := reportContext{Origin: opt.Target.Origin()}
+	specFile := ""
+	if UsesOpenAPI(m) {
+		if opt.OpenAPI == nil {
+			reason := opt.NoOpenAPI
+			if reason == "" {
+				reason = "no OpenAPI spec was given"
+			}
+			return fail(report.Skipped, "%s", reason)
+		}
+		dir, name, err := writeSpec(work, m.ID, opt.OpenAPI)
+		if err != nil {
+			return fail(report.Failed, "write OpenAPI spec: %v", err)
+		}
+		fileMounts = append(fileMounts, sandbox.FileMount{Host: dir, Mount: OpenAPIMount})
+		specFile = OpenAPIMount + "/" + name
+		rc.BasePath, rc.BaseKnown = openapi.BasePath(opt.OpenAPI.Data, opt.OpenAPI.Format)
+		pr.Input = "OpenAPI spec " + opt.OpenAPI.Source
+	}
 	cpus := min(m.Resources.CPUs, runtime.NumCPU())
 	u := opt.Target.String()
-	args := substituteURL(m.Run.Args, u, cpus, opt.Limits.Rate)
+	args := substituteURL(m.Run.Args, opt.Target, cpus, opt.Limits.Rate, specFile)
 	var configFile string
 	if m.Run.Config != nil {
 		b, err := json.Marshal(configFor(m.Run.Config, u))
@@ -190,14 +215,14 @@ func runActive(ctx context.Context, run ActiveRunner, m *manifest.Manifest, opt 
 		return fail(report.TimedOut, "stopped after %d seconds", m.Resources.TimeoutSeconds)
 	case res.Status == sandbox.Failed:
 		return fail(report.Failed, "%s", lastLine(res.Stderr))
-	case res.ExitCode != 0:
+	case res.ExitCode != 0 && !slices.Contains(m.Run.FindingsExitCodes, res.ExitCode):
 		return fail(report.Failed, "tool exited with code %d: %s", res.ExitCode, lastLine(res.Stderr))
 	case res.Stats.Requests == 0:
 		// A tool that never reached the target found nothing because it
 		// tested nothing (ADR 0009).
 		return fail(report.Failed, "the target answered no request from the tool")
 	}
-	fs, err := readReport(filepath.Join(outDir, m.Output.File), m, nil)
+	fs, err := readReport(filepath.Join(outDir, m.Output.File), m, nil, rc)
 	if err != nil {
 		return fail(report.Failed, "%v", err)
 	}
@@ -209,9 +234,15 @@ func runActive(ctx context.Context, run ActiveRunner, m *manifest.Manifest, opt 
 }
 
 // substituteURL replaces placeholders for an active run. The manifest
-// validator already allows only known placeholders; {target} is the URL.
-func substituteURL(args []string, u string, cpus int, rate float64) []string {
+// validator already allows only known placeholders; {target} is the URL
+// and specFile the mounted OpenAPI spec, if any.
+func substituteURL(args []string, t *target.URL, cpus int, rate float64, specFile string) []string {
+	u := t.String()
 	r := strings.NewReplacer(
+		// Scheme, host and port: Schemathesis keeps the spec's base path
+		// when given only the origin (ADR 0028).
+		"{target-origin}", t.Origin(),
+		"{openapi}", specFile,
 		"{target}", u,
 		// The target without a trailing slash, for tools that append paths
 		// to it: Nuclei turns "http://host/" into "http://host//.env", which
@@ -233,6 +264,36 @@ func substituteURL(args []string, u string, cpus int, rate float64) []string {
 
 // WordlistMount is where a plugin's path list is mounted (ADR 0027).
 const WordlistMount = manifest.WordlistMount
+
+// OpenAPIMount is where the OpenAPI spec is mounted (ADR 0028).
+const OpenAPIMount = manifest.OpenAPIMount
+
+// UsesOpenAPI reports whether m tests from an OpenAPI spec ({openapi}).
+func UsesOpenAPI(m *manifest.Manifest) bool {
+	return m.Run != nil && slices.ContainsFunc(m.Run.Args, func(a string) bool { return strings.Contains(a, "{openapi}") })
+}
+
+// writeSpec writes the spec into a new directory under work, as spec.json
+// or spec.yaml, and returns the directory, which is mounted read-only.
+func writeSpec(work, id string, s *openapi.Spec) (string, string, error) {
+	if s.Format != "json" && s.Format != "yaml" {
+		return "", "", fmt.Errorf("unknown spec format %q", s.Format)
+	}
+	dir, err := os.MkdirTemp(work, id+"-openapi-")
+	if err != nil {
+		return "", "", err
+	}
+	// Read by the tool's user, which may differ from ours. The spec is the
+	// user's own API description; it is not kept after the run.
+	if err := os.Chmod(dir, 0o755); err != nil { // #nosec G302 -- read by the tool's user; removed with the run directory
+		return "", "", err
+	}
+	name := "spec." + s.Format
+	if err := os.WriteFile(filepath.Join(dir, name), s.Data, 0o644); err != nil { // #nosec G306 -- read by the tool's user; removed with the run directory
+		return "", "", err
+	}
+	return dir, name, nil
+}
 
 const wordlistFile = "paths.txt"
 
