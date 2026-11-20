@@ -19,6 +19,7 @@ import (
 	"github.com/Gobbuwu/SiegeKit/internal/findings"
 	"github.com/Gobbuwu/SiegeKit/internal/login"
 	"github.com/Gobbuwu/SiegeKit/internal/manifest"
+	"github.com/Gobbuwu/SiegeKit/internal/ratelimit"
 	"github.com/Gobbuwu/SiegeKit/internal/registry"
 	"github.com/Gobbuwu/SiegeKit/internal/report"
 	"github.com/Gobbuwu/SiegeKit/internal/runner"
@@ -75,7 +76,8 @@ Flags:
   --skip a,b        do not run these plugins or families
   --profile NAME    full (default) runs every check; quick leaves out the
                     attack tests of URL scans (zap-active, nuclei-intrusive,
-                    nuclei-default-login, schemathesis, login-throttle);
+                    nuclei-default-login, schemathesis, login-throttle,
+                    rate-limit);
                     ZAP's attack scan alone can take 30 minutes
   --fail-on LEVEL   exit 3 if a finding is at or above LEVEL
                     (critical, high, medium, low, info; default high)
@@ -115,6 +117,16 @@ Flags:
                     "Name: value" per line) and with no login
   --har-user NAME   account A's login name, as it appears in the app's
                     answers; reports A's data readable with no login
+  --rate-limit-url URL
+                    an expensive URL on the target's origin, such as a
+                    search, for the rate-limit check (local targets only);
+                    it may have a query
+  --rate-limit-body BODY
+                    send a POST with this body instead of a GET: JSON if it
+                    starts with { or [, otherwise a form
+  --rate-limit-requests N
+                    requests to send, one per second, stopping at the first
+                    sign of a limit (default 20, at most 50)
 
 Before installing a missing dependency (a tool's container image or its
 data), SiegeKit lists it with its size and the tests that need it and asks.
@@ -143,6 +155,10 @@ func scan(args []string, stdout, stderr io.Writer) int {
 	fl.StringVar(&lf.user, "login-user", "", "")
 	fl.StringVar(&lf.body, "login-body", "", "")
 	fl.IntVar(&lf.attempts, "login-attempts", login.DefaultAttempts, "")
+	var rl rateLimitFlags
+	fl.StringVar(&rl.url, "rate-limit-url", "", "")
+	fl.StringVar(&rl.body, "rate-limit-body", "", "")
+	fl.IntVar(&rl.requests, "rate-limit-requests", ratelimit.DefaultRequests, "")
 	har := fl.String("har", "", "")
 	harUser := fl.String("har-user", "", "")
 	// Allow flags before and after DIR.
@@ -173,9 +189,16 @@ func scan(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "siegekit scan: --profile must be one of %s\n", strings.Join(runner.Profiles, ", "))
 		return exitUsage
 	}
-	attemptsSet := false
-	fl.Visit(func(f *flag.Flag) { attemptsSet = attemptsSet || f.Name == "login-attempts" })
+	attemptsSet, requestsSet := false, false
+	fl.Visit(func(f *flag.Flag) {
+		attemptsSet = attemptsSet || f.Name == "login-attempts"
+		requestsSet = requestsSet || f.Name == "rate-limit-requests"
+	})
 	if err := lf.check(attemptsSet); err != nil {
+		fmt.Fprintf(stderr, "siegekit scan: %v\n", err)
+		return exitUsage
+	}
+	if err := rl.check(requestsSet); err != nil {
 		fmt.Fprintf(stderr, "siegekit scan: %v\n", err)
 		return exitUsage
 	}
@@ -209,11 +232,11 @@ func scan(args []string, stdout, stderr io.Writer) int {
 			only: splitList(*only), skip: splitList(*skip), threshold: threshold,
 			reportDir: *reportDir, noSave: *noSave, consent: consent{yes: *yes, none: *noInstall},
 			requireAll: *requireAll, openAPI: *openAPI, profile: *profile, login: lf,
-			har: *har, harUser: *harUser,
+			har: *har, harUser: *harUser, rateLimit: rl,
 		}, stdout, stderr)
 	}
-	if *deployed || *authorizedHost != "" || *openAPI != "" || lf.url != "" || attemptsSet || *har != "" {
-		fmt.Fprint(stderr, "siegekit scan: --deployed, --authorized-host, --openapi, --har and the --login flags only apply to URL targets\n")
+	if *deployed || *authorizedHost != "" || *openAPI != "" || lf.url != "" || attemptsSet || *har != "" || rl.url != "" {
+		fmt.Fprint(stderr, "siegekit scan: --deployed, --authorized-host, --openapi, --har, the --login flags and the --rate-limit flags only apply to URL targets\n")
 		return exitUsage
 	}
 	target, err := resolveDir(pos[0])

@@ -27,6 +27,7 @@ import (
 	"github.com/Gobbuwu/SiegeKit/internal/login"
 	"github.com/Gobbuwu/SiegeKit/internal/manifest"
 	"github.com/Gobbuwu/SiegeKit/internal/openapi"
+	"github.com/Gobbuwu/SiegeKit/internal/ratelimit"
 	"github.com/Gobbuwu/SiegeKit/internal/report"
 	"github.com/Gobbuwu/SiegeKit/internal/runner"
 	"github.com/Gobbuwu/SiegeKit/internal/sandbox"
@@ -92,11 +93,36 @@ type urlScan struct {
 	profile        string // --profile: full or quick
 	login          loginFlags
 	har, harUser   string // --har and --har-user (ADR 0035)
+	rateLimit      rateLimitFlags
 
 	// Read from --har and SIEGEKIT_SESSION_B before any request.
 	harRequests *authz.HAR
 	sessionB    http.Header
+	// Read from --rate-limit-url and --rate-limit-body before any request.
+	rateEndpoint *ratelimit.Endpoint
 }
+
+// rateLimitFlags are the --rate-limit flags of the rate-limit check
+// (ADR 0036).
+type rateLimitFlags struct {
+	url, body string
+	requests  int
+}
+
+// check accepts --rate-limit-body and --rate-limit-requests only with
+// --rate-limit-url.
+func (f rateLimitFlags) check(requestsSet bool) error {
+	switch {
+	case f.url == "" && (f.body != "" || requestsSet):
+		return errors.New("--rate-limit-body and --rate-limit-requests need --rate-limit-url")
+	case f.requests < ratelimit.MinRequests || f.requests > ratelimit.MaxRequests:
+		return fmt.Errorf("--rate-limit-requests must be from %d to %d", ratelimit.MinRequests, ratelimit.MaxRequests)
+	}
+	return nil
+}
+
+// rateLimitCheck runs the rate-limit check; tests replace it.
+var rateLimitCheck = ratelimit.Check
 
 // loginFlags are the --login flags of the login throttling check
 // (ADR 0030).
@@ -161,6 +187,12 @@ func scanURL(raw string, o urlScan, stdout, stderr io.Writer) int {
 	var lg *login.Login
 	if o.login.url != "" {
 		if lg, err = login.Parse(o.login.url, o.login.user, o.login.body, u); err != nil {
+			return refuse("%v", err)
+		}
+	}
+	// So is the rate-limit URL (ADR 0036).
+	if o.rateLimit.url != "" {
+		if o.rateEndpoint, err = ratelimit.Parse(o.rateLimit.url, o.rateLimit.body, u); err != nil {
 			return refuse("%v", err)
 		}
 	}
@@ -350,6 +382,7 @@ func runURL(ctx context.Context, u *target.URL, addrs []netip.Addr, mode target.
 	// selected like plugins.
 	selected, own, err := runner.Select(all, []checks.Check{
 		{ID: login.ID, Name: login.Name, Family: login.Family, Targets: []string{"url"}},
+		{ID: ratelimit.ID, Name: ratelimit.Name, Family: ratelimit.Family, Targets: []string{"url"}},
 		{ID: served.ID, Name: served.Name, Family: served.Family, Targets: []string{"url"}},
 		{ID: authz.ID, Name: authz.Name, Family: authz.Family, Targets: []string{"url"}},
 	}, "url", o.only, o.skip)
@@ -360,6 +393,7 @@ func runURL(ctx context.Context, u *target.URL, addrs []netip.Addr, mode target.
 		return slices.ContainsFunc(own, func(c checks.Check) bool { return c.ID == id })
 	}
 	loginSelected, servedSelected, authzSelected := ownSelected(login.ID), ownSelected(served.ID), ownSelected(authz.ID)
+	rateSelected := ownSelected(ratelimit.ID)
 	// The served-secrets check runs Gitleaks over the files it fetched
 	// (ADR 0032).
 	var gitleaks *manifest.Manifest
@@ -370,8 +404,10 @@ func runURL(ctx context.Context, u *target.URL, addrs []netip.Addr, mode target.
 		}
 		gitleaks = all[i]
 	}
-	if loginSelected && runner.ProfileSkip(true, o.profile) != "" && slices.Contains(o.only, login.ID) {
-		return fail(fmt.Errorf("--only names %s, which --profile %s does not run", login.ID, o.profile))
+	for _, id := range []string{login.ID, ratelimit.ID} {
+		if ownSelected(id) && runner.ProfileSkip(true, o.profile) != "" && slices.Contains(o.only, id) {
+			return fail(fmt.Errorf("--only names %s, which --profile %s does not run", id, o.profile))
+		}
 	}
 	dir, err := dataDir()
 	if err != nil {
@@ -430,6 +466,18 @@ func runURL(ctx context.Context, u *target.URL, addrs []netip.Addr, mode target.
 			unavailable[login.ID] = runner.Unavailable{Status: report.Failed, Reason: "active tests run only on Linux for now (ADR 0018)"}
 		}
 	}
+	if rateSelected {
+		switch {
+		case o.deployed:
+			unavailable[ratelimit.ID] = runner.Unavailable{Status: report.Skipped, Reason: "runs only on local targets until request limits are measured (M2.10)"}
+		case runner.ProfileSkip(true, o.profile) != "":
+			unavailable[ratelimit.ID] = runner.Unavailable{Status: report.Skipped, Reason: runner.ProfileSkip(true, o.profile)}
+		case o.rateEndpoint == nil:
+			unavailable[ratelimit.ID] = runner.Unavailable{Status: report.Skipped, Reason: "no URL was given: pass --rate-limit-url (an expensive URL such as a search) to test whether its requests are limited"}
+		case hostOS != "linux":
+			unavailable[ratelimit.ID] = runner.Unavailable{Status: report.Failed, Reason: "active tests run only on Linux for now (ADR 0018)"}
+		}
+	}
 	if authzSelected {
 		switch {
 		case o.harRequests == nil:
@@ -461,6 +509,15 @@ func runURL(ctx context.Context, u *target.URL, addrs []netip.Addr, mode target.
 			planned = append(planned, login.ID)
 			fmt.Fprintf(stdout, "  %-20s siegekit %s: %d logins for %q with a random wrong password, POST %s, one per second; the account may be locked\n",
 				login.ID, version, o.login.attempts, lg.User, lg.URL)
+		}
+	}
+	if rateSelected {
+		if r, ok := unavailable[ratelimit.ID]; ok {
+			fmt.Fprintf(stdout, "  %-20s not run - %s\n", ratelimit.ID, r.Reason)
+		} else {
+			planned = append(planned, ratelimit.ID)
+			fmt.Fprintf(stdout, "  %-20s siegekit %s: up to %d requests %s %s, one per second, stopping at the first sign of a limit\n",
+				ratelimit.ID, version, o.rateLimit.requests, o.rateEndpoint.Method, o.rateEndpoint.URL)
 		}
 	}
 	if servedSelected {
@@ -509,6 +566,11 @@ func runURL(ctx context.Context, u *target.URL, addrs []netip.Addr, mode target.
 		if slices.Contains(planned, login.ID) {
 			destructive = append(destructive, login.ID)
 			warn = append(warn, fmt.Sprintf("%s can lock the test account %q.", login.ID, lg.User))
+		}
+		// A POST can create data each time it is sent (ADR 0036).
+		if slices.Contains(planned, ratelimit.ID) && o.rateEndpoint.Method != http.MethodGet {
+			destructive = append(destructive, ratelimit.ID)
+			warn = append(warn, fmt.Sprintf("%s sends up to %d POST requests to %s, which can change data.", ratelimit.ID, o.rateLimit.requests, o.rateEndpoint.URL))
 		}
 		reason := ""
 		switch {
@@ -598,6 +660,31 @@ func runURL(ctx context.Context, u *target.URL, addrs []netip.Addr, mode target.
 		}
 		loginResult = &pr
 	}
+	// The rate-limit check runs next, before the other checks' traffic.
+	var rateResult *report.PluginResult
+	var rateFindings []findings.Finding
+	if rateSelected {
+		pr := report.PluginResult{ID: ratelimit.ID, Family: ratelimit.Family, Tool: "siegekit", Version: version}
+		if r, ok := unavailable[ratelimit.ID]; ok {
+			pr.Status, pr.Reason = r.Status, r.Reason
+		} else {
+			e := o.rateEndpoint
+			pr.Input = e.Method + " " + e.URL
+			fmt.Fprintf(stdout, "%s: sending up to %d requests, one per second.\n", ratelimit.ID, o.rateLimit.requests)
+			res, err := rateLimitCheck(ctx, egress.Config{Target: u, Addrs: addrs, VerifyTLS: o.deployed, Version: version, ReadOnly: o.deployed}, e, o.rateLimit.requests)
+			if ctx.Err() != nil {
+				return fail(errors.New("interrupted; no report written"))
+			}
+			pr.Requests = res.Requests
+			if err != nil {
+				pr.Status, pr.Reason = report.Failed, err.Error()
+			} else {
+				rateFindings = ratelimit.Findings(e, res, o.rateLimit.requests)
+				pr.Status, pr.Result, pr.Findings = report.Ran, res.Summary(o.rateLimit.requests), len(rateFindings)
+			}
+		}
+		rateResult = &pr
+	}
 	var servedResult *report.PluginResult
 	var servedFindings []findings.Finding
 	if servedSelected {
@@ -669,7 +756,7 @@ func runURL(ctx context.Context, u *target.URL, addrs []netip.Addr, mode target.
 		return fail(err)
 	}
 	var first []report.PluginResult
-	for _, pr := range []*report.PluginResult{loginResult, servedResult, authzResult} {
+	for _, pr := range []*report.PluginResult{loginResult, rateResult, servedResult, authzResult} {
 		if pr != nil {
 			first = append(first, *pr)
 		}
@@ -677,7 +764,7 @@ func runURL(ctx context.Context, u *target.URL, addrs []netip.Addr, mode target.
 	if len(first) > 0 {
 		run.Started = started
 		run.Plugins = append(first, run.Plugins...)
-		if run.Findings = findings.Dedupe(slices.Concat(loginFindings, servedFindings, authzFindings, run.Findings)); run.Findings == nil {
+		if run.Findings = findings.Dedupe(slices.Concat(loginFindings, rateFindings, servedFindings, authzFindings, run.Findings)); run.Findings == nil {
 			run.Findings = []findings.Finding{}
 		}
 	}

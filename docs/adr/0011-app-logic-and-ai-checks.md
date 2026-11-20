@@ -2,7 +2,7 @@
 
 - Status: Accepted
 - Date: 2026-11-18
-- Amended by: [0015](0015-built-in-checks.md) (static backend-rules check written in Go), [0035](0035-access-control-replay.md) (item 1: requests from a browser recording, what counts as a finding)
+- Amended by: [0015](0015-built-in-checks.md) (static backend-rules check written in Go), [0035](0035-access-control-replay.md) (item 1: requests from a browser recording, what counts as a finding), [0036](0036-rate-limit-check.md) (item 2: the rate-limit check)
 
 ## Context
 
@@ -22,7 +22,7 @@ This is a heuristic: it finds many real access-control bugs but cannot prove the
 
 ### 2. Generic rate-limit check (M2)
 
-Same approach as the login check in ADR 0010, for any endpoint the user names (for example an expensive search or an AI endpoint): a capped burst (default 20, hard maximum 50) to see whether the app throttles. This checks CWE-770 / API4 / LLM10 without load testing.
+Same approach as the login check in ADR 0010, for any endpoint the user names (for example an expensive search or an AI endpoint): a capped burst (default 20, hard maximum 50) to see whether the app throttles. This checks CWE-770 / API4 / LLM10 without load testing. Amended by [0036](0036-rate-limit-check.md): `--rate-limit-url`, local targets only until M2.10, a limit seen at a 429 or 503 or a rate-limit header, no limit is low.
 
 ### 3. Hosted-backend rules (M1 static, M2 live)
 

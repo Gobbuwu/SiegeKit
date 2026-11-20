@@ -167,24 +167,31 @@ jobs:
         # exactly 4 reads by B: A's basket and user record, the user list
         # and the complaints, and the password hashes /rest/memories/ gives
         # anyone (measured 2026-11-20; ADR 0035).
+        # Juice Shop's product search has no rate limit (20 requests all
+        # answered 200 with no rate-limit header, measured 2026-11-20), so
+        # rate-limit must send 20 requests and report rate-not-limited
+        # (ADR 0036).
         run: |
           set +e
           SIEGEKIT_SESSION_B="$(cat "$RUNNER_TEMP/session-b")" "$RUNNER_TEMP/siegekit" scan --yes --authorized-host 127.0.0.1 --no-save --report-dir "$RUNNER_TEMP/report" \
             --login-url http://127.0.0.1:3000/rest/user/login --login-user jim@juice-sh.op \
             --login-body '{"email":"{user}","password":"{password}"}' \
-            --har "$RUNNER_TEMP/a.har" --har-user gate-a@siegekit.test http://127.0.0.1:3000/
+            --har "$RUNNER_TEMP/a.har" --har-user gate-a@siegekit.test \
+            --rate-limit-url 'http://127.0.0.1:3000/rest/products/search?q=apple' http://127.0.0.1:3000/
           code=$?
           set -e
           echo "exit code $code"
           if [ "$code" -ne 0 ] && [ "$code" -ne 3 ]; then exit 1; fi
           r="$RUNNER_TEMP/report/report.json"
           jq '.plugins[] | {id, status, reason, input, result, requests, refused, refusedTo, findings}' "$r"
-          jq -e '[.plugins[] | select(.status == "ran" and .requests > 0) | .id] | sort == ["access-control", "ffuf", "login-throttle", "nuclei", "nuclei-default-login", "nuclei-intrusive", "served-secrets", "zap", "zap-active"]' "$r"
+          jq -e '[.plugins[] | select(.status == "ran" and .requests > 0) | .id] | sort == ["access-control", "ffuf", "login-throttle", "nuclei", "nuclei-default-login", "nuclei-intrusive", "rate-limit", "served-secrets", "zap", "zap-active"]' "$r"
           jq -e '[.plugins[] | select(.id == "schemathesis" and .status == "skipped" and (.reason | contains("none was found at /openapi.json")))] | length == 1' "$r"
           jq -e '[.plugins[] | select(.id == "login-throttle" and .requests == 20)] | length == 1' "$r"
           jq -e '[.plugins[] | select(.id == "served-secrets" and .requests >= 9 and (.result | startswith("scanned ")))] | length == 1' "$r"
           jq -e '[.findings[] | select(.ruleId == "login-not-limited" and .location.uri == "http://127.0.0.1:3000/rest/user/login")] | length == 1' "$r"
           jq -e '[.plugins[] | select(.id == "access-control" and .requests == 33)] | length == 1' "$r"
+          jq -e '[.plugins[] | select(.id == "rate-limit" and .requests == 20 and .input == "GET http://127.0.0.1:3000/rest/products/search?q=apple")] | length == 1' "$r"
+          jq -e '[.findings[] | select(.ruleId == "rate-not-limited" and .severity == "low" and .location.uri == "http://127.0.0.1:3000/rest/products/search")] | length == 1' "$r"
           jq -e --arg b "/rest/basket/$A_BASKET" --arg u "/api/Users/$A_USER" '[.findings[] | select(.ruleId == "cross-account-read") | .location.uri | ltrimstr("http://127.0.0.1:3000")] | sort == ([$b, $u, "/api/Users", "/api/Complaints"] | sort)' "$r"
           jq -e '[.findings[] | select(.ruleId == "no-login-secret") | .location.uri] == ["http://127.0.0.1:3000/rest/memories/"]' "$r"
           for rule in 10038 10098; do

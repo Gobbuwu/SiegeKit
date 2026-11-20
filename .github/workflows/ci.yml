@@ -80,6 +80,7 @@ jobs:
           go test -run='^$' -fuzz=FuzzWeakHits -fuzztime=30s ./internal/checks
           go test -run='^$' -fuzz=FuzzParse -fuzztime=60s ./internal/target
           go test -run='^$' -fuzz=FuzzParseHAR -fuzztime=30s ./internal/authz
+          go test -run='^$' -fuzz=FuzzParse -fuzztime=30s ./internal/ratelimit
       - name: Vulnerability check
         if: runner.os == 'Linux'
         run: go run golang.org/x/vuln/cmd/govulncheck@${GOVULNCHECK_VERSION} ./...

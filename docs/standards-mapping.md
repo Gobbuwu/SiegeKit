@@ -24,7 +24,7 @@ How SiegeKit's planned checks map to four widely used lists. "Auto" means a plan
 | API1 Broken Object Level Authorization | Partial | `access-control`, recorded requests replayed as a second account (ADR 0035) |
 | API2 Broken Authentication | Partial | `access-control` with no login (ADR 0035), login throttling (ADR 0030) |
 | API3 Broken Object Property Level Authorization | Partial | Differential test compares returned fields; mass-assignment remains manual |
-| API4 Unrestricted Resource Consumption | Partial | Capped rate-limit check (ADR 0011); no load testing by design |
+| API4 Unrestricted Resource Consumption | Partial | `rate-limit`: capped burst to one URL the user names, local targets (ADR 0011, 0036); no load testing by design |
 | API5 Broken Function Level Authorization | Partial | `access-control` with two accounts of different roles (ADR 0035; GET and HEAD only) |
 | API6 Unrestricted Access to Sensitive Business Workflows | Manual | Business logic |
 | API7 Server Side Request Forgery | Auto | Opengrep; ZAP, Nuclei |
@@ -41,7 +41,7 @@ How SiegeKit's planned checks map to four widely used lists. "Auto" means a plan
 | 434 Unrestricted file upload | Partial | Opengrep rules; ZAP upload checks where forms are found |
 | 862, 863, 284, 639 authorization; 306 missing authentication | Partial | Authorization differential test and unauthenticated route check (ADR 0011) |
 | 200 Sensitive information exposure | Auto | Secrets scanning in code and git history (M1) and served content (M2); container images not scheduled; ZAP |
-| 770 No resource limits | Partial | Capped rate-limit check (ADR 0011) |
+| 770 No resource limits | Partial | `rate-limit` (`rate-not-limited`, ADR 0011, 0036) |
 | 787, 416, 125, 120, 476, 121, 122 memory-safety bugs | Auto (fuzzing) | AFL++, libFuzzer-based fuzzers, Go fuzzing (M3); only for code with a harness |
 
 ## OWASP Top 10 for LLM Applications (2025)
@@ -57,7 +57,7 @@ How SiegeKit's planned checks map to four widely used lists. "Auto" means a plan
 | LLM07 System Prompt Leakage | Partial | Probes |
 | LLM08 Vector and Embedding Weaknesses | Manual | Not in scope |
 | LLM09 Misinformation | Manual | Not in scope |
-| LLM10 Unbounded Consumption | Partial | Capped rate-limit check on AI endpoints |
+| LLM10 Unbounded Consumption | Partial | `rate-limit` on an AI endpoint the user names, if it answers without a login (ADR 0036) |
 
 ## Sources
 
