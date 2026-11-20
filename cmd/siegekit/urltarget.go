@@ -477,6 +477,8 @@ func runURL(ctx context.Context, u *target.URL, addrs []netip.Addr, mode target.
 	if err != nil {
 		return fail(err)
 	}
+	env := runner.Environment(ctx, ex)
+	fmt.Fprintf(stdout, "Environment: %s\n", env)
 	if u, ok := un[servedTool]; ok {
 		unavailable[served.ID] = u
 		delete(un, servedTool)
@@ -691,7 +693,7 @@ func runURL(ctx context.Context, u *target.URL, addrs []netip.Addr, mode target.
 	if len(planned) > 0 {
 		if err := audit.Append(filepath.Join(dir, "audit.log"), audit.Entry{
 			Time: time.Now().UTC(), Version: version, Target: u.String(), Addresses: addrStrings(addrs),
-			Mode: string(mode), Verification: verification, Confirmed: confirmed, Plugins: planned,
+			Mode: string(mode), Verification: verification, Confirmed: confirmed, Plugins: planned, Environment: env.String(),
 		}); err != nil {
 			return fail(fmt.Errorf("no test was sent: %w", err))
 		}
@@ -699,7 +701,7 @@ func runURL(ctx context.Context, u *target.URL, addrs []netip.Addr, mode target.
 		if slices.Contains(planned, backend.ID) {
 			if err := audit.Append(filepath.Join(dir, "audit.log"), audit.Entry{
 				Time: time.Now().UTC(), Version: version, Target: o.backend.String(), Addresses: addrStrings(bp.addrs),
-				Mode: string(mode), Verification: backendVerification, Confirmed: backendConfirmed, Plugins: []string{backend.ID},
+				Mode: string(mode), Verification: backendVerification, Confirmed: backendConfirmed, Plugins: []string{backend.ID}, Environment: env.String(),
 			}); err != nil {
 				return fail(fmt.Errorf("no test was sent: %w", err))
 			}
@@ -881,7 +883,7 @@ func runURL(ctx context.Context, u *target.URL, addrs []netip.Addr, mode target.
 	}
 	run, err := runner.RunURL(ctx, active, selected, runner.URLOptions{
 		Version: version, Target: u, Addrs: addrs, Deployed: o.deployed, Limits: limits, Unavailable: unavailable,
-		FilesRoot: rootsIn(dir).Files, OpenAPI: spec, NoOpenAPI: noSpec,
+		FilesRoot: rootsIn(dir).Files, OpenAPI: spec, NoOpenAPI: noSpec, Environment: env,
 	})
 	if errors.Is(err, context.Canceled) {
 		return fail(errors.New("interrupted; no report written"))

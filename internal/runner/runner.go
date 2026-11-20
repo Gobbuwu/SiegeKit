@@ -35,6 +35,23 @@ type Executor interface {
 	Run(ctx context.Context, s sandbox.Spec) (*sandbox.Result, error)
 }
 
+// describer is an Executor that can say which engine it is.
+type describer interface {
+	Describe(ctx context.Context) (sandbox.Info, error)
+}
+
+// Environment names the machine and the engine behind ex (ADR 0038). The
+// engine part is left out when ex is nil or does not answer.
+func Environment(ctx context.Context, ex Executor) *report.Environment {
+	env := &report.Environment{OS: runtime.GOOS, Arch: runtime.GOARCH}
+	if d, ok := ex.(describer); ok && ex != nil {
+		if i, err := d.Describe(ctx); err == nil {
+			env.Engine = &report.Engine{Name: i.Engine, Version: i.Version, Rootless: i.Rootless, Cgroup: i.Cgroup}
+		}
+	}
+	return env
+}
+
 // Select returns the plugins and built-in checks that apply to targetKind,
 // narrowed by --only and --skip. Each name is a plugin or check ID, or a
 // family such as "secrets" or "dast" (ADR 0004), which stands for every
@@ -115,12 +132,15 @@ func ProfileSkip(destructive bool, profile string) string {
 
 // Options for one run.
 type Options struct {
-	Version   string         // SiegeKit version recorded in the report
-	TargetDir string         // absolute path of the source directory to scan
-	WorkDir   string         // parent for the private temporary directory; "" means the OS default
-	DataRoot  string         // where 'siegekit update' keeps tool data (ADR 0014)
-	FilesRoot string         // where pinned files are kept (ADR 0024)
-	Checks    []checks.Check // built-in checks to run (ADR 0015)
+	Version string // SiegeKit version recorded in the report
+	// Environment names the machine and engine for the report (ADR 0038);
+	// nil means Run asks the engine itself.
+	Environment *report.Environment
+	TargetDir   string         // absolute path of the source directory to scan
+	WorkDir     string         // parent for the private temporary directory; "" means the OS default
+	DataRoot    string         // where 'siegekit update' keeps tool data (ADR 0014)
+	FilesRoot   string         // where pinned files are kept (ADR 0024)
+	Checks      []checks.Check // built-in checks to run (ADR 0015)
 	// Unavailable records plugins that cannot run because a dependency is
 	// missing (ADR 0016), keyed by plugin ID. They are reported, not run.
 	Unavailable map[string]Unavailable
@@ -219,6 +239,10 @@ func Run(ctx context.Context, ex Executor, selected []*manifest.Manifest, opt Op
 		Target:          opt.TargetDir,
 		Mode:            "local",
 		Started:         time.Now().UTC(),
+		Environment:     opt.Environment,
+	}
+	if run.Environment == nil {
+		run.Environment = Environment(ctx, ex)
 	}
 	var all []findings.Finding
 	for _, c := range opt.Checks {

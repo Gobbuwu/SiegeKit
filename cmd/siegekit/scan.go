@@ -301,8 +301,10 @@ func scan(args []string, stdout, stderr io.Writer) int {
 			}
 		}
 	}
+	env := runner.Environment(ctx, ex)
+	fmt.Fprintf(stdout, "Environment: %s\n", env)
 	fmt.Fprintf(stdout, "Scanning %s with %d check(s).\n", target, len(selected)+len(builtins))
-	run, err := runner.Run(ctx, ex, selected, runner.Options{Version: version, TargetDir: target, DataRoot: dataRoot, FilesRoot: roots.Files, Checks: builtins, Unavailable: unavailable})
+	run, err := runner.Run(ctx, ex, selected, runner.Options{Version: version, TargetDir: target, DataRoot: dataRoot, FilesRoot: roots.Files, Checks: builtins, Unavailable: unavailable, Environment: env})
 	if errors.Is(err, context.Canceled) {
 		return fail(errors.New("interrupted; no report written"))
 	}

@@ -88,6 +88,42 @@ type Run struct {
 	Findings        []findings.Finding `json:"findings"`
 	// Comparison is set when a saved run of the same target exists.
 	Comparison *Comparison `json:"comparison,omitempty"`
+	// Environment names where the run happened (ADR 0038): results from one
+	// container engine, mode or cgroup version do not carry over to another.
+	Environment *Environment `json:"environment,omitempty"`
+}
+
+// Environment is the machine and container engine of a run.
+type Environment struct {
+	OS     string  `json:"os"`
+	Arch   string  `json:"arch"`
+	Engine *Engine `json:"engine,omitempty"` // nil when no engine was found or it did not answer
+}
+
+// Engine is the container engine that ran the tools.
+type Engine struct {
+	Name     string `json:"name"` // "docker" or "podman"
+	Version  string `json:"version"`
+	Rootless bool   `json:"rootless"`
+	Cgroup   string `json:"cgroup,omitempty"` // "v1" or "v2"
+}
+
+// String is the form shown in the terminal and the HTML report.
+func (e *Environment) String() string {
+	s := e.OS + "/" + e.Arch
+	if e.Engine == nil {
+		return s + ", no container engine"
+	}
+	s += ", " + e.Engine.Name + " " + e.Engine.Version
+	if e.Engine.Rootless {
+		s += " rootless"
+	} else {
+		s += " rootful"
+	}
+	if e.Engine.Cgroup != "" {
+		s += ", cgroup " + e.Engine.Cgroup
+	}
+	return s
 }
 
 // Comparison says what changed since the last saved run of the same target
@@ -360,7 +396,7 @@ code,pre{font:13px ui-monospace,monospace;white-space:pre-wrap;word-break:break-
 <h1>SiegeKit report</h1>
 <p><strong>{{.Headline}}</strong></p>
 {{if not .Complete}}<p class="warn">This run is incomplete: at least one check failed or timed out. Missing checks may hide issues.</p>{{end}}
-<p>Target: <code>{{.Run.Target}}</code> · Mode: {{.Run.Mode}} · SiegeKit {{.Run.SiegeKitVersion}} · {{.Run.Started.Format "2006-01-02 15:04 MST"}}</p>
+<p>Target: <code>{{.Run.Target}}</code> · Mode: {{.Run.Mode}} · SiegeKit {{.Run.SiegeKitVersion}} · {{.Run.Started.Format "2006-01-02 15:04 MST"}}{{with .Run.Environment}} · {{.String}}{{end}}</p>
 
 {{with .Run.Comparison}}<h2>Since the last scan</h2>
 <p>{{.Summary}} Previous run: <code>{{.PreviousRun}}</code>.</p>

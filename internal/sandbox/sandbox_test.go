@@ -664,3 +664,50 @@ cat /siegekit/files/tool/words.txt
 		t.Errorf("file changed: %q", b)
 	}
 }
+
+func TestParseInfo(t *testing.T) {
+	for _, c := range []struct {
+		engine, out string
+		want        Info
+	}{
+		{"podman", "5.7.0\tv2\ttrue", Info{Engine: "podman", Version: "5.7.0", Rootless: true, Cgroup: "v2"}},
+		{"podman", "4.9.3\tv1\tfalse", Info{Engine: "podman", Version: "4.9.3", Cgroup: "v1"}},
+		{"docker", "29.10.0\t1\tname=seccomp,profile=builtin,", Info{Engine: "docker", Version: "29.10.0", Cgroup: "v1"}},
+		{"docker", "29.4.2\t2\tname=seccomp,profile=builtin,name=rootless,name=cgroupns,", Info{Engine: "docker", Version: "29.4.2", Rootless: true, Cgroup: "v2"}},
+		{"docker", "29.4.2\t\tname=rootlessish,", Info{Engine: "docker", Version: "29.4.2"}},
+	} {
+		got, err := parseInfo(c.engine, c.out)
+		if err != nil || got != c.want {
+			t.Errorf("parseInfo(%q, %q) = %+v, %v; want %+v", c.engine, c.out, got, err, c.want)
+		}
+	}
+	for _, bad := range []string{"", "5.7.0", "5.7.0\tv2", "\tv2\ttrue", "5.7.0\tv2\ttrue\nx", strings.Repeat("9", 65) + "\tv2\ttrue"} {
+		if _, err := parseInfo("podman", bad); err == nil {
+			t.Errorf("parseInfo(%q) accepted", bad)
+		}
+	}
+}
+
+// TestDescribe checks Describe against the engine that runs the container
+// tests. CI sets SIEGEKIT_EXPECT_ENGINE, so a change of engine on GitHub's
+// runners fails here instead of going unnoticed (ADR 0038).
+func TestDescribe(t *testing.T) {
+	e := engine(t)
+	i, err := e.Describe(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("engine: %+v", i)
+	if i.Version == "" || (i.Engine != "docker" && i.Engine != "podman") || (runtime.GOOS == "linux" && i.Cgroup == "") {
+		t.Errorf("Describe = %+v", i)
+	}
+	if want := os.Getenv("SIEGEKIT_EXPECT_ENGINE"); want != "" {
+		got := i.Engine + " rootful"
+		if i.Rootless {
+			got = i.Engine + " rootless"
+		}
+		if got != want {
+			t.Errorf("engine is %q, expected %q", got, want)
+		}
+	}
+}

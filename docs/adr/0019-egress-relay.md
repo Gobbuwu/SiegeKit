@@ -30,7 +30,7 @@ What was checked on Linux with Docker 29.10.0 (2026-11-19), using the relay imag
 
 - The tool container cannot reach the host, other containers, DNS or the internet. It can reach only the proxy, which allows only the target.
 - No `--internal` network is created, so no network is left behind if SiegeKit is killed. A relay container could be left behind, but it is started with `--rm` and has no network.
-- It should work with rootless Docker and Podman, because no network setup is needed. That is unverified until the CI container tests run on Podman.
+- It works with rootless Podman: CI's container tests, including `TestActiveRunOnlyReachesTarget`, run on rootless Podman 5.7.0 with cgroup v2 on GitHub's `ubuntu-latest` runners (found 2026-11-20; asserted by `TestDescribe` from PR #46, ADR 0038). Rootless Docker, and rootful Docker on cgroup v2, are unverified.
 - One more small image (about 15 MB) is downloaded before the first active test.
 
 ## Alternatives considered

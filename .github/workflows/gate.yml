@@ -91,6 +91,9 @@ jobs:
           set -e
           echo "exit code $code"
           if [ "$code" -ne 0 ] && [ "$code" -ne 3 ]; then exit 1; fi
+          # The gate's results hold for this engine only (ADR 0038): SiegeKit
+          # picks rootless Podman on GitHub's runners. Fail if that changes.
+          jq -e '.environment.engine | .name == "podman" and .rootless' "$RUNNER_TEMP/report/report.json"
           # Belt and braces: every plugin ran, or was skipped because the
           # repository has no files of its language.
           jq -e '[.plugins[] | select(.status != "ran" and (.status != "skipped" or (.reason | startswith("no files matching") | not)))] | length == 0' "$RUNNER_TEMP/report/report.json"
@@ -183,6 +186,7 @@ jobs:
           echo "exit code $code"
           if [ "$code" -ne 0 ] && [ "$code" -ne 3 ]; then exit 1; fi
           r="$RUNNER_TEMP/report/report.json"
+          jq -e '.environment.engine | .name == "podman" and .rootless' "$r"
           jq '.plugins[] | {id, status, reason, input, result, requests, refused, refusedTo, findings}' "$r"
           jq -e '[.plugins[] | select(.status == "ran" and .requests > 0) | .id] | sort == ["access-control", "ffuf", "login-throttle", "nuclei", "nuclei-default-login", "nuclei-intrusive", "rate-limit", "served-secrets", "zap", "zap-active"]' "$r"
           jq -e '[.plugins[] | select(.id == "schemathesis" and .status == "skipped" and (.reason | contains("none was found at /openapi.json")))] | length == 1' "$r"

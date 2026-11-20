@@ -73,6 +73,7 @@ Each scan writes `report.json`, `report.sarif` (SARIF 2.1.0) and `report.html` t
 
 Top level:
 - `schemaVersion`, `siegekitVersion`, `target`, `mode`, `started`, `finished`.
+- `environment`: where the run happened: `os`, `arch`, and `engine` (`name` docker or podman, `version`, `rootless`, `cgroup` v1 or v2), absent when no engine answered. Results from one engine or cgroup version do not carry over to another (ADR 0038); say which one a result came from when you report it.
 - `plugins`: one entry per check, with `id`, `family`, `tool`, `version`, `status` (`ran`, `skipped`, `failed` or `timed-out`), `reason` (why it was skipped or failed) and `findings` (a count). When the scanned repository told the tool to ignore something, three more fields say so, and are left out when there is nothing to report:
   - `suppressed`: how many findings the tool left out because of comments in the code, such as `# nosec` or `checkov:skip=`, where the tool reports this.
   - `repoSettings`: the repository's own settings files that the tool obeyed, such as `.gitleaksignore`, `.gitleaks.toml`, `.bandit` or `.checkov.yaml`. They can hide findings without a count.

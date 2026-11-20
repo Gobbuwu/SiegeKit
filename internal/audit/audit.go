@@ -22,6 +22,8 @@ type Entry struct {
 	Verification string    `json:"verification"` // e.g. "loopback", "typed confirmation", "well-known file"
 	Confirmed    string    `json:"confirmedHost,omitempty"`
 	Plugins      []string  `json:"plugins"`
+	// Environment names the machine and container engine (ADR 0038).
+	Environment string `json:"environment,omitempty"`
 }
 
 // MaxSize is the largest log Append writes to; past it, Append fails rather
