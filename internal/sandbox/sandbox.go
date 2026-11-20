@@ -163,8 +163,8 @@ func isPodman(bin string) bool {
 
 // sameOnEveryEngine adds the flags that make Podman's sandbox match
 // Docker's (ADR 0039): with --read-only, Podman also mounts writable tmpfs
-// on /run and /var/tmp unless --read-only-tmpfs=false is given. /tmp is
-// mounted by SiegeKit itself, with noexec spelled out.
+// on /run and /var/tmp unless --read-only-tmpfs=false is given. /tmp and
+// /dev/shm are mounted by SiegeKit itself, with noexec spelled out.
 func (e *Engine) sameOnEveryEngine(args []string) []string {
 	if !e.Podman {
 		return args
@@ -338,6 +338,9 @@ func (s *Spec) EngineArgs(name string, uid, gid int) ([]string, error) {
 		// noexec is spelled out: Docker adds it to --tmpfs and Podman does
 		// not, so without it the sandbox differs by engine (ADR 0039).
 		"--tmpfs", fmt.Sprintf("/tmp:rw,nosuid,nodev,noexec,size=%dm", tmp),
+		// /dev/shm as Docker mounts it by default; Podman's is read-only
+		// with --read-only-tmpfs=false (measured, ADR 0039).
+		"--tmpfs", "/dev/shm:rw,nosuid,nodev,noexec,size=64m",
 		"--pids-limit", strconv.Itoa(pids),
 		"--memory", fmt.Sprintf("%dm", s.MemoryMiB),
 		"--memory-swap", fmt.Sprintf("%dm", s.MemoryMiB),

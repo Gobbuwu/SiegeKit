@@ -244,8 +244,18 @@ var (
 // vulnAppMinRequests is the least work a complete run of each container
 // plugin does on the test app: requests through the egress proxy (ADR 0039).
 // A run that sends fewer was cut short, whatever the reason, and fails.
-// Measured in CI on both engines; see the ADR for the runs.
-var vulnAppMinRequests = map[string]int{}
+// It is 90% of the fewest requests measured on 2026-11-20 in CI (podman
+// 5.7.0 rootless and docker 29.4.2 rootful, both cgroup v2, run 44834908825)
+// and locally (docker 29.10.0 rootful, cgroup v1).
+var vulnAppMinRequests = map[string]int{
+	"zap":                  7,     // 8 on all three
+	"zap-active":           771,   // 857 on all three
+	"nuclei":               10394, // 11,549 on all three
+	"nuclei-intrusive":     900,   // 1,000 to 1,002
+	"nuclei-default-login": 747,   // 831 on all three
+	"ffuf":                 4282,  // 4,758 on all three
+	"schemathesis":         18,    // 21 to 23
+}
 
 // vulnAppIssues maps each planted issue to the rule (ZAP rule ID or Nuclei
 // template ID) that must report it, per plugin. A key "RULE /path" also

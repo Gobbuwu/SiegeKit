@@ -44,6 +44,7 @@ type Check struct {
 	Reason      string   `json:"reason,omitempty"`      // text the plugin's reason must contain
 	Match       string   `json:"match,omitempty"`       // Exact or Includes; "" when the check finds nothing to compare
 	Findings    []string `json:"findings,omitempty"`    // keys, see Key
+	Count       int      `json:"count,omitempty"`       // Exact: the plugin's own finding count (two findings can share a key)
 	MinRequests int      `json:"minRequests,omitempty"` // URL checks: requests a complete run sends at least
 	Why         string   `json:"why,omitempty"`         // how the answer was set, when not obvious
 	// ByEngine replaces this answer on one engine, for a difference between
@@ -123,6 +124,9 @@ func (c Check) validate() error {
 		}
 	default:
 		return fmt.Errorf("match %q", c.Match)
+	}
+	if c.Count > 0 && c.Match != Exact {
+		return fmt.Errorf("count needs match exact")
 	}
 	if c.Status == string(report.Skipped) && (c.Match != "" || c.MinRequests > 0 || c.Reason == "") {
 		return fmt.Errorf("a skipped check has a reason and no findings or requests")
@@ -251,6 +255,9 @@ func compareCheck(id string, want Check, got Observed) []string {
 			}
 		}
 	}
+	if want.Match == Exact && want.Count > 0 && got.Count != want.Count {
+		fails = append(fails, fmt.Sprintf("%s: %d findings, known answer is %d", id, got.Count, want.Count))
+	}
 	for _, k := range missing {
 		fails = append(fails, fmt.Sprintf("%s: missed %s", id, k))
 	}
@@ -273,7 +280,7 @@ func AnswerFrom(fixture, measured string, r *report.Run, old *Answers) *Answers 
 			c.Reason = o.Reason
 		}
 		if len(o.Findings) > 0 {
-			c.Match = Exact
+			c.Match, c.Count = Exact, o.Count
 		}
 		if old != nil {
 			if prev, ok := old.Checks[id]; ok {
@@ -283,6 +290,9 @@ func AnswerFrom(fixture, measured string, r *report.Run, old *Answers) *Answers 
 				}
 				if prev.Match != "" && len(o.Findings) > 0 {
 					c.Match = prev.Match
+				}
+				if c.Match != Exact {
+					c.Count = 0
 				}
 				c.MinRequests = prev.MinRequests
 			}

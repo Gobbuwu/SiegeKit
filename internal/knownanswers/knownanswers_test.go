@@ -51,7 +51,7 @@ func answers() *Answers {
 	return &Answers{
 		Fixture: "test", Measured: "test",
 		Checks: map[string]Check{
-			"gosec":      {Status: "ran", Match: Exact, Findings: []string{"G104 x.go:1", "G401 main.go:3"}},
+			"gosec":      {Status: "ran", Match: Exact, Findings: []string{"G104 x.go:1", "G401 main.go:3"}, Count: 2},
 			"zap-active": {Status: "ran", Match: Includes, Findings: []string{"10104 /"}, MinRequests: 3000},
 			"bandit":     {Status: "skipped", Reason: "no files matching"},
 		},
@@ -79,6 +79,7 @@ func TestCompareShortfalls(t *testing.T) {
 		"new": {func(_ *report.Run, a *Answers) {
 			a.Checks["gosec"] = Check{Status: "ran", Match: Exact, Findings: []string{"G401 main.go:3"}}
 		}, "gosec: new finding G104 x.go:1, not in the known answer"},
+		"count":     {func(r *report.Run, _ *Answers) { r.Plugins[0].Findings = 1 }, "gosec: 1 findings, known answer is 2"},
 		"failed":    {func(r *report.Run, _ *Answers) { r.Plugins[0].Status, r.Plugins[0].Reason = report.Failed, "exit 137" }, "gosec: failed exit 137, known answer is ran"},
 		"reason":    {func(r *report.Run, _ *Answers) { r.Plugins[2].Reason = "disabled" }, `bandit: reason "disabled", known answer contains "no files matching"`},
 		"no answer": {func(_ *report.Run, a *Answers) { delete(a.Checks, "bandit") }, "bandit: no known answer for this check on test"},

@@ -1,8 +1,67 @@
 {
   "fixture": "terraform-aws-modules/terraform-aws-vpc@577ad620abe00da27a3a0f1e5acee041959fb3be",
-  "measured": "not measured yet",
+  "measured": "CI gate run 44834908813 on 2026-11-20 (ubuntu-latest): podman 5.7.0 rootless, cgroup v2, and docker 29.4.2 rootful, cgroup v2; both engines gave the same answer",
   "checks": {
+    "backend-rules": {
+      "status": "ran"
+    },
+    "bandit": {
+      "status": "skipped",
+      "reason": "no files matching *.py, *.pyw"
+    },
+    "checkov": {
+      "status": "ran",
+      "match": "exact",
+      "findings": [
+        "CKV2_AWS_12 main.tf:28",
+        "CKV2_AWS_5 modules/vpc-endpoints/main.tf:81",
+        "CKV2_GHA_1 .github/workflows/lock.yml:1",
+        "CKV2_GHA_1 .github/workflows/pr-title.yml:1",
+        "CKV2_GHA_1 .github/workflows/pre-commit.yml:1",
+        "CKV2_GHA_1 .github/workflows/release.yml:1",
+        "CKV2_GHA_1 .github/workflows/stale-actions.yaml:1",
+        "CKV_AWS_148 main.tf:1388",
+        "CKV_AWS_338 modules/flow-log/main.tf:83",
+        "CKV_AWS_338 vpc-flow-logs.tf:65",
+        "CKV_AWS_394 examples/block-public-access/main.tf:5",
+        "CKV_AWS_394 examples/complete/main.tf:5",
+        "CKV_AWS_394 examples/flow-log/main.tf:5",
+        "CKV_AWS_394 examples/ipam/main.tf:5",
+        "CKV_AWS_394 examples/ipv6-dualstack/main.tf:5",
+        "CKV_AWS_394 examples/ipv6-only/main.tf:5",
+        "CKV_AWS_394 examples/issues/main.tf:5",
+        "CKV_AWS_394 examples/network-acls/main.tf:5",
+        "CKV_AWS_394 examples/outpost/main.tf:9",
+        "CKV_AWS_394 examples/secondary-cidr-blocks/main.tf:5",
+        "CKV_AWS_394 examples/separate-route-tables/main.tf:5",
+        "CKV_AWS_394 examples/simple/main.tf:5",
+        "CKV_TF_1 examples/complete/main.tf:356",
+        "CKV_TF_1 examples/flow-log/main.tf:264",
+        "CKV_TF_1 examples/flow-log/main.tf:309",
+        "CKV_TF_1 examples/flow-log/main.tf:319"
+      ]
+    },
+    "dotenv-gitignore": {
+      "status": "ran",
+      "match": "exact",
+      "findings": [
+        "gitignore-missing-env .gitignore"
+      ]
+    },
     "gitleaks": {
+      "status": "ran"
+    },
+    "gitleaks-history": {
+      "status": "ran"
+    },
+    "gosec": {
+      "status": "skipped",
+      "reason": "no files matching *.go"
+    },
+    "trivy": {
+      "status": "ran"
+    },
+    "weak-passwords": {
       "status": "ran"
     }
   }

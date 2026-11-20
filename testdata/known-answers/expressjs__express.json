@@ -1,9 +1,43 @@
 {
   "fixture": "expressjs/express@43fca52d28a422c8be48fd489cbd4f2d6152bab6",
-  "measured": "not measured yet",
+  "measured": "CI gate run 44834908813 on 2026-11-20 (ubuntu-latest): podman 5.7.0 rootless, cgroup v2, and docker 29.4.2 rootful, cgroup v2; both engines gave the same answer",
   "checks": {
+    "backend-rules": {
+      "status": "ran"
+    },
+    "bandit": {
+      "status": "skipped",
+      "reason": "no files matching *.py, *.pyw"
+    },
+    "checkov": {
+      "status": "ran"
+    },
+    "dotenv-gitignore": {
+      "status": "ran",
+      "match": "exact",
+      "findings": [
+        "gitignore-missing-env .gitignore"
+      ]
+    },
     "gitleaks": {
       "status": "ran"
+    },
+    "gitleaks-history": {
+      "status": "ran"
+    },
+    "gosec": {
+      "status": "skipped",
+      "reason": "no files matching *.go"
+    },
+    "trivy": {
+      "status": "ran"
+    },
+    "weak-passwords": {
+      "status": "ran",
+      "match": "exact",
+      "findings": [
+        "weak-password examples/auth/index.js:50"
+      ]
     }
   }
 }

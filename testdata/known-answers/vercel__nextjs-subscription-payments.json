@@ -1,8 +1,130 @@
 {
   "fixture": "vercel/nextjs-subscription-payments@bdd0813206e47e6b218d42f15a7976c8a0d3c3eb",
-  "measured": "not measured yet",
+  "measured": "CI gate run 44834908813 on 2026-11-20 (ubuntu-latest): podman 5.7.0 rootless, cgroup v2, and docker 29.4.2 rootful, cgroup v2; both engines gave the same answer",
   "checks": {
+    "backend-rules": {
+      "status": "ran"
+    },
+    "bandit": {
+      "status": "skipped",
+      "reason": "no files matching *.py, *.pyw"
+    },
+    "checkov": {
+      "status": "ran"
+    },
+    "dotenv-gitignore": {
+      "status": "ran",
+      "match": "exact",
+      "findings": [
+        "env-file-not-ignored .env.local.example"
+      ]
+    },
     "gitleaks": {
+      "status": "ran",
+      "match": "exact",
+      "findings": [
+        "jwt .env.local.example:4"
+      ]
+    },
+    "gitleaks-history": {
+      "status": "ran",
+      "match": "exact",
+      "findings": [
+        "env-file-committed .env.local.example",
+        "jwt .env.local.example:4"
+      ]
+    },
+    "gosec": {
+      "status": "skipped",
+      "reason": "no files matching *.go"
+    },
+    "trivy": {
+      "status": "ran",
+      "match": "includes",
+      "findings": [
+        "CVE-2024-21538 pnpm-lock.yaml:1",
+        "CVE-2024-37890 pnpm-lock.yaml:1",
+        "CVE-2024-4067 pnpm-lock.yaml:1",
+        "CVE-2024-4068 pnpm-lock.yaml:1",
+        "CVE-2024-46982 pnpm-lock.yaml:1",
+        "CVE-2024-47764 pnpm-lock.yaml:1",
+        "CVE-2024-47831 pnpm-lock.yaml:1",
+        "CVE-2024-51479 pnpm-lock.yaml:1",
+        "CVE-2024-55565 pnpm-lock.yaml:1",
+        "CVE-2024-56332 pnpm-lock.yaml:1",
+        "CVE-2025-15284 pnpm-lock.yaml:1",
+        "CVE-2025-27789 pnpm-lock.yaml:1",
+        "CVE-2025-29927 pnpm-lock.yaml:1",
+        "CVE-2025-32421 pnpm-lock.yaml:1",
+        "CVE-2025-48068 pnpm-lock.yaml:1",
+        "CVE-2025-48370 pnpm-lock.yaml:1",
+        "CVE-2025-55173 pnpm-lock.yaml:1",
+        "CVE-2025-57752 pnpm-lock.yaml:1",
+        "CVE-2025-57822 pnpm-lock.yaml:1",
+        "CVE-2025-5889 pnpm-lock.yaml:1",
+        "CVE-2025-59471 pnpm-lock.yaml:1",
+        "CVE-2025-64756 pnpm-lock.yaml:1",
+        "CVE-2026-102276 pnpm-lock.yaml:1",
+        "CVE-2026-102277 pnpm-lock.yaml:1",
+        "CVE-2026-102278 pnpm-lock.yaml:1",
+        "CVE-2026-104844 pnpm-lock.yaml:1",
+        "CVE-2026-110816 pnpm-lock.yaml:1",
+        "CVE-2026-118764 pnpm-lock.yaml:1",
+        "CVE-2026-118773 pnpm-lock.yaml:1",
+        "CVE-2026-119348 pnpm-lock.yaml:1",
+        "CVE-2026-13149 pnpm-lock.yaml:1",
+        "CVE-2026-14257 pnpm-lock.yaml:1",
+        "CVE-2026-2391 pnpm-lock.yaml:1",
+        "CVE-2026-26996 pnpm-lock.yaml:1",
+        "CVE-2026-27903 pnpm-lock.yaml:1",
+        "CVE-2026-27904 pnpm-lock.yaml:1",
+        "CVE-2026-27980 pnpm-lock.yaml:1",
+        "CVE-2026-29057 pnpm-lock.yaml:1",
+        "CVE-2026-33532 pnpm-lock.yaml:1",
+        "CVE-2026-33671 pnpm-lock.yaml:1",
+        "CVE-2026-33672 pnpm-lock.yaml:1",
+        "CVE-2026-33750 pnpm-lock.yaml:1",
+        "CVE-2026-41305 pnpm-lock.yaml:1",
+        "CVE-2026-44572 pnpm-lock.yaml:1",
+        "CVE-2026-44573 pnpm-lock.yaml:1",
+        "CVE-2026-44576 pnpm-lock.yaml:1",
+        "CVE-2026-44577 pnpm-lock.yaml:1",
+        "CVE-2026-44578 pnpm-lock.yaml:1",
+        "CVE-2026-44580 pnpm-lock.yaml:1",
+        "CVE-2026-44581 pnpm-lock.yaml:1",
+        "CVE-2026-44582 pnpm-lock.yaml:1",
+        "CVE-2026-45623 pnpm-lock.yaml:1",
+        "CVE-2026-45736 pnpm-lock.yaml:1",
+        "CVE-2026-48779 pnpm-lock.yaml:1",
+        "CVE-2026-64641 pnpm-lock.yaml:1",
+        "CVE-2026-64643 pnpm-lock.yaml:1",
+        "CVE-2026-64645 pnpm-lock.yaml:1",
+        "CVE-2026-64646 pnpm-lock.yaml:1",
+        "CVE-2026-64647 pnpm-lock.yaml:1",
+        "CVE-2026-64648 pnpm-lock.yaml:1",
+        "CVE-2026-64649 pnpm-lock.yaml:1",
+        "CVE-2026-67213 pnpm-lock.yaml:1",
+        "CVE-2026-67214 pnpm-lock.yaml:1",
+        "CVE-2026-69152 pnpm-lock.yaml:1",
+        "CVE-2026-69153 pnpm-lock.yaml:1",
+        "CVE-2026-73086 pnpm-lock.yaml:1",
+        "CVE-2026-73646 pnpm-lock.yaml:1",
+        "CVE-2026-75604 pnpm-lock.yaml:1",
+        "CVE-2026-82417 pnpm-lock.yaml:1",
+        "CVE-2026-8723 pnpm-lock.yaml:1",
+        "CVE-2026-93749 pnpm-lock.yaml:1",
+        "CVE-2026-94482 pnpm-lock.yaml:1",
+        "GHSA-2464-fhr4-w9xw pnpm-lock.yaml:1",
+        "GHSA-2xp9-vwfh-vxw4 pnpm-lock.yaml:1",
+        "GHSA-5j59-xgg2-r9c4 pnpm-lock.yaml:1",
+        "GHSA-8h8q-6873-q5fj pnpm-lock.yaml:1",
+        "GHSA-h25m-26qc-wcjf pnpm-lock.yaml:1",
+        "GHSA-mwv6-3258-q52c pnpm-lock.yaml:1",
+        "GHSA-q4gf-8mx6-v5v3 pnpm-lock.yaml:1"
+      ],
+      "why": "trivy's advisory data is downloaded at run time (--update), so new advisories can add findings; the measured ones must stay"
+    },
+    "weak-passwords": {
       "status": "ran"
     }
   }

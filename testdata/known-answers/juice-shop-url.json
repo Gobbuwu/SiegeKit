@@ -1,9 +1,151 @@
 {
   "fixture": "juice-shop v20.4.0 by URL (docker.io/bkimminich/juice-shop@sha256:9bbaecc41791f00b002bc65931cc5ff355fbdb941fa72b06558c18dace43197b)",
-  "measured": "not measured yet",
+  "measured": "CI gate run 44834908813 on 2026-11-20 (ubuntu-latest): podman 5.7.0 rootless, cgroup v2, and docker 29.4.2 rootful, cgroup v2. Minimum requests are 90% of the lower of the two runs",
   "checks": {
+    "access-control": {
+      "status": "ran",
+      "match": "exact",
+      "findings": [
+        "cross-account-read /api/Complaints",
+        "cross-account-read /api/Users",
+        "cross-account-read /api/Users/26",
+        "cross-account-read /rest/basket/6",
+        "no-login-secret /rest/memories/"
+      ],
+      "minRequests": 29
+    },
+    "backend-live": {
+      "status": "skipped",
+      "reason": "no backend URL was given"
+    },
+    "ffuf": {
+      "status": "ran",
+      "match": "exact",
+      "findings": [
+        "path-found /.well-known/security.txt",
+        "path-found /Video",
+        "path-found /api",
+        "path-found /api/experiments",
+        "path-found /api/experiments/configurations",
+        "path-found /apis",
+        "path-found /assets",
+        "path-found /ftp",
+        "path-found /media",
+        "path-found /profile",
+        "path-found /promotion",
+        "path-found /redirect",
+        "path-found /rest",
+        "path-found /restaurants",
+        "path-found /restore",
+        "path-found /restored",
+        "path-found /restricted",
+        "path-found /robots.txt",
+        "path-found /security.txt",
+        "path-found /video"
+      ],
+      "minRequests": 4282
+    },
+    "login-throttle": {
+      "status": "ran",
+      "match": "exact",
+      "findings": [
+        "login-not-limited /rest/user/login"
+      ],
+      "minRequests": 18
+    },
+    "nuclei": {
+      "status": "ran",
+      "match": "includes",
+      "why": "the swagger-api template reports /api-docs/swagger.yaml on one run and /api-docs/swagger.json on another (measured), so only the findings seen on both engines are required",
+      "findings": [
+        "addeventlistener-detect /",
+        "deprecated-feature-policy /",
+        "fingerprinthub-web-fingerprints /",
+        "http-missing-security-headers /",
+        "owasp-juice-shop-detect /",
+        "prometheus-metrics /metrics",
+        "robots-txt /robots.txt",
+        "robots-txt-endpoint /robots.txt",
+        "security-txt /.well-known/security.txt",
+        "tech-detect /",
+        "x-recruiting-header /"
+      ],
+      "minRequests": 10269
+    },
+    "nuclei-default-login": {
+      "status": "ran",
+      "minRequests": 747
+    },
+    "nuclei-intrusive": {
+      "status": "ran",
+      "minRequests": 891
+    },
+    "rate-limit": {
+      "status": "ran",
+      "match": "exact",
+      "findings": [
+        "rate-not-limited /rest/products/search"
+      ],
+      "minRequests": 18
+    },
+    "schemathesis": {
+      "status": "skipped",
+      "reason": "none was found at /openapi.json"
+    },
+    "served-secrets": {
+      "status": "ran",
+      "minRequests": 8
+    },
     "zap": {
-      "status": "ran"
+      "status": "ran",
+      "match": "includes",
+      "why": "ZAP's crawl reaches a slightly different set of pages each run, so a page's finding can come and go (measured: 10038 /ftp/eastere.gg and 10098 on two assets differed between the engines); the findings seen on both engines must stay",
+      "findings": [
+        "10038 /",
+        "10038 /ftp",
+        "10038 /ftp/coupons_2013.md.bak",
+        "10038 /sitemap.xml",
+        "10098 /",
+        "10098 /robots.txt",
+        "10098 /rolldown-runtime-kqx1xuJ_.js",
+        "10098 /sitemap.xml",
+        "10109 /",
+        "10109 /juice-shop/build/routes/fileServer.js:52:13",
+        "10109 /juice-shop/build/routes/fileServer.js:68:18",
+        "10109 /juice-shop/node_modules/express/lib/router/layer.js:95:5",
+        "10109 /sitemap.xml"
+      ],
+      "minRequests": 84
+    },
+    "zap-active": {
+      "status": "ran",
+      "match": "includes",
+      "why": "as for zap; the minimum is 90% of the 3,443 requests both engines sent, so a cut-short scan (about 944 requests on Podman before ADR 0039) fails",
+      "findings": [
+        "10104 /assets",
+        "10104 /assets/public"
+      ],
+      "minRequests": 3098
     }
-  }
+  },
+  "notMetYet": [
+    {
+      "check": "zap-active",
+      "finding": "40018 /rest/products/search",
+      "needs": "part 5, the shared URL list: seeded with the app's script paths, ZAP found it in 3 of 3 local runs (zap-memory-seeding-measurement-2026-11-20.md, run sc0)",
+      "confirmed": "2026-11-20 by hand: GET /rest/products/search?q=qwert')) UNION SELECT id,email,password,4,5,6,7,8,9 FROM Users-- answers SQLITE_ERROR about the UNION's columns, so the query text reaches SQL"
+    },
+    {
+      "check": "zap-active",
+      "finding": "40018 /rest/user/login",
+      "needs": "not planned yet: ZAP never sends the JSON login, and part 5 seeds GET URLs only; to plan at the M2 milestone check",
+      "confirmed": "2026-11-20 by hand: POST /rest/user/login with email \"' OR 1=1--\" returns a token for admin@juice-sh.op"
+    },
+    {
+      "check": "zap-active",
+      "finding": "40026 /",
+      "needs": "ZAP's browser (design question 4, decided after part 3's sizing) and the #/search route in the shared URL list (part 5)",
+      "confirmed": "2026-11-20 by hand: Playwright Chromium on /#/search?q=<iframe src=\"javascript:alert(`xss-ka`)\"> raised the alert"
+    }
+  ]
 }

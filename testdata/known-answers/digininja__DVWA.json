@@ -1,9 +1,69 @@
 {
   "fixture": "digininja/DVWA@502ac150ce37c20ca6e04cab7c5ca959f315f2d0",
-  "measured": "not measured yet",
+  "measured": "CI gate run 44834908813 on 2026-11-20 (ubuntu-latest): podman 5.7.0 rootless, cgroup v2, and docker 29.4.2 rootful, cgroup v2; both engines gave the same answer",
   "checks": {
-    "gitleaks": {
+    "backend-rules": {
       "status": "ran"
+    },
+    "bandit": {
+      "status": "ran",
+      "match": "exact",
+      "findings": [
+        "B101 tests/test_url.py:124"
+      ]
+    },
+    "checkov": {
+      "status": "ran",
+      "match": "exact",
+      "findings": [
+        "CKV2_GHA_1 .github/workflows/codeql-analysis.yml:1",
+        "CKV2_GHA_1 .github/workflows/docker-image.yml:1",
+        "CKV2_GHA_1 .github/workflows/pytest.yml:1",
+        "CKV2_GHA_1 .github/workflows/shiftleft-analysis.yml:1",
+        "CKV2_GHA_1 .github/workflows/vulnerable.yml:1",
+        "CKV_DOCKER_2 Dockerfile:1",
+        "CKV_DOCKER_3 Dockerfile:1",
+        "CKV_OPENAPI_21 vulnerabilities/api/openapi.yml:178",
+        "CKV_OPENAPI_4 vulnerabilities/api/openapi.yml:1",
+        "CKV_OPENAPI_5 vulnerabilities/api/openapi.yml:1"
+      ]
+    },
+    "dotenv-gitignore": {
+      "status": "ran",
+      "match": "exact",
+      "findings": [
+        "gitignore-missing-env .gitignore"
+      ]
+    },
+    "gitleaks": {
+      "status": "ran",
+      "match": "exact",
+      "findings": [
+        "generic-api-key vulnerabilities/csrf/help/help.php:54"
+      ]
+    },
+    "gitleaks-history": {
+      "status": "ran",
+      "match": "exact",
+      "findings": [
+        "generic-api-key vulnerabilities/csrf/help/help.php:54"
+      ]
+    },
+    "gosec": {
+      "status": "skipped",
+      "reason": "no files matching *.go"
+    },
+    "trivy": {
+      "status": "ran"
+    },
+    "weak-passwords": {
+      "status": "ran",
+      "match": "exact",
+      "findings": [
+        "weak-password compose.yml:31",
+        "weak-password compose.yml:34",
+        "weak-password vulnerabilities/sqli/test.php:4"
+      ]
     }
   }
 }

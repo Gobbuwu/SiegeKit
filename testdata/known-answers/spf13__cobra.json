@@ -1,8 +1,37 @@
 {
   "fixture": "spf13/cobra@adbc8813901bba65827259daa8e22ff94ec1f30e",
-  "measured": "not measured yet",
+  "measured": "CI gate run 44834908813 on 2026-11-20 (ubuntu-latest): podman 5.7.0 rootless, cgroup v2, and docker 29.4.2 rootful, cgroup v2; both engines gave the same answer",
   "checks": {
+    "backend-rules": {
+      "status": "ran"
+    },
+    "bandit": {
+      "status": "skipped",
+      "reason": "no files matching *.py, *.pyw"
+    },
+    "checkov": {
+      "status": "ran"
+    },
+    "dotenv-gitignore": {
+      "status": "ran",
+      "match": "exact",
+      "findings": [
+        "gitignore-missing-env .gitignore"
+      ]
+    },
     "gitleaks": {
+      "status": "ran"
+    },
+    "gitleaks-history": {
+      "status": "ran"
+    },
+    "gosec": {
+      "status": "ran"
+    },
+    "trivy": {
+      "status": "ran"
+    },
+    "weak-passwords": {
       "status": "ran"
     }
   }

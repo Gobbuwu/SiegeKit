@@ -1,8 +1,72 @@
 {
   "fixture": "caddyserver/caddy@16618f454ca6f78f37dfd85a90573d8ffd43c1c8",
-  "measured": "not measured yet",
+  "measured": "CI gate run 44834908813 on 2026-11-20 (ubuntu-latest): podman 5.7.0 rootless, cgroup v2, and docker 29.4.2 rootful, cgroup v2; both engines gave the same answer",
   "checks": {
+    "backend-rules": {
+      "status": "ran"
+    },
+    "bandit": {
+      "status": "skipped",
+      "reason": "no files matching *.py, *.pyw"
+    },
+    "checkov": {
+      "status": "ran",
+      "match": "exact",
+      "findings": [
+        "CKV_GHA_7 .github/workflows/release-proposal.yml:8"
+      ]
+    },
+    "dotenv-gitignore": {
+      "status": "ran",
+      "match": "exact",
+      "findings": [
+        "gitignore-missing-env .gitignore"
+      ]
+    },
     "gitleaks": {
+      "status": "ran",
+      "match": "exact",
+      "findings": [
+        "generic-api-key caddytest/integration/reverseproxy_test.go:1223",
+        "generic-api-key modules/caddyhttp/reverseproxy/extended_connect_test.go:152",
+        "generic-api-key modules/caddyhttp/reverseproxy/hopheaders_test.go:24",
+        "generic-api-key modules/caddyhttp/reverseproxy/hopheaders_test.go:74",
+        "private-key admin_test.go:1224",
+        "private-key caddytest/a.caddy.localhost.key:1",
+        "private-key caddytest/caddy.localhost.key:1"
+      ]
+    },
+    "gitleaks-history": {
+      "status": "ran",
+      "match": "exact",
+      "findings": [
+        "generic-api-key caddytest/integration/reverseproxy_test.go:1223",
+        "generic-api-key modules/caddyhttp/reverseproxy/extended_connect_test.go:152",
+        "generic-api-key modules/caddyhttp/reverseproxy/hopheaders_test.go:24",
+        "generic-api-key modules/caddyhttp/reverseproxy/hopheaders_test.go:74",
+        "private-key admin_test.go:1224",
+        "private-key caddytest/a.caddy.localhost.key:1",
+        "private-key caddytest/caddy.localhost.key:1"
+      ]
+    },
+    "gosec": {
+      "status": "ran",
+      "match": "exact",
+      "findings": [
+        "G304 internal/filesystems/os.go:18",
+        "G304 internal/filesystems/os.go:22"
+      ]
+    },
+    "trivy": {
+      "status": "ran",
+      "match": "includes",
+      "findings": [
+        "CVE-2026-128085 go.mod:1",
+        "GO-2026-5932 go.mod:1"
+      ],
+      "why": "trivy's advisory data is downloaded at run time (--update), so new advisories can add findings; the measured ones must stay"
+    },
+    "weak-passwords": {
       "status": "ran"
     }
   }
