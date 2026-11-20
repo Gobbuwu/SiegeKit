@@ -217,6 +217,18 @@ func app(t *testing.T) (*httptest.Server, *[]string) {
 			fmt.Fprint(w, `{"status":"success","data":[{"name":"Apple"}]}`)
 		case "/profile":
 			fmt.Fprint(w, `<p>alice@x.test</p>`)
+		case "/api/public-users":
+			fmt.Fprint(w, `{"data":[{"name":"carol","password":"5f4dcc3b5aa765d61d8327deb882cf99","totp_secret":""}]}`) // gitleaks:allow (fake test value)
+		case "/assets/i18n/de.json":
+			fmt.Fprint(w, `{"password":"Passwort","secret":"Geheimnis"}`)
+		case "/api/me/settings":
+			if who == "" {
+				http.Error(w, "no", http.StatusUnauthorized)
+				return
+			}
+			fmt.Fprint(w, `{"theme":"dark","language":"en"}`)
+		case "/api/settings":
+			fmt.Fprint(w, `{"apiKey":"****1234","password":null,"clientSecret":"[redacted]"}`)
 		case "/down":
 			http.Error(w, "x", http.StatusInternalServerError)
 		default:
@@ -241,7 +253,7 @@ func TestCheck(t *testing.T) {
 	tu := mustTarget(t, srv.URL+"/")
 	cfg := egress.Config{Target: tu, Addrs: []netip.Addr{netip.MustParseAddr("127.0.0.1")}, Version: "test", ReadOnly: true}
 	var es []entry
-	for _, p := range []string{"/rest/basket/1", "/api/Users", "/rest/user/whoami", "/api/Cards", "/api/Products", "/profile", "/down"} {
+	for _, p := range []string{"/rest/basket/1", "/api/Users", "/rest/user/whoami", "/api/Cards", "/api/Products", "/profile", "/api/public-users", "/assets/i18n/de.json", "/api/settings", "/api/me/settings", "/down"} {
 		es = append(es, entry{"GET", srv.URL + p})
 	}
 	h, err := ParseHAR(har(t, es, map[string]string{"Authorization": "Bearer A", "X-Extra": "kept"}), tu)
@@ -253,11 +265,11 @@ func TestCheck(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// 6 requests answered A with 2xx and were sent three times; /down once.
-	if res.ATried != 7 || res.AFailed != 1 || res.Requests != 19 || len(*seen) != 19 || res.BRefused != 0 || !res.BTested {
+	// 10 requests answered A with 2xx and were sent three times; /down once.
+	if res.ATried != 11 || res.AFailed != 1 || res.Requests != 31 || len(*seen) != 31 || res.BRefused != 0 || !res.BTested {
 		t.Errorf("%+v", res)
 	}
-	if len(*waits) != 18 || (*waits)[0] > 100*time.Millisecond {
+	if len(*waits) != 30 || (*waits)[0] > 100*time.Millisecond {
 		t.Errorf("waits %v", *waits)
 	}
 	// A's own headers stay for B and no login; only the session changes.
@@ -267,26 +279,30 @@ func TestCheck(t *testing.T) {
 	fs := Findings(srv.URL, res, "alice@x.test")
 	var got []string
 	for _, f := range fs {
-		got = append(got, f.RuleID+" "+f.Location.URI[len(srv.URL):]+" "+f.CWEs[0])
-		if f.Severity != findings.High || f.Fingerprint == "" || f.Sources[0].Plugin != ID || strings.Contains(f.Message, "alice") || strings.Contains(f.Message, "Apple") {
+		got = append(got, f.RuleID+" "+f.Location.URI[len(srv.URL):]+" "+f.CWEs[0]+" "+f.Severity.String())
+		if f.Fingerprint == "" || f.Sources[0].Plugin != ID || strings.Contains(f.Message, "alice") || strings.Contains(f.Message, "Apple") || strings.Contains(f.Message, "5f4d") {
 			t.Errorf("%+v", f)
 		}
 	}
-	want := []string{"cross-account-read /rest/basket/1 CWE-639", "cross-account-read /api/Users CWE-862", "no-login-read /profile CWE-306"}
+	// High with an ID in the URL or A's login name in the answer; the
+	// same default settings for every account and no-login reads are
+	// medium (ADR 0035).
+	want := []string{"cross-account-read /rest/basket/1 CWE-639 high", "cross-account-read /api/Users CWE-862 high", "no-login-read /profile CWE-306 medium",
+		"no-login-secret /api/public-users CWE-200 high", "cross-account-read /api/me/settings CWE-862 medium"}
 	if !slices.Equal(got, want) {
 		t.Errorf("findings %v, want %v", got, want)
 	}
-	if c, n := Count(res, "alice@x.test"); c != 2 || n != 1 {
-		t.Errorf("count %d %d", c, n)
+	if c := Count(res, "alice@x.test"); c != (Counts{Cross: 3, NoLogin: 1, Secrets: 1}) {
+		t.Errorf("count %+v", c)
 	}
-	if s := res.Summary(h, "alice@x.test", 2, 1); s != "replayed 7 request(s) from the HAR file: 2 readable by account B, 1 readable with no login; 1 did not answer account A with 2xx and were not sent further" {
+	if s := res.Summary(h, "alice@x.test", Count(res, "alice@x.test")); s != "replayed 11 request(s) from the HAR file: 3 readable by account B, 1 readable with no login, 1 with secret fields for no login; 1 did not answer account A with 2xx and were not sent further" {
 		t.Errorf("summary %q", s)
 	}
 	// Without --har-user, no-login reads are not reported.
-	if fs := Findings(srv.URL, res, ""); len(fs) != 2 {
+	if fs := Findings(srv.URL, res, ""); len(fs) != 4 || fs[1].Severity != findings.Medium {
 		t.Errorf("%d findings without a login name", len(fs))
 	}
-	if s := res.Summary(&HAR{Static: 3}, "", 2, 0); !strings.Contains(s, "no-login reads not reported") || !strings.HasSuffix(s, "3 static files not replayed") {
+	if s := res.Summary(&HAR{Static: 3}, "", Counts{Cross: 2}); !strings.Contains(s, "no-login reads not reported") || !strings.HasSuffix(s, "3 static files not replayed") {
 		t.Errorf("summary %q", s)
 	}
 }
@@ -308,7 +324,7 @@ func TestCheckWithoutB(t *testing.T) {
 	if len(fs) != 1 || fs[0].RuleID != "no-login-read" {
 		t.Errorf("%+v", fs)
 	}
-	if s := res.Summary(h, "alice@x.test", 0, 1); !strings.Contains(s, "account B not tested") {
+	if s := res.Summary(h, "alice@x.test", Counts{NoLogin: 1}); !strings.Contains(s, "account B not tested") {
 		t.Errorf("summary %q", s)
 	}
 }
@@ -323,7 +339,7 @@ func TestCheckBRefused(t *testing.T) {
 	if err != nil || res.BRefused != 1 {
 		t.Fatalf("%+v %v", res, err)
 	}
-	if s := res.Summary(h, "", 0, 0); !strings.Contains(s, "refused on every request") {
+	if s := res.Summary(h, "", Counts{}); !strings.Contains(s, "refused on every request") {
 		t.Errorf("summary %q", s)
 	}
 	if fs := Findings(srv.URL, res, ""); len(fs) != 0 {
@@ -412,5 +428,35 @@ func TestSpecRoutes(t *testing.T) {
 	}
 	if full.AddSpecRoutes([]string{"/a", "/b"}, ""); len(full.Requests) != MaxRequests || full.OverLimit != 2 {
 		t.Errorf("limit: %d %d", len(full.Requests), full.OverLimit)
+	}
+}
+
+func TestSecretFields(t *testing.T) {
+	for body, want := range map[string]string{
+		`{"data":[{"User":{"email":"a","password":"0192023a7bbd73250516f069df18b500","deluxeToken":"efe2f1599e2d93440d5243a1ffaf5a413b70cf3ac97156bd6fab9b5ddfcbe0e4","totpSecret":""}}]}`: "deluxeToken password", // gitleaks:allow (fake test value)
+		`{"identityProviders":[{"config":{"oauth2Config":{"clientId":"cid","client_secret":"csecret-abcdef123456"}}}]}`:                                                                    "client_secret",        // gitleaks:allow (fake test value)
+		`{"cardNumber":4111111111111111,"cvv":123}`:                             "cardNumber cvv",
+		`{"password":"","password_min_length":12,"secret":false,"apiKey":null}`: "",
+		`{"password":"********","apiKey":"****1234","token":"abcdef123456"}`:    "", // gitleaks:allow (fake test value)
+		`{"password":"Enter your password","secret":"redacted","pwd":"xxxx"}`:   "",
+		`{"LABEL_PASSWORD":"Password","passwordHint":"abc123"}`:                 "",
+		`not json`: "",
+		`{"a":{"b":{"c":{"d":{"e":{"f":{"Password":"hunter2"}}}}}}}`: "Password",
+	} {
+		if got := strings.Join(SecretFields([]byte(body)), " "); got != want {
+			t.Errorf("%.40s: %q, want %q", body, got, want)
+		}
+	}
+	var many strings.Builder
+	many.WriteString("{")
+	for i, k := range []string{"password", "salt", "secret", "apiKey", "ssn", "cvv", "pwd"} {
+		if i > 0 {
+			many.WriteString(",")
+		}
+		fmt.Fprintf(&many, "%q:%q", k, "v4lue"+k)
+	}
+	many.WriteString("}")
+	if got := SecretFields([]byte(many.String())); len(got) != 5 {
+		t.Errorf("%v", got)
 	}
 }

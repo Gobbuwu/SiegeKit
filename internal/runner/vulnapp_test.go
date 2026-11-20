@@ -205,6 +205,12 @@ func vulnApp() http.Handler {
 		w.Header().Set("Content-Type", "application/json")
 		fmt.Fprintf(w, `{"status":"success","data":[{"owner":%q}]}`, who)
 	})
+	// A member list that gives anyone each member's password hash
+	// (CWE-200, ADR 0035).
+	mux.HandleFunc("GET /api/members", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"members":[{"name":"carol","passwordHash":"$2b$10$N9qo8uLOickgx2ZMRZoMyeIjZAgcfl7p92ldGxad68LJZdL17lhWy"}]}`)
+	})
 	mux.HandleFunc("GET /account/profile", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		fmt.Fprint(w, `{"email":"alice@shop.test","address":"1 Main St"}`)
@@ -268,5 +274,6 @@ var vulnAppIssues = map[string]map[string]string{
 	"access-control": {
 		"cross-account-read /api/orders/7": "account B reads account A's order at GET /api/orders/7",
 		"no-login-read /account/profile":   "account A's profile answers with no login",
+		"no-login-secret /api/members":     "the member list gives anyone password hashes",
 	},
 }

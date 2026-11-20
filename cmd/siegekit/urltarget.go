@@ -641,8 +641,7 @@ func runURL(ctx context.Context, u *target.URL, addrs []netip.Addr, mode target.
 				pr.Status, pr.Reason = report.Failed, err.Error()
 			} else {
 				authzFindings = authz.Findings(u.Origin(), res, o.harUser)
-				cross, none := authz.Count(res, o.harUser)
-				pr.Status, pr.Result, pr.Findings = report.Ran, res.Summary(o.harRequests, o.harUser, cross, none), len(authzFindings)
+				pr.Status, pr.Result, pr.Findings = report.Ran, res.Summary(o.harRequests, o.harUser, authz.Count(res, o.harUser)), len(authzFindings)
 			}
 		}
 		authzResult = &pr

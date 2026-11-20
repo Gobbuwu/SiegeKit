@@ -418,7 +418,12 @@ func (r Replay) CrossAccount() bool {
 // NoLogin reports whether a request with no login got A's data (answer 6a):
 // the same status and body as A, with data and A's login name in it.
 func (r Replay) NoLogin(loginName string) bool {
-	return loginName != "" && same(r.A, r.None) && HoldsData(r.A.Body) && bytes.Contains(bytes.ToLower(r.A.Body), []byte(strings.ToLower(loginName)))
+	return same(r.A, r.None) && HoldsData(r.A.Body) && namesA(r.A.Body, loginName)
+}
+
+// namesA reports whether an answer holds A's login name, in any case.
+func namesA(body []byte, loginName string) bool {
+	return loginName != "" && bytes.Contains(bytes.ToLower(body), []byte(strings.ToLower(loginName)))
 }
 
 // statusKeys hold an answer's status, not its data.
@@ -468,21 +473,22 @@ func holds(v any, depth int) bool {
 }
 
 // Summary says what was replayed in one line, for reports.
-func (r Result) Summary(h *HAR, loginName string, cross, none int) string {
+func (r Result) Summary(h *HAR, loginName string, c Counts) string {
 	s := fmt.Sprintf("replayed %d request(s) from the HAR file", r.ATried)
 	if h != nil && h.FromSpec > 0 {
 		s = fmt.Sprintf("replayed %d request(s) (%d from the HAR file, %d from the OpenAPI spec)", r.ATried, r.ATried-h.FromSpec, h.FromSpec)
 	}
 	if r.BTested {
-		s += fmt.Sprintf(": %d readable by account B", cross)
+		s += fmt.Sprintf(": %d readable by account B", c.Cross)
 	} else {
 		s += ": account B not tested (" + SessionEnv + " not set)"
 	}
 	if loginName != "" {
-		s += fmt.Sprintf(", %d readable with no login", none)
+		s += fmt.Sprintf(", %d readable with no login", c.NoLogin)
 	} else {
 		s += ", no-login reads not reported (no --har-user)"
 	}
+	s += fmt.Sprintf(", %d with secret fields for no login", c.Secrets)
 	var notes []string
 	if r.AFailed > 0 {
 		notes = append(notes, fmt.Sprintf("%d did not answer account A with 2xx and were not sent further", r.AFailed))
@@ -546,11 +552,19 @@ func Findings(origin string, res Result, loginName string) []findings.Finding {
 			if hasID(r.Path) {
 				cwe = "CWE-639"
 			}
+			// High only with a sign that the answer is A's own: an ID in
+			// the URL or A's login name in it. Otherwise two new accounts
+			// can get the same default answer (measured on Gitea's
+			// /user/settings, ADR 0035).
+			sev, note := findings.Medium, " The URL holds no ID and the answer does not name account A, so this may be an answer every account gets, such as default settings: check it by hand."
+			if hasID(r.Path) || namesA(r.A.Body, loginName) {
+				sev, note = findings.High, ""
+			}
 			f := findings.Finding{
 				RuleID:   "cross-account-read",
 				Title:    "Another account can read this data",
-				Message:  fmt.Sprintf("%s %s answered account B exactly as it answered account A (status %d, %d bytes), while a request with no login was refused (status %d). Account B can likely read account A's data here: broken access control (OWASP API1 and API5). This is a heuristic, not proof: compare both answers yourself.", r.Method, pathOnly, r.A.Status, len(r.A.Body), r.None.Status),
-				Severity: findings.High,
+				Message:  fmt.Sprintf("%s %s answered account B exactly as it answered account A (status %d, %d bytes), while a request with no login was refused (status %d). Account B can likely read account A's data here: broken access control (OWASP API1 and API5). This is a heuristic, not proof: compare both answers yourself.%s", r.Method, pathOnly, r.A.Status, len(r.A.Body), r.None.Status, note),
+				Severity: sev,
 				CWEs:     []string{cwe},
 				Location: loc,
 				Family:   Family,
@@ -560,9 +574,20 @@ func Findings(origin string, res Result, loginName string) []findings.Finding {
 			out = append(out, findings.Finding{
 				RuleID:   "no-login-read",
 				Title:    "Account data is readable with no login",
-				Message:  fmt.Sprintf("%s %s answered a request with no login exactly as it answered account A (status %d, %d bytes), and the answer holds A's login name. Anyone can likely read this account's data: missing authentication (OWASP API2).", r.Method, pathOnly, r.A.Status, len(r.A.Body)),
-				Severity: findings.High,
+				Message:  fmt.Sprintf("%s %s answered a request with no login exactly as it answered account A (status %d, %d bytes), and the answer holds A's login name. Anyone may be able to read this account's data: missing authentication (OWASP API2). Public pages such as profiles or commit lists also name their author by design, so check it by hand.", r.Method, pathOnly, r.A.Status, len(r.A.Body)),
+				Severity: findings.Medium,
 				CWEs:     []string{"CWE-306"},
+				Location: loc,
+				Family:   Family,
+			})
+		}
+		if fields := r.NoLoginSecrets(); len(fields) > 0 {
+			out = append(out, findings.Finding{
+				RuleID:   "no-login-secret",
+				Title:    "Secrets are readable with no login",
+				Message:  fmt.Sprintf("%s %s answered a request with no login (status %d, %d bytes) with fields named like secrets that hold a value: %s. Anyone can likely read them, such as password hashes, tokens or keys: excessive data exposure (OWASP API3). The values are not copied into this report; check the answer yourself.", r.Method, pathOnly, r.None.Status, len(r.None.Body), strings.Join(fields, ", ")),
+				Severity: findings.High,
+				CWEs:     []string{"CWE-200"},
 				Location: loc,
 				Family:   Family,
 			})
@@ -575,15 +600,110 @@ func Findings(origin string, res Result, loginName string) []findings.Finding {
 	return out
 }
 
-// Count returns how many replays are reported for B and for no login.
-func Count(res Result, loginName string) (cross, none int) {
+// secretKeys are field names (lower case, without "_", "-" and spaces)
+// that hold credentials or keys (ADR 0035 item 7). Generic names such as
+// "token" or "key" are left out: public answers carry CSRF tokens and
+// lookup keys by design.
+var secretKeys = map[string]bool{
+	"password": true, "passwd": true, "pwd": true, "passwordhash": true, "hashedpassword": true, "encryptedpassword": true,
+	"passwordsalt": true, "salt": true, "totpsecret": true, "otpsecret": true, "mfasecret": true, "twofactorsecret": true,
+	"secret": true, "clientsecret": true, "apisecret": true, "secretkey": true, "privatekey": true, "apikey": true,
+	"accesstoken": true, "refreshtoken": true, "sessiontoken": true, "authtoken": true, "resettoken": true,
+	"passwordresettoken": true, "deluxetoken": true, "ssn": true, "socialsecuritynumber": true, "cardnumber": true,
+	"cardnum": true, "cvv": true, "cvc": true,
+}
+
+// notSecret are values that say a field is empty, hidden or a setting.
+var notSecret = map[string]bool{"true": true, "false": true, "null": true, "none": true, "nil": true, "undefined": true, "redacted": true, "[redacted]": true, "hidden": true, "[hidden]": true, "[filtered]": true, "masked": true}
+
+// translationDirs are path segments of translation files, whose JSON maps
+// words such as "password" to labels.
+var translationDirs = map[string]bool{"i18n": true, "locale": true, "locales": true, "lang": true, "langs": true, "translations": true, "l10n": true}
+
+// SecretFields returns the names of fields in a JSON answer that are named
+// like secrets and hold a value: a number other than 0, or a string with no
+// space that is not masked ("****") or a word such as "null" or "redacted".
+// Names are returned once each, sorted, at most 5.
+func SecretFields(body []byte) []string {
+	var v any
+	if json.Unmarshal(bytes.TrimSpace(body), &v) != nil {
+		return nil
+	}
+	found := map[string]bool{}
+	secretsIn(v, found, 0)
+	out := make([]string, 0, len(found))
+	for k := range found {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	if len(out) > 5 {
+		out = out[:5]
+	}
+	return out
+}
+
+func secretsIn(v any, found map[string]bool, depth int) {
+	if depth > 64 || len(found) > 5 {
+		return
+	}
+	switch x := v.(type) {
+	case []any:
+		for _, e := range x {
+			secretsIn(e, found, depth+1)
+		}
+	case map[string]any:
+		for k, e := range x {
+			name := strings.NewReplacer("_", "", "-", "", " ", "").Replace(strings.ToLower(k))
+			if secretKeys[name] && holdsSecret(e) {
+				found[k] = true
+			}
+			secretsIn(e, found, depth+1)
+		}
+	}
+}
+
+func holdsSecret(v any) bool {
+	switch x := v.(type) {
+	case float64:
+		return x != 0
+	case string:
+		s := strings.TrimSpace(x)
+		return s != "" && !strings.ContainsAny(s, " \t\r\n*•") && !notSecret[strings.ToLower(s)] && strings.Trim(strings.ToLower(s), "x") != ""
+	}
+	return false
+}
+
+// NoLoginSecrets returns the secret fields in the answer to the request
+// with no login (ADR 0035 item 7), except in translation files.
+func (r Replay) NoLoginSecrets() []string {
+	if !ok2xx(r.None) {
+		return nil
+	}
+	pathOnly, _, _ := strings.Cut(r.Path, "?")
+	for _, seg := range strings.Split(strings.ToLower(pathOnly), "/") {
+		if translationDirs[seg] {
+			return nil
+		}
+	}
+	return SecretFields(r.None.Body)
+}
+
+// Counts are how many replays each rule reported.
+type Counts struct{ Cross, NoLogin, Secrets int }
+
+// Count counts the replays each rule reports.
+func Count(res Result, loginName string) Counts {
+	var c Counts
 	for _, r := range res.Replays {
 		switch {
 		case r.CrossAccount():
-			cross++
+			c.Cross++
 		case r.NoLogin(loginName):
-			none++
+			c.NoLogin++
+		}
+		if len(r.NoLoginSecrets()) > 0 {
+			c.Secrets++
 		}
 	}
-	return
+	return c
 }

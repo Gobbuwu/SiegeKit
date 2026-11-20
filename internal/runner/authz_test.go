@@ -16,8 +16,9 @@ import (
 
 // TestAuthzFindsPlantedIssues replays a HAR recorded as alice against the
 // vulnerable app, as bob and with no login: the order any account can
-// read and the profile anyone can read are reported, and the orders that
-// check their owner or differ per account are not.
+// read, the profile anyone can read and the password hashes anyone can
+// read are reported, and the orders that check their owner or differ per
+// account are not.
 func TestAuthzFindsPlantedIssues(t *testing.T) {
 	srv := httptest.NewServer(vulnApp())
 	defer srv.Close()
@@ -41,7 +42,7 @@ func TestAuthzFindsPlantedIssues(t *testing.T) {
 			Entries []entry `json:"entries"`
 		} `json:"log"`
 	}
-	for _, p := range []string{"/", "/static/app.js", "/api/orders/7", "/api/own-orders/7", "/api/my/orders", "/account/profile", "/item?id=1"} {
+	for _, p := range []string{"/", "/static/app.js", "/api/orders/7", "/api/own-orders/7", "/api/my/orders", "/account/profile", "/api/members", "/item?id=1"} {
 		var e entry
 		e.Request.Method, e.Request.URL = "GET", srv.URL+p
 		e.Request.Headers = []header{{"Authorization", "Bearer token-a"}, {"Accept", "application/json"}}
@@ -52,12 +53,12 @@ func TestAuthzFindsPlantedIssues(t *testing.T) {
 		t.Fatal(err)
 	}
 	h, err := authz.ParseHAR(data, tu)
-	if err != nil || len(h.Requests) != 6 || h.Static != 1 {
+	if err != nil || len(h.Requests) != 7 || h.Static != 1 {
 		t.Fatalf("%+v %v", h, err)
 	}
 	cfg := egress.Config{Target: tu, Addrs: []netip.Addr{netip.MustParseAddr("127.0.0.1")}, Version: "test", ReadOnly: true}
 	res, err := authz.Check(context.Background(), cfg, h.Requests, http.Header{"Authorization": {"Bearer token-b"}}, 100)
-	if err != nil || res.Requests != 18 {
+	if err != nil || res.Requests != 21 {
 		t.Fatalf("%+v %v", res, err)
 	}
 	found := map[string]bool{}

@@ -138,7 +138,7 @@ func TestScanURLAccessControl(t *testing.T) {
 	r := readReport()
 	p := r.Plugins[0]
 	if p.Status != report.Ran || p.Requests != 7 || p.Findings != 1 || p.Input != "a.har, 2 request(s) recorded as account A; 1 route(s) from the OpenAPI spec http://localhost:3000/openapi.json; account B from SIEGEKIT_SESSION_B" ||
-		p.Result != "replayed 3 request(s) (2 from the HAR file, 1 from the OpenAPI spec): 1 readable by account B, 0 readable with no login; 1 static files not replayed" {
+		p.Result != "replayed 3 request(s) (2 from the HAR file, 1 from the OpenAPI spec): 1 readable by account B, 0 readable with no login, 0 with secret fields for no login; 1 static files not replayed" {
 		t.Errorf("plugin %+v", p)
 	}
 	var af *findings.Finding
