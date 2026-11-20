@@ -19,6 +19,7 @@ These are the publishers' official images on Docker Hub or the GitHub Container 
 | relay for active tests ([ADR 0021](docs/adr/0021-built-in-relay.md)) | `docker.io/library/alpine@sha256:f59abe656b692d901e184be3445e084786602108599d2a51d229c0f5a48c71bf` (Docker Official Image; used only as a root file system for SiegeKit's own relay binary; busybox GPL-2.0, musl MIT, other packages under their own licenses) | `3.24.4` (published 2026-11-08) |
 | [zap](plugins/zap/plugin.json) and [zap-active](plugins/zap-active/plugin.json) | `docker.io/zaproxy/zap-stable@sha256:9624669db72f54d86c4b46a7064518bd9bf79d8c61a4c31befa9923489f328af` (published by the ZAP organization, ZAProxy Ltd; about 1.1 GB) | `2.17.0` (published 2026-11-03) |
 | [nuclei](plugins/nuclei/plugin.json) and [nuclei-intrusive](plugins/nuclei-intrusive/plugin.json) | `docker.io/projectdiscovery/nuclei@sha256:582d5546902e67052097cb2d07296c642d50a1afc5e44623cb038845df9a32eb` (published by ProjectDiscovery; about 350 MB) | `v3.11.1` (published 2026-08-08) |
+| [schemathesis](plugins/schemathesis/plugin.json) | `docker.io/schemathesis/schemathesis@sha256:708d934c8208a8f785bdf1b1610476e691f1efda0b7a3cb9ce7536d0f3280eec` (published by the Schemathesis project; about 160 MB) | `v4.33.4` (image built 2026-11-12) |
 
 The two GitHub Container Registry digests were resolved on 2026-11-19. Every pinned image's reported version is checked by `TestPinnedImageVersions` in CI.
 
@@ -74,7 +75,7 @@ Trivy's vulnerability database is not pinned: `siegekit update` lets Trivy downl
 | [ZAP](https://github.com/zaproxy/zaproxy) | DAST | 2.17.0 | Apache-2.0 | Pinned (M2) |
 | [Nuclei](https://github.com/projectdiscovery/nuclei) and [templates](https://github.com/projectdiscovery/nuclei-templates) | DAST, known CVEs | 3.11.1, templates 10.5.2 | MIT | Pinned (M2.5b) |
 | [ffuf](https://github.com/ffuf/ffuf) | Content discovery | 2.3.0 | MIT | Pinned (M2.5c) |
-| [Schemathesis](https://github.com/schemathesis/schemathesis) | API fuzzing | 4.33.4 | MIT | Planned (M2) |
+| [Schemathesis](https://github.com/schemathesis/schemathesis) | API fuzzing | 4.33.4 | MIT | Pinned (M2.5d) |
 | [sqlmap](https://github.com/sqlmapproject/sqlmap) | SQL injection | 1.10.11 | GPL-2.0 | Optional (M2) |
 | [Nikto](https://github.com/sullo/nikto) | Web server checks | not checked | GPL-3.0 (code); database under separate terms | Optional (M2) |
 | [Atheris](https://github.com/google/atheris) | Python fuzzing | 3.1.0 | Apache-2.0 | Planned (M3) |

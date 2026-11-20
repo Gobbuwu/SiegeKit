@@ -52,6 +52,9 @@ type PluginResult struct {
 	Requests  int      `json:"requests,omitempty"`
 	Refused   int      `json:"refused,omitempty"`
 	RefusedTo []string `json:"refusedTo,omitempty"`
+	// Input names what the plugin tested from besides the target, such as
+	// the OpenAPI spec Schemathesis used (ADR 0028).
+	Input string `json:"input,omitempty"`
 }
 
 // IgnoreNote says in one line what the repository told the tool to ignore,
@@ -124,9 +127,9 @@ func (c *Comparison) VersionNote(current string) string {
 // Every report shows it.
 var NotTested = []string{
 	// Keep this list true for the current version. Update the web, language
-	// and access-control lines when Schemathesis (M2.5), Opengrep (M2.9) and
-	// the two-account test (M2.7) land.
-	"The running application, unless you scanned its URL: a directory scan only reads files. A URL scan crawls the app with ZAP and runs ZAP's passive checks, runs Nuclei's templates for known issues, exposed files and misconfigurations, and asks for common paths with ffuf. Attack tests (ZAP's attack scan, Nuclei's intrusive templates) run only on local targets; deployed targets get only GET and HEAD requests until request limits are measured. ZAP's crawler follows HTML links, so pages that a single-page app builds in JavaScript are mostly not reached. Nuclei runs only its HTTP templates (its TCP, DNS, SSL and JavaScript templates cannot pass SiegeKit's proxy), without out-of-band callbacks (so blind flaws such as blind SSRF are not found), and without its denial-of-service, fuzzing, brute-force and default-login templates. ffuf guesses 4,751 common paths on local targets but only 210 on deployed targets, so exposed files with other names are missed there. API specifications, sqlmap, Nikto, default-login and login checks are planned for M2.",
+	// and access-control lines when Opengrep (M2.9) and the two-account test
+	// (M2.7) land.
+	"The running application, unless you scanned its URL: a directory scan only reads files. A URL scan crawls the app with ZAP and runs ZAP's passive checks, runs Nuclei's templates for known issues, exposed files and misconfigurations, and asks for common paths with ffuf. Attack tests (ZAP's attack scan, Nuclei's intrusive templates, Schemathesis's API tests) run only on local targets; deployed targets get only GET and HEAD requests until request limits are measured. ZAP's crawler follows HTML links, so pages that a single-page app builds in JavaScript are mostly not reached. Nuclei runs only its HTTP templates (its TCP, DNS, SSL and JavaScript templates cannot pass SiegeKit's proxy), without out-of-band callbacks (so blind flaws such as blind SSRF are not found), and without its denial-of-service, fuzzing, brute-force and default-login templates. ffuf guesses 4,751 common paths on local targets but only 210 on deployed targets, so exposed files with other names are missed there. Schemathesis tests an API only with an OpenAPI or Swagger 2.0 spec, given with --openapi or found at one of 10 common paths; APIs without one are not tested by it, and its random inputs can miss bugs. sqlmap, Nikto, default-login and login checks are planned for M2.",
 	"The source code, unless you scanned its directory: a URL scan only sends requests to the running app.",
 	"Code in languages without an analyzer: Python (bandit) and Go (gosec) code is analyzed; JavaScript, TypeScript and other languages are not yet (planned for M2). Secrets, dependencies and configuration files are checked in any language.",
 	"Access control: whether every request checks that this user may access this record. SiegeKit has no access-control test yet; a partial two-account test is planned for M2.",
@@ -367,7 +370,7 @@ code,pre{font:13px ui-monospace,monospace;white-space:pre-wrap;word-break:break-
 <h2>What was tested</h2>
 <table>
 <tr><th>Check</th><th>Family</th><th>Tool</th><th>Status</th><th>Findings</th></tr>
-{{range .Plugins}}<tr><td>{{.ID}}</td><td>{{.Family}}</td><td>{{.Tool}} {{.Version}}</td><td>{{.Status}}{{if .Reason}}: {{.Reason}}{{end}}{{with .IgnoreNote}}<br>Repository ignores: {{.}}{{end}}{{if or .Requests .Refused}}<br>Requests answered by the target: {{.Requests}}. Refused by SiegeKit: {{.Refused}}{{if .RefusedTo}} ({{range $i, $d := .RefusedTo}}{{if $i}}, {{end}}<code>{{$d}}</code>{{end}}){{end}}.{{end}}</td><td>{{.Findings}}</td></tr>
+{{range .Plugins}}<tr><td>{{.ID}}</td><td>{{.Family}}</td><td>{{.Tool}} {{.Version}}</td><td>{{.Status}}{{if .Reason}}: {{.Reason}}{{end}}{{with .IgnoreNote}}<br>Repository ignores: {{.}}{{end}}{{with .Input}}<br>Tested from: {{.}}{{end}}{{if or .Requests .Refused}}<br>Requests answered by the target: {{.Requests}}. Refused by SiegeKit: {{.Refused}}{{if .RefusedTo}} ({{range $i, $d := .RefusedTo}}{{if $i}}, {{end}}<code>{{$d}}</code>{{end}}){{end}}.{{end}}</td><td>{{.Findings}}</td></tr>
 {{else}}<tr><td colspan="5">No checks were selected.</td></tr>{{end}}
 </table>
 

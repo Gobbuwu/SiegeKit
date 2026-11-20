@@ -22,6 +22,11 @@ type URL struct {
 	IP     netip.Addr // set when Host is an IP address literal
 }
 
+// Origin returns scheme, host and port, without the path.
+func (u *URL) Origin() string {
+	return strings.TrimSuffix(u.String(), u.Path)
+}
+
 // String returns the target without query or fragment, safe to log.
 func (u *URL) String() string {
 	h := u.Host

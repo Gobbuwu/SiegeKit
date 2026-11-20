@@ -17,6 +17,7 @@ import (
 	"github.com/Gobbuwu/SiegeKit/internal/egress"
 	"github.com/Gobbuwu/SiegeKit/internal/files"
 	"github.com/Gobbuwu/SiegeKit/internal/manifest"
+	"github.com/Gobbuwu/SiegeKit/internal/openapi"
 	"github.com/Gobbuwu/SiegeKit/internal/report"
 	"github.com/Gobbuwu/SiegeKit/internal/runner"
 	"github.com/Gobbuwu/SiegeKit/internal/sandbox"
@@ -66,7 +67,15 @@ const zapSARIF = `{"version":"2.1.0","runs":[{"tool":{"driver":{"name":"ZAP","ru
 type fakeActive struct {
 	specs []sandbox.Spec
 	cfgs  []egress.Config
+	// served maps paths on the target to the bodies specGet returns;
+	// other paths answer 404. got lists the paths asked for.
+	served map[string]string
+	got    []string
+	// spec holds the files in the OpenAPI mount of the last run.
+	spec map[string]string
 }
+
+const testSpec = `{"openapi":"3.0.3","info":{"title":"t","version":"1"},"servers":[{"url":"/api"}],"paths":{"/items":{"get":{"responses":{"200":{"description":"ok"}}}}}}`
 
 func useActive(t *testing.T) *fakeActive {
 	t.Helper()
@@ -74,6 +83,16 @@ func useActive(t *testing.T) *fakeActive {
 	old := activeRunner
 	activeRunner = func(_ context.Context, s sandbox.Spec, c egress.Config) (*runner.ActiveResult, error) {
 		f.specs, f.cfgs = append(f.specs, s), append(f.cfgs, c)
+		for _, m := range s.Files {
+			if m.Mount == runner.OpenAPIMount {
+				f.spec = map[string]string{}
+				es, _ := os.ReadDir(m.Host)
+				for _, e := range es {
+					b, _ := os.ReadFile(filepath.Join(m.Host, e.Name()))
+					f.spec[e.Name()] = string(b)
+				}
+			}
+		}
 		if err := os.WriteFile(filepath.Join(s.OutDir, "zap.json"), []byte(strings.Replace(zapSARIF, "TARGET", c.Target.String(), 1)), 0o600); err != nil {
 			return nil, err
 		}
@@ -83,17 +102,30 @@ func useActive(t *testing.T) *fakeActive {
 		if err := os.WriteFile(filepath.Join(s.OutDir, "ffuf.json"), []byte(`{"results":[]}`), 0o600); err != nil {
 			return nil, err
 		}
+		if err := os.WriteFile(filepath.Join(s.OutDir, "schemathesis.json"), []byte(`{"complete":true,"operations":{"selected":1,"tested":1},"failures":[],"errors":[]}`), 0o600); err != nil {
+			return nil, err
+		}
 		return &runner.ActiveResult{Result: &sandbox.Result{Status: sandbox.Completed}, Stats: egress.Stats{Requests: 3}}, nil
 	}
 	useEngine(t, &fakeEngine{}, nil)
 	// These tests check the Linux path on every host; macOS is refused
 	// (TestScanURLNotRun).
-	oldReach, oldFetch, oldOS := reachable, deps.FetchFile, hostOS
+	f.served = map[string]string{"/openapi.json": testSpec}
+	oldReach, oldFetch, oldOS, oldGet := reachable, deps.FetchFile, hostOS, specGet
 	reachable, hostOS = func(context.Context, egress.Config) error { return nil }, "linux"
+	specGet = func(_ context.Context, _ egress.Config, p string, _ int64) (int, []byte, error) {
+		f.got = append(f.got, p)
+		if b, ok := f.served[p]; ok {
+			return 200, []byte(b), nil
+		}
+		return 404, []byte("not found"), nil
+	}
 	deps.FetchFile = func(context.Context, string, manifest.Artifact) error {
 		return errors.New("tests download nothing")
 	}
-	t.Cleanup(func() { activeRunner, reachable, deps.FetchFile, hostOS = old, oldReach, oldFetch, oldOS })
+	t.Cleanup(func() {
+		activeRunner, reachable, deps.FetchFile, hostOS, specGet = old, oldReach, oldFetch, oldOS, oldGet
+	})
 	t.Chdir(t.TempDir()) // reports go to ./siegekit-report
 	return f
 }
@@ -277,10 +309,10 @@ func TestScanURLRunsActivePlugins(t *testing.T) {
 			t.Errorf("output lacks %q:\n%s", want, out.String())
 		}
 	}
-	// All five plugins ran through the egress proxy with the local limits;
+	// All six plugins ran through the egress proxy with the local limits;
 	// the ZAP plugins got their configuration naming the target as a JSON
 	// string.
-	if len(f.specs) != 5 {
+	if len(f.specs) != 6 {
 		t.Fatalf("%d active runs", len(f.specs))
 	}
 	for i, s := range f.specs {
@@ -298,7 +330,7 @@ func TestScanURLRunsActivePlugins(t *testing.T) {
 		t.Fatal(err)
 	}
 	var e audit.Entry
-	if err := json.Unmarshal(b, &e); err != nil || e.Target != "http://localhost:3000/app" || e.Mode != "local" || e.Verification != "loopback + --authorized-host" || e.Confirmed != "localhost" || !slices.Equal(e.Plugins, []string{"ffuf", "nuclei", "nuclei-intrusive", "zap", "zap-active"}) {
+	if err := json.Unmarshal(b, &e); err != nil || e.Target != "http://localhost:3000/app" || e.Mode != "local" || e.Verification != "loopback + --authorized-host" || e.Confirmed != "localhost" || !slices.Equal(e.Plugins, []string{"ffuf", "nuclei", "nuclei-intrusive", "schemathesis", "zap", "zap-active"}) {
 		t.Errorf("audit entry %+v %v", e, err)
 	}
 	// The report names the URL and the request counts.
@@ -334,9 +366,9 @@ func TestScanURLDestructiveNeedsConfirmation(t *testing.T) {
 	}{
 		{"no terminal", nil, false, "", 3, "loopback", "pass --authorized-host localhost if you"},
 		{"--yes does not count", []string{"--yes"}, false, "", 3, "loopback", "needs a person's confirmation"},
-		{"typed yes", nil, true, "yes\n", 5, "loopback + typed yes", "Type yes to run them"},
+		{"typed yes", nil, true, "yes\n", 6, "loopback + typed yes", "Type yes to run them"},
 		{"typed no", nil, true, "no\n", 3, "loopback", `"yes" was not typed`},
-		{"flag", []string{"--authorized-host", "LOCALHOST"}, false, "", 5, "loopback + --authorized-host", "zap-active"},
+		{"flag", []string{"--authorized-host", "LOCALHOST"}, false, "", 6, "loopback + --authorized-host", "zap-active"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f := useActive(t)
@@ -354,11 +386,20 @@ func TestScanURLDestructiveNeedsConfirmation(t *testing.T) {
 			if err != nil || json.Unmarshal(b, &e) != nil || e.Verification != tc.verification || len(e.Plugins) != tc.runs {
 				t.Errorf("audit entry %+v %v", e, err)
 			}
-			if tc.runs == 3 { // the two destructive plugins were skipped
+			if tc.runs == 3 { // the three destructive plugins were skipped
 				b, err := os.ReadFile(filepath.Join("siegekit-report", "report.json"))
 				var r report.Run
-				if err != nil || json.Unmarshal(b, &r) != nil || len(r.Plugins) != 5 || r.Plugins[2].ID != "nuclei-intrusive" || r.Plugins[2].Status != report.Skipped || r.Plugins[4].ID != "zap-active" || r.Plugins[4].Status != report.Skipped {
-					t.Errorf("report %+v %v", r.Plugins, err)
+				if err != nil || json.Unmarshal(b, &r) != nil || len(r.Plugins) != 6 {
+					t.Fatalf("report %+v %v", r.Plugins, err)
+				}
+				for i, id := range []string{"nuclei-intrusive", "schemathesis", "zap-active"} {
+					if p := r.Plugins[2+i+i/2]; p.ID != id || p.Status != report.Skipped {
+						t.Errorf("plugin %+v", p)
+					}
+				}
+				// No spec is looked for when Schemathesis does not run.
+				if len(f.got) != 0 {
+					t.Errorf("spec requests %v", f.got)
 				}
 			}
 		})
@@ -430,4 +471,93 @@ func builtinManifest(t *testing.T, id string) *manifest.Manifest {
 	}
 	t.Fatalf("no plugin %s", id)
 	return nil
+}
+
+// TestScanURLOpenAPI checks how Schemathesis gets its spec (ADR 0025 item
+// 4, ADR 0028): --openapi FILE is read before any request, --openapi URL
+// must be on the target's origin, and without the flag the default paths
+// are tried on local targets, after the run is in the audit log.
+func TestScanURLOpenAPI(t *testing.T) {
+	old := resolver
+	resolver = fakeResolver{"localhost": "127.0.0.1"}
+	t.Cleanup(func() { resolver = old })
+	specFile := filepath.Join(t.TempDir(), "api.yaml")
+	if err := os.WriteFile(specFile, []byte("openapi: 3.0.3\nservers:\n  - url: /v1\npaths: {}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name    string
+		openapi string
+		served  map[string]string
+		code    int
+		status  report.Status
+		want    string // in the plugin's input or reason, or in stderr when refused
+		gets    int
+	}{
+		{"file", specFile, nil, report.ExitClean, report.Ran, "OpenAPI spec " + specFile, 0},
+		{"url", "http://localhost:3000/docs/spec.json", map[string]string{"/docs/spec.json": testSpec}, report.ExitClean, report.Ran, "OpenAPI spec http://localhost:3000/docs/spec.json", 1},
+		{"url not served", "http://localhost:3000/docs/spec.json", nil, report.ExitIncomplete, report.Failed, "could not be used: answered 404", 1},
+		{"url not a spec", "http://localhost:3000/docs", map[string]string{"/docs": "<html></html>"}, report.ExitIncomplete, report.Failed, "an HTML page", 1},
+		{"default path", "", map[string]string{"/v3/api-docs": testSpec}, report.ExitClean, report.Ran, "OpenAPI spec http://localhost:3000/v3/api-docs", 5},
+		{"none found", "", map[string]string{}, report.ExitIncomplete, report.Skipped, "none was found at /openapi.json, /openapi.yaml", len(openapi.DefaultPaths)},
+		{"other origin", "http://localhost:3001/spec.json", nil, exitInvalid, "", "is not on the target's origin", 0},
+		{"missing file", filepath.Join(t.TempDir(), "nope.json"), nil, exitInvalid, "", "no such file", 0},
+		{"file not a spec", "/dev/null", nil, exitInvalid, "", "empty document", 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := useActive(t)
+			useData(t)
+			if tc.served != nil {
+				f.served = tc.served
+			}
+			args := []string{"scan", "--no-save", "--authorized-host", "localhost", "--only", "schemathesis"}
+			if tc.openapi != "" {
+				args = append(args, "--openapi", tc.openapi)
+			}
+			var out, errb bytes.Buffer
+			code := run(append(args, "http://localhost:3000/"), &out, &errb)
+			if code != tc.code || len(f.got) != tc.gets {
+				t.Fatalf("exit %d (want %d), spec requests %v (want %d)\n%s%s", code, tc.code, f.got, tc.gets, out.String(), errb.String())
+			}
+			if tc.code == exitInvalid {
+				if !strings.Contains(errb.String(), tc.want) || len(f.specs) != 0 {
+					t.Errorf("stderr lacks %q or a test ran:\n%s", tc.want, errb.String())
+				}
+				return
+			}
+			b, err := os.ReadFile(filepath.Join("siegekit-report", "report.json"))
+			var r report.Run
+			if err != nil || json.Unmarshal(b, &r) != nil || len(r.Plugins) != 1 {
+				t.Fatalf("report %+v %v", r, err)
+			}
+			p := r.Plugins[0]
+			if p.Status != tc.status || !strings.Contains(p.Input+p.Reason, tc.want) {
+				t.Errorf("plugin %+v, want %s with %q", p, tc.status, tc.want)
+			}
+			if tc.status != report.Ran {
+				if len(f.specs) != 0 {
+					t.Errorf("%d runs", len(f.specs))
+				}
+				return
+			}
+			// The spec is mounted read-only, and Schemathesis gets the
+			// target's origin so that the spec's base path applies.
+			s := f.specs[0]
+			name := "spec.json"
+			if tc.name == "file" {
+				name = "spec.yaml"
+			}
+			if joined := strings.Join(s.Args, " "); !strings.Contains(joined, "run /siegekit/files/openapi/"+name+" --origin http://localhost:3000 ") {
+				t.Errorf("args %s", joined)
+			}
+			if len(f.spec) != 1 || !strings.Contains(f.spec[name], "openapi: 3.0.3") && f.spec[name] != testSpec {
+				t.Errorf("spec mounted: %v", f.spec)
+			}
+		})
+	}
+	// --openapi is only for URL targets.
+	var out, errb bytes.Buffer
+	if code := run([]string{"scan", "--openapi", specFile, t.TempDir()}, &out, &errb); code != exitUsage {
+		t.Errorf("directory scan with --openapi: exit %d", code)
+	}
 }

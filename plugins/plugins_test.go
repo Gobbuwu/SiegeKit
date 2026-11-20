@@ -18,7 +18,7 @@ func TestBuiltin(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"bandit", "checkov", "ffuf", "gitleaks", "gitleaks-history", "gosec", "nuclei", "nuclei-intrusive", "trivy", "zap", "zap-active"}
+	want := []string{"bandit", "checkov", "ffuf", "gitleaks", "gitleaks-history", "gosec", "nuclei", "nuclei-intrusive", "schemathesis", "trivy", "zap", "zap-active"}
 	if len(ms) != len(want) {
 		t.Fatalf("got %d plugins, want %v", len(ms), want)
 	}
@@ -49,6 +49,8 @@ func TestBuiltin(t *testing.T) {
 				checkNuclei(t, m)
 			case "ffuf":
 				checkFFUF(t, m)
+			case "schemathesis":
+				checkSchemathesis(t, m)
 			default:
 				t.Errorf("%s: no rules for active tool %s", m.ID, m.Tool.Name)
 			}
@@ -104,6 +106,31 @@ func checkFFUF(t *testing.T, m *manifest.Manifest) {
 	}
 	if img, _ := runner.ImageFor(m); img != sandbox.RelayImage {
 		t.Errorf("%s: runs in %s, not the pinned Alpine image", m.ID, img)
+	}
+}
+
+// checkSchemathesis holds ADR 0025 item 4 and ADR 0028: local targets
+// only, the spec SiegeKit found or was given, the target's origin (so the
+// spec's base path applies), the relay as proxy, the rate limit, no
+// shrinking and no --max-time, and exit code 1 (failures found) read as a
+// result.
+func checkSchemathesis(t *testing.T, m *manifest.Manifest) {
+	t.Helper()
+	args := strings.Join(m.Run.Args, " ")
+	for _, want := range []string{"run {openapi} ", "--origin {target-origin}", "--proxy http://127.0.0.1:" + strconv.Itoa(sandbox.RelayPort), "--rate-limit {ratelimit}/s", "--report json", "--report-json-path {outdir}/" + m.Output.File} {
+		if !strings.Contains(args, want) {
+			t.Errorf("%s: args lack %q", m.ID, want)
+		}
+	}
+	if !m.LocalOnly || !*m.Destructive || !slices.Equal(m.Run.FindingsExitCodes, []int{1}) || m.Run.Env["SCHEMATHESIS_COVERAGE"] != "false" {
+		t.Errorf("%s: must be local only and destructive, read exit code 1 as findings and write no coverage report", m.ID)
+	}
+	// With --max-time, Schemathesis 4.33.4 sent one failing request again
+	// until the time ran out: 6,173 times in 40 seconds, against 6
+	// requests in all without it (measured 2026-11-20, ADR 0028). Shrinking
+	// also repeats failing requests, and SiegeKit reports no examples.
+	if slices.Contains(m.Run.Args, "--max-time") || !slices.Contains(m.Run.Args, "--no-shrink") {
+		t.Errorf("%s: must use --no-shrink and not --max-time", m.ID)
 	}
 }
 

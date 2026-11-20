@@ -188,3 +188,20 @@ func FuzzParse(f *testing.F) {
 		}
 	})
 }
+
+func TestOrigin(t *testing.T) {
+	for in, want := range map[string]string{
+		"http://localhost:3000/app/":  "http://localhost:3000",
+		"https://example.com/":        "https://example.com",
+		"https://example.com:8443/a/": "https://example.com:8443",
+		"http://[::1]:8080/":          "http://[::1]:8080",
+	} {
+		u, err := Parse(in)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := u.Origin(); got != want {
+			t.Errorf("%s: %q, want %q", in, got, want)
+		}
+	}
+}

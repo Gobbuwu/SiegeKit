@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -20,6 +21,7 @@ import (
 	"github.com/Gobbuwu/SiegeKit/internal/egress"
 	"github.com/Gobbuwu/SiegeKit/internal/files"
 	"github.com/Gobbuwu/SiegeKit/internal/manifest"
+	"github.com/Gobbuwu/SiegeKit/internal/openapi"
 	"github.com/Gobbuwu/SiegeKit/internal/report"
 	"github.com/Gobbuwu/SiegeKit/internal/sandbox"
 	"github.com/Gobbuwu/SiegeKit/internal/target"
@@ -203,6 +205,13 @@ func TestFFUFFindsPlantedIssues(t *testing.T) {
 	findsPlanted(t, pinnedFiles(t, "ffuf"), "ffuf")
 }
 
+// TestSchemathesisFindsPlantedIssues runs Schemathesis with the pinned
+// image against the vulnerable test app's API, with the spec that SiegeKit
+// fetches from the app (M2.5d).
+func TestSchemathesisFindsPlantedIssues(t *testing.T) {
+	findsPlanted(t, "", "schemathesis")
+}
+
 // pinnedFiles returns a directory holding the pinned files of the plugins
 // ids, downloaded and checked as in ADR 0024 unless SIEGEKIT_TEST_FILES_ROOT
 // names a directory that already holds them (for machines that cannot
@@ -273,9 +282,20 @@ func findsPlanted(t *testing.T, filesRoot string, ids ...string) {
 		}
 		return res, err
 	}
-	r, err := RunURL(context.Background(), run, ms, URLOptions{
-		Version: "test", Target: tu, Addrs: cfg.Addrs, Limits: LocalLimits, FilesRoot: filesRoot,
-	})
+	opt := URLOptions{Version: "test", Target: tu, Addrs: cfg.Addrs, Limits: LocalLimits, FilesRoot: filesRoot}
+	if slices.ContainsFunc(ms, UsesOpenAPI) {
+		// As the CLI does: one GET from the host, then the sanity check.
+		status, b, err := egress.Get(context.Background(), egress.Config{Target: tu, Addrs: cfg.Addrs, Version: "test"}, "/openapi.json", openapi.MaxSize)
+		if err != nil || status != http.StatusOK {
+			t.Fatalf("fetch spec: %d %v", status, err)
+		}
+		format, err := openapi.Check(b)
+		if err != nil {
+			t.Fatal(err)
+		}
+		opt.OpenAPI = &openapi.Spec{Data: b, Format: format, Source: tu.Origin() + "/openapi.json"}
+	}
+	r, err := RunURL(context.Background(), run, ms, opt)
 	if err != nil {
 		t.Fatal(err)
 	}

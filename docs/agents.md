@@ -42,6 +42,7 @@ A URL scan sends real requests to the app. It first prints the plan (target, mod
 - `ffuf` asks for common paths that should not be public (backups, `.git`, `.env`, admin pages) with GET requests and reports each one the app answers: about 4,760 requests on local targets, about 215 on every other target.
 - `zap-active` sends attack payloads (SQL injection, cross-site scripting, path traversal) that can change data. It runs only on local targets: this machine, or a private address the person confirmed. On `--deployed` targets it is skipped. On this machine it runs only after the person types `yes` in a terminal, or with `--authorized-host HOST` (the target's host); `--yes` does not count. Without either, it is reported as skipped. Pass `--authorized-host` only when the person told you, in this conversation, to run the attack scan on that app.
 - `nuclei-intrusive` runs Nuclei's intrusive templates, such as uploading a file with PUT. It follows the same rules as `zap-active`.
+- `schemathesis` sends requests generated from the API's OpenAPI or Swagger 2.0 spec, including invalid input and POST, PUT and DELETE requests, and reports server errors and answers that differ from the spec. It follows the same rules as `zap-active`. It needs a spec: pass `--openapi FILE` (or a URL on the target's own origin), or SiegeKit sends one GET to each of 10 common spec paths, such as `/openapi.json`, and uses the first valid one. Without a spec it is skipped; `plugins[].input` in `report.json` names the spec it used.
 
 Every request goes through SiegeKit's egress proxy, which allows only the target's own address and labels the traffic `SiegeKit/<version>`. On `--deployed` targets it also allows only GET and HEAD requests, so no check can change data there. Web tests run only on Linux for now; elsewhere the run is reported as incomplete. Scan a URL only when the person asked for that app to be tested, and prefer a local or staging copy.
 
@@ -68,10 +69,11 @@ Top level:
   - `repoSettings`: the repository's own settings files that the tool obeyed, such as `.gitleaksignore`, `.gitleaks.toml`, `.bandit` or `.checkov.yaml`. They can hide findings without a count.
   - `ignoreMarkers`: how many lines carry the tool's ignore comment (`gitleaks:allow`), counted by SiegeKit outside dependency directories, for tools that do not report what they suppressed.
 
-  URL scans add two counts, also left out when zero:
+  URL scans add these, also left out when zero or empty:
   - `requests`: how many requests the target answered through the egress proxy. A check with none is reported as `failed`, because it tested nothing.
   - `refused`: how many requests and connections the proxy blocked: those to another host, address or port, and on `--deployed` targets any method other than GET and HEAD.
   - `refusedTo`: what was blocked, such as `CONNECT other.example:443` or `POST app.example (only GET and HEAD)`, each once, at most 20.
+  - `input`: what the check tested from besides the target, such as `OpenAPI spec http://localhost:3000/openapi.json` for `schemathesis`. Absent for other checks.
 - `findings`: the deduplicated findings, most severe first.
 - `comparison`: present when a saved run of the same `target` exists (runs are saved unless `--no-save` is given). It compares this run with the most recent one:
   - `previousRun`, `previousStarted`, `previousVersion`: that run's ID, start time and SiegeKit version. If the version differs, some changes may come from the upgrade.

@@ -209,6 +209,39 @@ func Reachable(ctx context.Context, cfg Config) error {
 	return resp.Body.Close()
 }
 
+// Get sends one GET for path (which must start with "/") on the target's
+// origin from the host, through the same pinned transport as the proxy, and
+// returns the status and at most max bytes of the body; a longer body is an
+// error. Redirects are not followed. SiegeKit uses it to find an OpenAPI
+// spec on a local target (ADR 0025 item 4).
+func Get(ctx context.Context, cfg Config, path string, max int64) (int, []byte, error) {
+	if !strings.HasPrefix(path, "/") || strings.HasPrefix(path, "//") {
+		return 0, nil, fmt.Errorf("path %q must start with a single /", path)
+	}
+	tr := newTransport(cfg)
+	defer tr.CloseIdleConnections()
+	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, cfg.Target.Origin()+path, nil)
+	if err != nil {
+		return 0, nil, err
+	}
+	req.Header.Set("User-Agent", "SiegeKit/"+cfg.Version)
+	resp, err := tr.RoundTrip(req)
+	if err != nil {
+		return 0, nil, fmt.Errorf("the target did not answer: %w", err)
+	}
+	defer resp.Body.Close()
+	b, err := io.ReadAll(io.LimitReader(resp.Body, max+1))
+	if err != nil {
+		return resp.StatusCode, nil, err
+	}
+	if int64(len(b)) > max {
+		return resp.StatusCode, nil, fmt.Errorf("answer larger than %d bytes", max)
+	}
+	return resp.StatusCode, b, nil
+}
+
 // Stats returns a copy of the counters.
 func (p *Proxy) Stats() Stats {
 	p.mu.Lock()

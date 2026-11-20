@@ -4,9 +4,17 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 )
+
+// vulnAppSpec is the OpenAPI spec of the app's small JSON API, served at
+// /openapi.json. Its operations are relative to the server URL /api.
+const vulnAppSpec = `{"openapi":"3.0.3","info":{"title":"Shop API","version":"1"},"servers":[{"url":"/api"}],
+"paths":{"/items/{id}":{"get":{"parameters":[{"name":"id","in":"path","required":true,"schema":{"type":"integer","minimum":1}}],
+"responses":{"200":{"description":"The item","content":{"application/json":{"schema":{"type":"object","required":["id","name"],"properties":{"id":{"type":"integer"},"name":{"type":"string"}}}}}},
+"404":{"description":"No such item"}}}}}}`
 
 // vulnApp is SiegeKit's own deliberately vulnerable web app for the active
 // tests (owner decision 2026-11-19: our own fixture for tests, so each issue
@@ -69,6 +77,33 @@ func vulnApp() http.Handler {
 		w.Header().Set("Content-Type", "text/plain")
 		fmt.Fprint(w, "APP_NAME=shop\nAPP_ENV=local\n")
 	})
+	// The JSON API and its spec. An id below the documented minimum of 1
+	// crashes the handler (500), as unchecked input would; other ids answer
+	// as the spec says. Schemathesis's coverage phase always tries the
+	// value below a minimum, so the crash is found on every run.
+	mux.HandleFunc("/openapi.json", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, vulnAppSpec)
+	})
+	mux.HandleFunc("/api/items/{id}", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet && r.Method != http.MethodHead {
+			w.Header().Set("Allow", "GET, HEAD")
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+		switch {
+		case err != nil:
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusNotFound)
+			fmt.Fprint(w, `{"error":"no such item"}`)
+		case id < 1:
+			http.Error(w, "internal server error", http.StatusInternalServerError)
+		default:
+			w.Header().Set("Content-Type", "application/json")
+			fmt.Fprintf(w, `{"id":%d,"name":"hat"}`, id)
+		}
+	})
 	// PUT stores the file and GET serves it back, as a misconfigured WebDAV
 	// server would.
 	var mu sync.Mutex
@@ -125,5 +160,8 @@ var vulnAppIssues = map[string]map[string]string{
 	"ffuf": {
 		"path-found /.env":        "exposed /.env",
 		"path-found /.git/config": "exposed /.git/config",
+	},
+	"schemathesis": {
+		"ST101 /api/items/{id}": "GET /api/items/{id} crashes (500) on an id below 1",
 	},
 }
