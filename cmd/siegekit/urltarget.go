@@ -20,6 +20,7 @@ import (
 
 	"github.com/Gobbuwu/SiegeKit/internal/audit"
 	"github.com/Gobbuwu/SiegeKit/internal/authz"
+	"github.com/Gobbuwu/SiegeKit/internal/backend"
 	"github.com/Gobbuwu/SiegeKit/internal/checks"
 	"github.com/Gobbuwu/SiegeKit/internal/deps"
 	"github.com/Gobbuwu/SiegeKit/internal/egress"
@@ -94,12 +95,19 @@ type urlScan struct {
 	login          loginFlags
 	har, harUser   string // --har and --har-user (ADR 0035)
 	rateLimit      rateLimitFlags
+	backendURL     string // --backend-url (ADR 0037)
+	source         string // --source: the app's repository (ADR 0037)
 
 	// Read from --har and SIEGEKIT_SESSION_B before any request.
 	harRequests *authz.HAR
 	sessionB    http.Header
 	// Read from --rate-limit-url and --rate-limit-body before any request.
 	rateEndpoint *ratelimit.Endpoint
+	// Read from --backend-url and --source before any request.
+	backend *backend.Backend
+	repo    *checks.Source
+	// in reads every typed answer, so one prompt cannot swallow the next.
+	in *bufio.Reader
 }
 
 // rateLimitFlags are the --rate-limit flags of the rate-limit check
@@ -174,6 +182,7 @@ func scanURL(raw string, o urlScan, stdout, stderr io.Writer) int {
 	if err != nil {
 		return refuse("%v", err)
 	}
+	o.in = bufio.NewReader(stdin)
 	// A spec file is read now, so a wrong path is reported before any
 	// request; a spec URL is fetched after the run is allowed.
 	var spec specSource
@@ -195,6 +204,19 @@ func scanURL(raw string, o urlScan, stdout, stderr io.Writer) int {
 		if o.rateEndpoint, err = ratelimit.Parse(o.rateLimit.url, o.rateLimit.body, u); err != nil {
 			return refuse("%v", err)
 		}
+	}
+	// So are the backend URL and the repository (ADR 0037).
+	if o.backendURL != "" {
+		if o.backend, err = backend.Parse(o.backendURL); err != nil {
+			return refuse("%v", err)
+		}
+	}
+	if o.source != "" {
+		var repoSpec *openapi.Spec
+		if o.repo, repoSpec, err = readSource(o.source); err != nil {
+			return refuse("--source: %v", err)
+		}
+		spec.repo = repoSpec
 	}
 	// So are the HAR file and account B's session (ADR 0035).
 	if o.har != "" {
@@ -267,7 +289,7 @@ func scanURL(raw string, o urlScan, stdout, stderr io.Writer) int {
 			verification = "--authorized-host"
 		case stdinIsTerminal():
 			fmt.Fprintf(stdout, "Type the host name (%s) to confirm: ", u.Host)
-			line, _ := bufio.NewReader(stdin).ReadString('\n')
+			line, _ := o.in.ReadString('\n')
 			if !target.Confirmed(u, line) {
 				return refuse("the typed host name did not match %q", u.Host)
 			}
@@ -291,6 +313,7 @@ func scanURL(raw string, o urlScan, stdout, stderr io.Writer) int {
 type specSource struct {
 	spec *openapi.Spec
 	path string
+	repo *openapi.Spec // the first spec in --source (ADR 0037)
 }
 
 // openAPISource reads a spec file, or checks that a spec URL is on the
@@ -323,8 +346,9 @@ func openAPISource(arg string, u *target.URL) (specSource, error) {
 }
 
 // findSpec returns the spec for plugins that use one (ADR 0025 item 4,
-// ADR 0028): the --openapi file, the --openapi URL, or on local targets the
-// first valid spec at openapi.DefaultPaths. It returns nil and the reason
+// ADR 0028): the --openapi file, the --openapi URL, the first spec in
+// --source (ADR 0037), or on local targets the first valid spec at
+// openapi.DefaultPaths. It returns nil and the reason
 // when there is none; failed is true when the spec the user named could
 // not be used.
 func findSpec(ctx context.Context, cfg egress.Config, src specSource, deployed bool) (spec *openapi.Spec, reason string, failed bool) {
@@ -351,6 +375,9 @@ func findSpec(ctx context.Context, cfg egress.Config, src specSource, deployed b
 			return nil, fmt.Sprintf("the OpenAPI spec at %s could not be used: %v", cfg.Target.Origin()+src.path, err), true
 		}
 		return s, "", false
+	}
+	if src.repo != nil {
+		return src.repo, "", false
 	}
 	if deployed {
 		return nil, "no OpenAPI spec was given with --openapi (SiegeKit looks for one only on local targets)", false
@@ -384,6 +411,7 @@ func runURL(ctx context.Context, u *target.URL, addrs []netip.Addr, mode target.
 		{ID: login.ID, Name: login.Name, Family: login.Family, Targets: []string{"url"}},
 		{ID: ratelimit.ID, Name: ratelimit.Name, Family: ratelimit.Family, Targets: []string{"url"}},
 		{ID: served.ID, Name: served.Name, Family: served.Family, Targets: []string{"url"}},
+		{ID: backend.ID, Name: backend.Name, Family: backend.Family, Targets: []string{"url"}},
 		{ID: authz.ID, Name: authz.Name, Family: authz.Family, Targets: []string{"url"}},
 	}, "url", o.only, o.skip)
 	if err != nil {
@@ -393,7 +421,7 @@ func runURL(ctx context.Context, u *target.URL, addrs []netip.Addr, mode target.
 		return slices.ContainsFunc(own, func(c checks.Check) bool { return c.ID == id })
 	}
 	loginSelected, servedSelected, authzSelected := ownSelected(login.ID), ownSelected(served.ID), ownSelected(authz.ID)
-	rateSelected := ownSelected(ratelimit.ID)
+	rateSelected, backendSelected := ownSelected(ratelimit.ID), ownSelected(backend.ID)
 	// The served-secrets check runs Gitleaks over the files it fetched
 	// (ADR 0032).
 	var gitleaks *manifest.Manifest
@@ -478,6 +506,23 @@ func runURL(ctx context.Context, u *target.URL, addrs []netip.Addr, mode target.
 			unavailable[ratelimit.ID] = runner.Unavailable{Status: report.Failed, Reason: "active tests run only on Linux for now (ADR 0018)"}
 		}
 	}
+	var bp *backendPlan
+	if backendSelected {
+		switch {
+		case o.backend == nil:
+			unavailable[backend.ID] = runner.Unavailable{Status: report.Skipped, Reason: "no backend URL was given: pass --backend-url (the Supabase or Firebase Realtime Database URL the app reads from the browser) to test whether its data can be read with the app's public key"}
+		case hostOS != "linux":
+			unavailable[backend.ID] = runner.Unavailable{Status: report.Failed, Reason: "active tests run only on Linux for now (ADR 0018)"}
+		default:
+			rctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+			p, reason := planBackend(rctx, o.backend, mode)
+			cancel()
+			if reason != "" {
+				unavailable[backend.ID] = runner.Unavailable{Status: report.Failed, Reason: reason}
+			}
+			bp = p
+		}
+	}
 	if authzSelected {
 		switch {
 		case o.harRequests == nil:
@@ -529,6 +574,26 @@ func runURL(ctx context.Context, u *target.URL, addrs []netip.Addr, mode target.
 				served.ID, gitleaks.Tool.Name, gitleaks.Tool.Version, served.MaxRequests-1)
 		}
 	}
+	if backendSelected {
+		if r, ok := unavailable[backend.ID]; ok {
+			fmt.Fprintf(stdout, "  %-20s not run - %s\n", backend.ID, r.Reason)
+		} else {
+			planned = append(planned, backend.ID)
+			from := "table or path names from the app's scripts"
+			if o.repo != nil {
+				from += " and " + o.source
+			}
+			how := "with the app's own public key for Supabase, with no login for Firebase"
+			switch o.backend.Kind {
+			case backend.Supabase:
+				how = "with the app's own public key"
+			case backend.Firebase:
+				how = "with no login"
+			}
+			fmt.Fprintf(stdout, "  %-20s siegekit %s: one GET (at most one row) per table or path at %s (%s), %s; %s\n",
+				backend.ID, version, o.backend, joinList(bp.addrs), how, from)
+		}
+	}
 	if authzSelected {
 		if r, ok := unavailable[authz.ID]; ok {
 			fmt.Fprintf(stdout, "  %-20s not run - %s\n", authz.ID, r.Reason)
@@ -542,8 +607,12 @@ func runURL(ctx context.Context, u *target.URL, addrs []netip.Addr, mode target.
 				authz.ID, version, len(o.harRequests.Requests), filepath.Base(o.har), who)
 		}
 	}
+	reach := strings.TrimSuffix(u.String(), u.Path)
+	if slices.Contains(planned, backend.ID) {
+		reach += " (and " + o.backend.URL.Origin() + " for backend-live)"
+	}
 	fmt.Fprintf(stdout, "Limits: at most %.0f requests per second, stop after %d server errors in a row; only %s is reachable, and every request is labeled \"SiegeKit/%s\".\n",
-		limits.Rate, limits.MaxServerErrors, strings.TrimSuffix(u.String(), u.Path), version)
+		limits.Rate, limits.MaxServerErrors, reach, version)
 	if mode == "deployed" {
 		fmt.Fprintln(stdout, "Only GET and HEAD requests are allowed: no check may change data on a deployed target.")
 	}
@@ -579,7 +648,7 @@ func runURL(ctx context.Context, u *target.URL, addrs []netip.Addr, mode target.
 			verification, confirmed = "loopback + --authorized-host", u.Host
 		case stdinIsTerminal():
 			fmt.Fprintf(stdout, "%s Type yes to run them: ", strings.Join(warn, " "))
-			line, _ := bufio.NewReader(stdin).ReadString('\n')
+			line, _ := o.in.ReadString('\n')
 			if strings.TrimSpace(line) == "yes" {
 				verification, confirmed = "loopback + typed yes", u.Host
 			} else {
@@ -596,12 +665,44 @@ func runURL(ctx context.Context, u *target.URL, addrs []netip.Addr, mode target.
 			}
 		}
 	}
+	// A backend that is not on this machine is someone's hosted service:
+	// the person types its host name, and no flag skips that (answer 2a).
+	backendVerification, backendConfirmed := "loopback", ""
+	if slices.Contains(planned, backend.ID) && bp.remote {
+		reason := ""
+		switch {
+		case stdinIsTerminal():
+			fmt.Fprintf(stdout, "%s reads data from %s, which is not on this machine. Type its host name (%s) to confirm it is this app's backend and you may test it: ", backend.ID, o.backend, o.backend.URL.Host)
+			line, _ := o.in.ReadString('\n')
+			if target.Confirmed(o.backend.URL, line) {
+				backendVerification, backendConfirmed = "typed backend host", o.backend.URL.Host
+			} else {
+				reason = fmt.Sprintf("the typed host name did not match %q", o.backend.URL.Host)
+			}
+		default:
+			reason = fmt.Sprintf("the backend %s is not on this machine, so a person must type its host name in a terminal; run this command yourself (an AI assistant should ask you to). No flag skips this", o.backend.URL.Host)
+		}
+		if reason != "" {
+			unavailable[backend.ID] = runner.Unavailable{Status: report.Skipped, Reason: reason}
+			planned = slices.DeleteFunc(planned, func(p string) bool { return p == backend.ID })
+			fmt.Fprintf(stdout, "  %-20s not run - %s\n", backend.ID, reason)
+		}
+	}
 	if len(planned) > 0 {
 		if err := audit.Append(filepath.Join(dir, "audit.log"), audit.Entry{
 			Time: time.Now().UTC(), Version: version, Target: u.String(), Addresses: addrStrings(addrs),
 			Mode: string(mode), Verification: verification, Confirmed: confirmed, Plugins: planned,
 		}); err != nil {
 			return fail(fmt.Errorf("no test was sent: %w", err))
+		}
+		// The backend is another host, so it gets its own entry (ADR 0037).
+		if slices.Contains(planned, backend.ID) {
+			if err := audit.Append(filepath.Join(dir, "audit.log"), audit.Entry{
+				Time: time.Now().UTC(), Version: version, Target: o.backend.String(), Addresses: addrStrings(bp.addrs),
+				Mode: string(mode), Verification: backendVerification, Confirmed: backendConfirmed, Plugins: []string{backend.ID},
+			}); err != nil {
+				return fail(fmt.Errorf("no test was sent: %w", err))
+			}
 		}
 		// One GET first, so a target that is down is not sent a full scan.
 		cfg := egress.Config{Target: u, Addrs: addrs, VerifyTLS: o.deployed, Version: version}
@@ -685,6 +786,19 @@ func runURL(ctx context.Context, u *target.URL, addrs []netip.Addr, mode target.
 		}
 		rateResult = &pr
 	}
+	// The start page and the files it links are fetched once, for the
+	// served-secrets and backend-live checks.
+	_, servedOff := unavailable[served.ID]
+	_, backendOff := unavailable[backend.ID]
+	servedRuns, backendRuns := servedSelected && !servedOff, backendSelected && !backendOff
+	var col *collected
+	if servedRuns || backendRuns {
+		col = collect(ctx, egress.Config{Target: u, Addrs: addrs, VerifyTLS: o.deployed, Version: version, ReadOnly: true}, limits.Rate)
+		defer col.cleanup()
+		if ctx.Err() != nil {
+			return fail(errors.New("interrupted; no report written"))
+		}
+	}
 	var servedResult *report.PluginResult
 	var servedFindings []findings.Finding
 	if servedSelected {
@@ -692,13 +806,33 @@ func runURL(ctx context.Context, u *target.URL, addrs []netip.Addr, mode target.
 		if r, ok := unavailable[served.ID]; ok {
 			pr.Status, pr.Reason = r.Status, r.Reason
 		} else {
-			fmt.Fprintf(stdout, "%s: fetching the start page and the files it links.\n", served.ID)
-			pr, servedFindings = runServed(ctx, ex, gitleaks, egress.Config{Target: u, Addrs: addrs, VerifyTLS: o.deployed, Version: version, ReadOnly: true}, limits.Rate, rootsIn(dir).Files, pr)
+			fmt.Fprintf(stdout, "%s: scanning the start page and the files it links.\n", served.ID)
+			pr, servedFindings = runServed(ctx, ex, gitleaks, u.String(), col, rootsIn(dir).Files, pr)
 			if ctx.Err() != nil {
 				return fail(errors.New("interrupted; no report written"))
 			}
 		}
 		servedResult = &pr
+	}
+	var backendResult *report.PluginResult
+	var backendFindings []findings.Finding
+	if backendSelected {
+		pr := report.PluginResult{ID: backend.ID, Family: backend.Family, Tool: "siegekit", Version: version}
+		if r, ok := unavailable[backend.ID]; ok {
+			pr.Status, pr.Reason = r.Status, r.Reason
+		} else {
+			// Fetches made only for this check count as its requests.
+			extra := 0
+			if !servedRuns {
+				extra = col.res.Requests
+			}
+			fmt.Fprintf(stdout, "%s: reading %s.\n", backend.ID, o.backend)
+			pr, backendFindings = runBackend(ctx, bp, col, o.repo, extra, pr)
+			if ctx.Err() != nil {
+				return fail(errors.New("interrupted; no report written"))
+			}
+		}
+		backendResult = &pr
 	}
 	var authzResult *report.PluginResult
 	var authzFindings []findings.Finding
@@ -756,7 +890,7 @@ func runURL(ctx context.Context, u *target.URL, addrs []netip.Addr, mode target.
 		return fail(err)
 	}
 	var first []report.PluginResult
-	for _, pr := range []*report.PluginResult{loginResult, rateResult, servedResult, authzResult} {
+	for _, pr := range []*report.PluginResult{loginResult, rateResult, servedResult, backendResult, authzResult} {
 		if pr != nil {
 			first = append(first, *pr)
 		}
@@ -764,7 +898,7 @@ func runURL(ctx context.Context, u *target.URL, addrs []netip.Addr, mode target.
 	if len(first) > 0 {
 		run.Started = started
 		run.Plugins = append(first, run.Plugins...)
-		if run.Findings = findings.Dedupe(slices.Concat(loginFindings, rateFindings, servedFindings, authzFindings, run.Findings)); run.Findings == nil {
+		if run.Findings = findings.Dedupe(slices.Concat(loginFindings, rateFindings, servedFindings, backendFindings, authzFindings, run.Findings)); run.Findings == nil {
 			run.Findings = []findings.Finding{}
 		}
 	}
@@ -774,45 +908,27 @@ func runURL(ctx context.Context, u *target.URL, addrs []netip.Addr, mode target.
 // servedTool is the plugin that reads the served files (ADR 0032).
 const servedTool = "gitleaks"
 
-// runServed fetches the served files into a private directory and runs
-// Gitleaks over them like a source directory, then places the findings at
-// the URLs the files came from (ADR 0032). cfg allows only GET and HEAD.
-func runServed(ctx context.Context, ex runner.Executor, gl *manifest.Manifest, cfg egress.Config, rate float64, filesRoot string, pr report.PluginResult) (report.PluginResult, []findings.Finding) {
-	failed := func(format string, a ...any) (report.PluginResult, []findings.Finding) {
-		pr.Status, pr.Reason = report.Failed, fmt.Sprintf(format, a...)
+// runServed runs Gitleaks over the fetched files like a source directory,
+// then places the findings at the URLs the files came from (ADR 0032).
+func runServed(ctx context.Context, ex runner.Executor, gl *manifest.Manifest, start string, c *collected, filesRoot string, pr report.PluginResult) (report.PluginResult, []findings.Finding) {
+	pr.Input = "the start page " + start + " and the files it links"
+	pr.Requests = c.res.Requests
+	if c.err != nil {
+		pr.Status, pr.Reason = report.Failed, c.err.Error()
 		return pr, nil
 	}
-	pr.Input = "the start page " + cfg.Target.String() + " and the files it links"
-	work, err := os.MkdirTemp("", "siegekit-served-")
+	pr.Result = c.res.Summary()
+	run, err := runner.Run(ctx, ex, []*manifest.Manifest{gl}, runner.Options{Version: version, TargetDir: c.files, WorkDir: c.work, FilesRoot: filesRoot})
 	if err != nil {
-		return failed("%v", err)
-	}
-	defer os.RemoveAll(work)
-	// The tool runs as another user when SiegeKit runs as root (ADR 0021),
-	// so the directory it reads must be readable by others.
-	files := filepath.Join(work, "files")
-	if err := os.Mkdir(files, 0o700); err != nil {
-		return failed("%v", err)
-	}
-	if err := os.Chmod(files, 0o755); err != nil { // #nosec G302 -- read by the tool's user; the parent is private
-		return failed("%v", err)
-	}
-	res, err := servedCollect(ctx, cfg, rate, files)
-	pr.Requests = res.Requests
-	if err != nil {
-		return failed("%v", err)
-	}
-	pr.Result = res.Summary()
-	run, err := runner.Run(ctx, ex, []*manifest.Manifest{gl}, runner.Options{Version: version, TargetDir: files, WorkDir: work, FilesRoot: filesRoot})
-	if err != nil {
-		return failed("%v", err)
+		pr.Status, pr.Reason = report.Failed, err.Error()
+		return pr, nil
 	}
 	tool := run.Plugins[0]
 	pr.Status, pr.Reason, pr.Suppressed = tool.Status, tool.Reason, tool.Suppressed
 	if tool.Status != report.Ran {
 		return pr, nil
 	}
-	fs := served.Findings(run.Findings, res)
+	fs := served.Findings(run.Findings, c.res)
 	pr.Findings = len(fs)
 	return pr, fs
 }
