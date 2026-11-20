@@ -37,6 +37,7 @@ Each significant design decision is recorded as a short ADR before code is writt
 | [0031](0031-default-logins.md) | Default credentials with Nuclei (amends 0010, 0026, 0029) | Accepted |
 | [0032](0032-served-secrets.md) | Secrets in served files (amends 0010) | Accepted |
 | [0033](0033-mobile-app-targets.md) | Mobile app targets (amends 0004, when built in M3) | Accepted |
+| [0034](0034-weak-passwords.md) | Weak passwords written into files | Accepted |
 
 ADRs 0002 to 0011 were accepted at the M0 design sign-off on 2026-11-18.
 

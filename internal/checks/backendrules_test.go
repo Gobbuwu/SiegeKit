@@ -70,7 +70,7 @@ insert into todos values ('create table not_a_table (x int)');
 		"node_modules/x/firestore.rules":  "service cloud.firestore { match /{d=**} { allow read; } }",
 		"other.rules":                     "allow read;\n",
 	})
-	fs, err := backendRules.Run(context.Background(), root)
+	fs, _, err := backendRules.Run(context.Background(), root)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -102,7 +102,7 @@ func TestWalkSkipsSymlinksAndLargeFiles(t *testing.T) {
 	if err := os.Symlink(outside, filepath.Join(root, "linked")); err != nil {
 		t.Fatal(err)
 	}
-	fs, err := backendRules.Run(context.Background(), root)
+	fs, _, err := backendRules.Run(context.Background(), root)
 	if err != nil || len(fs) != 0 {
 		t.Fatalf("followed a symlink or read a large file: %+v %v", fs, err)
 	}
@@ -111,7 +111,7 @@ func TestWalkSkipsSymlinksAndLargeFiles(t *testing.T) {
 func TestRunCancelled(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if _, err := backendRules.Run(ctx, tree(t, map[string]string{"a.rules": "x"})); err == nil {
+	if _, _, err := backendRules.Run(ctx, tree(t, map[string]string{"a.rules": "x"})); err == nil {
 		t.Fatal("expected cancellation")
 	}
 }

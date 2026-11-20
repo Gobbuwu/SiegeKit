@@ -26,7 +26,7 @@ var backendRules = Check{
 	Name:    "Hosted backend access rules",
 	Family:  backendRulesFamily,
 	Targets: []string{"repo"},
-	Run:     runBackendRules,
+	Run:     noResult(runBackendRules),
 }
 
 func runBackendRules(ctx context.Context, root string) ([]findings.Finding, error) {

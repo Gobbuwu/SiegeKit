@@ -226,14 +226,14 @@ func Run(ctx context.Context, ex Executor, selected []*manifest.Manifest, opt Op
 			return nil, err
 		}
 		pr := report.PluginResult{ID: c.ID, Family: c.Family, Tool: "siegekit", Version: opt.Version}
-		fs, err := c.Run(ctx, opt.TargetDir)
+		fs, result, err := c.Run(ctx, opt.TargetDir)
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
 		}
 		if err != nil {
 			pr.Status, pr.Reason = report.Failed, err.Error()
 		} else {
-			pr.Status, pr.Findings = report.Ran, len(fs)
+			pr.Status, pr.Findings, pr.Result = report.Ran, len(fs), result
 			all = append(all, fs...)
 		}
 		run.Plugins = append(run.Plugins, pr)

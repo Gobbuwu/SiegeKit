@@ -38,11 +38,12 @@ ffuf runs in the relay's pinned Alpine image (`docker.io/library/alpine@sha256:f
 
 ## Shipped data
 
-Part of SiegeKit's binary, copied byte for byte ([ADR 0027](docs/adr/0027-ffuf.md)).
+Part of SiegeKit's binary, copied byte for byte ([ADR 0027](docs/adr/0027-ffuf.md), [ADR 0034](docs/adr/0034-weak-passwords.md)).
 
 | Used by | File | Source | License |
 | --- | --- | --- | --- |
 | [ffuf](plugins/ffuf/plugin.json), local targets | [`internal/wordlists/seclists-common.txt`](internal/wordlists/seclists-common.txt) | [SecLists](https://github.com/danielmiessler/SecLists) `Discovery/Web-Content/common.txt`, tag `2026.2` (commit `145f1f45ba7bc5fd6b3966d3a79bf95654deb20e`), 38,536 bytes, SHA-256 `47fb86ca6fb3f97e5491161581900d6d99851fb16764eacddf16aa85617c956a` | MIT, Copyright (c) 2018 Daniel Miessler; full text in [`internal/wordlists/SECLISTS-LICENSE`](internal/wordlists/SECLISTS-LICENSE) |
+| Built-in `weak-passwords` check ([ADR 0034](docs/adr/0034-weak-passwords.md)) | [`internal/checks/data/seclists-10k-most-common.txt`](internal/checks/data/seclists-10k-most-common.txt) | [SecLists](https://github.com/danielmiessler/SecLists) `Passwords/Common-Credentials/10k-most-common.txt`, tag `2026.2` (commit `145f1f45ba7bc5fd6b3966d3a79bf95654deb20e`), 73,026 bytes, SHA-256 `68782d6a4a19a4768d5f15dd66bd534e7a33055cc755411e33f16d18c50fdcce` | MIT, Copyright (c) 2018 Daniel Miessler; full text in [`internal/wordlists/SECLISTS-LICENSE`](internal/wordlists/SECLISTS-LICENSE) |
 
 ## Test fixtures (CI only)
 
