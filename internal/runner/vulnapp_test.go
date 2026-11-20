@@ -215,6 +215,23 @@ func vulnApp() http.Handler {
 		w.Header().Set("Content-Type", "application/json")
 		fmt.Fprint(w, `{"email":"alice@shop.test","address":"1 Main St"}`)
 	})
+	// A search with no rate limit (CWE-770, ADR 0036): every request gets
+	// the same answer, however many there are.
+	mux.HandleFunc("GET /api/suggest", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprintf(w, `{"q":%q,"suggestions":[]}`, r.URL.Query().Get("q"))
+	})
+	// A report limited to 3 requests: not an issue, so the check must see
+	// the limit (a 429 after the third) and report none.
+	var reports atomic.Int32
+	mux.HandleFunc("POST /api/report", func(w http.ResponseWriter, r *http.Request) {
+		if reports.Add(1) > 3 {
+			http.Error(w, "slow down", http.StatusTooManyRequests)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		io.WriteString(w, `{"rows":[]}`)
+	})
 	return mux
 }
 
@@ -269,6 +286,10 @@ var vulnAppIssues = map[string]map[string]string{
 	},
 	"login-throttle": {
 		"login-not-limited /account/sign-in": "failed logins are not limited at POST /account/sign-in",
+	},
+	// rate-limit runs in the test process (TestRateLimitFindsPlantedIssue).
+	"rate-limit": {
+		"rate-not-limited /api/suggest": "requests to GET /api/suggest are not limited",
 	},
 	// access-control runs in the test process (TestAuthzFindsPlantedIssues).
 	"access-control": {

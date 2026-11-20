@@ -39,6 +39,7 @@ Each significant design decision is recorded as a short ADR before code is writt
 | [0033](0033-mobile-app-targets.md) | Mobile app targets (amends 0004, when built in M3) | Accepted |
 | [0034](0034-weak-passwords.md) | Weak passwords written into files | Accepted |
 | [0035](0035-access-control-replay.md) | The access-control check: replaying a recording as another account (amends 0011) | Accepted |
+| [0036](0036-rate-limit-check.md) | The rate-limit check (amends 0011, 0029) | Accepted |
 
 ADRs 0002 to 0011 were accepted at the M0 design sign-off on 2026-11-18.
 

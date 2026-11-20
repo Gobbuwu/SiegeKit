@@ -3,7 +3,7 @@
 - Status: Accepted
 - Date: 2026-11-20
 - Amends: [0004](0004-plugin-manifest.md) (selection on the command line)
-- Amended by: [0030](0030-login-throttling.md) (`--profile quick` also leaves out `login-throttle`), [0031](0031-default-logins.md) (and `nuclei-default-login`)
+- Amended by: [0030](0030-login-throttling.md) (`--profile quick` also leaves out `login-throttle`), [0031](0031-default-logins.md) (and `nuclei-default-login`), [0036](0036-rate-limit-check.md) (and `rate-limit`)
 
 ## Context
 
