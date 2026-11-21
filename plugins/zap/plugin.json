@@ -48,6 +48,8 @@
       "network.connection.httpProxy.host=127.0.0.1",
       "-config",
       "network.connection.httpProxy.port=8080",
+      "-config",
+      "alert.systemicLimit=0",
       "-autorun",
       "{config}"
     ],
