@@ -53,8 +53,11 @@ func TestParse(t *testing.T) {
 		{"http://localhost:3001/login", "u", body, "not on the target's origin"},
 		{"https://localhost:3000/login", "u", body, "not on the target's origin"},
 		{"http://evil.test/login", "u", body, "not on the target's origin"},
-		{"http://localhost:3000/login?next=/", "u", body, "query or fragment"},
-		{"http://localhost:3000/login#x", "u", body, "query or fragment"},
+		{"http://localhost:3000/login?next=/", "u", body, "must not have a query"},
+		{"http://localhost:3000/login#x", "u", body, "must not have a fragment"},
+		// Logged 2026-11-20, F6 of the full project check (ADR 0042).
+		{"http://localhost:3000//x", "u", body, "single /"},
+		{"http://localhost:3000//evil.test/login", "u", body, "single /"},
 		{"ftp://localhost:3000/login", "u", body, "--login-url"},
 		{"http://localhost:3000/login", "", body, "empty"},
 		{"http://localhost:3000/login", "a\nb", body, "control characters"},

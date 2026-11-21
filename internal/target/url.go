@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"unicode"
 )
 
 // URL is a parsed web target.
@@ -134,4 +135,45 @@ func Resolve(ctx context.Context, r Resolver, t *URL) ([]netip.Addr, error) {
 	}
 	slices.SortFunc(addrs, func(a, b netip.Addr) int { return a.Compare(b) })
 	return slices.Compact(addrs), nil
+}
+
+// SendablePath reports whether p, a request path with any query, starts
+// with a single "/". "//x" names another host to some servers and proxies
+// (a network-path reference), so SiegeKit never sends it (ADR 0042).
+func SendablePath(p string) bool {
+	return strings.HasPrefix(p, "/") && !strings.HasPrefix(p, "//")
+}
+
+// OnOrigin checks a URL named by flag, such as --login-url, before SiegeKit
+// sends anything to it: a valid URL (see Parse) on t's origin, with a path
+// that starts with a single "/", no fragment, no spaces or control
+// characters anywhere, and a valid query only when allowQuery (ADR 0005,
+// ADR 0042). Every flag that names a URL on the
+// target uses it, so they all refuse the same URLs. It returns the URL
+// without its query, and the query.
+func OnOrigin(t *URL, raw, flag string, allowQuery bool) (*URL, string, error) {
+	if strings.ContainsFunc(raw, func(r rune) bool { return r == ' ' || unicode.IsControl(r) }) {
+		return nil, "", fmt.Errorf("%s has spaces or control characters; encode them, such as a space as %%20", flag)
+	}
+	if strings.Contains(raw, "#") {
+		return nil, "", fmt.Errorf("%s must not have a fragment", flag)
+	}
+	pathURL, query, hasQuery := strings.Cut(raw, "?")
+	if hasQuery && !allowQuery {
+		return nil, "", fmt.Errorf("%s must not have a query", flag)
+	}
+	if _, err := url.ParseQuery(query); err != nil {
+		return nil, "", fmt.Errorf("%s has an invalid query: %v", flag, err)
+	}
+	u, err := Parse(pathURL)
+	if err != nil {
+		return nil, "", fmt.Errorf("%s: %w", flag, err)
+	}
+	if u.Origin() != t.Origin() {
+		return nil, "", fmt.Errorf("%s %s is not on the target's origin %s; SiegeKit sends requests only to the target", flag, u, t.Origin())
+	}
+	if !SendablePath(u.Path) {
+		return nil, "", fmt.Errorf("%s must have a path that starts with a single /", flag)
+	}
+	return u, query, nil
 }

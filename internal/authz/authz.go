@@ -79,6 +79,7 @@ type HAR struct {
 	Static      int // static files, not replayed
 	OtherMethod int // not GET or HEAD
 	OtherOrigin int // on another origin (ADR 0005)
+	BadPath     int // a path that does not start with a single / (ADR 0042)
 	Duplicate   int
 	OverLimit   int // past MaxRequests
 	FromSpec    int // added from the OpenAPI spec by AddSpecRoutes
@@ -139,6 +140,10 @@ func ParseHAR(data []byte, t *target.URL) (*HAR, error) {
 		p := u.EscapedPath()
 		if p == "" {
 			p = "/"
+		}
+		if !target.SendablePath(p) {
+			h.BadPath++
+			continue
 		}
 		if u.RawQuery != "" {
 			p += "?" + u.RawQuery
@@ -501,7 +506,7 @@ func (r Result) Summary(h *HAR, loginName string, c Counts) string {
 			n    int
 			what string
 		}{
-			{h.Static, "static files"}, {h.OtherMethod, "not GET or HEAD"}, {h.OtherOrigin, "on another origin"},
+			{h.Static, "static files"}, {h.OtherMethod, "not GET or HEAD"}, {h.OtherOrigin, "on another origin"}, {h.BadPath, "with a path that does not start with a single /"},
 			{h.Duplicate, "duplicates"}, {h.OverLimit, fmt.Sprintf("over the %d-request limit", MaxRequests)},
 		} {
 			if x.n > 0 {

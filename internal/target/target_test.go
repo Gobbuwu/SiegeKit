@@ -205,3 +205,75 @@ func TestOrigin(t *testing.T) {
 		}
 	}
 }
+
+// TestOnOrigin checks the one origin check that every URL flag uses
+// (ADR 0042), including the "//" paths found by the full project check
+// (F6, F7).
+func TestOnOrigin(t *testing.T) {
+	tu, err := Parse("http://localhost:3000/app/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct {
+		raw        string
+		allowQuery bool
+		path, q    string
+		err        string
+	}{
+		{"http://localhost:3000/login", false, "/login", "", ""},
+		{"http://localhost:3000", false, "/", "", ""},
+		{"http://LOCALHOST:3000/a/b", false, "/a/b", "", ""},
+		{"http://localhost:3000/s?q=apple&x=1", true, "/s", "q=apple&x=1", ""},
+		{"http://localhost:3000/s?q=apple", false, "", "", "--x must not have a query"},
+		{"http://localhost:3000/s#f", true, "", "", "--x must not have a fragment"},
+		{"http://localhost:3000//x", false, "", "", "single /"},
+		{"http://localhost:3000//evil.test/a", true, "", "", "single /"},
+		{"http://localhost:3000///x", false, "", "", "single /"},
+		{"http://localhost:3001/x", false, "", "", "not on the target's origin"},
+		{"https://localhost:3000/x", false, "", "", "not on the target's origin"},
+		{"http://evil.test/x", false, "", "", "not on the target's origin"},
+		{"http://u:p@localhost:3000/x", false, "", "", "--x: "},
+		{"/relative", false, "", "", "--x: "},
+		{"ftp://localhost:3000/x", false, "", "", "--x: "},
+		{"http://localhost:3000/s?q=a b", true, "", "", "spaces or control characters"},
+		{"http://localhost:3000/s?q=\x00", true, "", "", "spaces or control characters"},
+		{"http://localhost:3000/s?q=%zz", true, "", "", "invalid query"},
+	} {
+		u, q, err := OnOrigin(tu, c.raw, "--x", c.allowQuery)
+		switch {
+		case c.err != "" && (err == nil || !strings.Contains(err.Error(), c.err)):
+			t.Errorf("%q: err %v, want %q", c.raw, err, c.err)
+		case c.err == "" && (err != nil || u.Path != c.path || q != c.q):
+			t.Errorf("%q: %v %q %v, want %q %q", c.raw, u, q, err, c.path, c.q)
+		}
+	}
+}
+
+func FuzzOnOrigin(f *testing.F) {
+	for _, s := range []string{"http://localhost:3000/a", "http://localhost:3000//x", "http://localhost:3000/a?b=c", "http://localhost:3000/%2F%2Fx", "http://localhost:3000/a/..//b#c"} {
+		f.Add(s, true)
+	}
+	tu, err := Parse("http://localhost:3000/")
+	if err != nil {
+		f.Fatal(err)
+	}
+	f.Fuzz(func(t *testing.T, s string, allowQuery bool) {
+		u, q, err := OnOrigin(tu, s, "--x", allowQuery)
+		if err != nil {
+			return
+		}
+		// What passes is sendable: on the origin, a single leading "/", and
+		// the request URL SiegeKit builds names the target's host only.
+		if u.Origin() != tu.Origin() || !SendablePath(u.Path) || strings.Contains(s, "#") || (!allowQuery && q != "") {
+			t.Fatalf("%q passed: %v %q", s, u, q)
+		}
+		req := u.Origin() + u.Path
+		if q != "" {
+			req += "?" + q
+		}
+		p, err := url.Parse(req)
+		if err != nil || p.Host != "localhost:3000" || p.User != nil {
+			t.Fatalf("%q gives request URL %q (%v)", s, req, err)
+		}
+	})
+}

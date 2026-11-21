@@ -320,12 +320,9 @@ type specSource struct {
 // target's origin: SiegeKit sends requests only to the target (ADR 0005).
 func openAPISource(arg string, u *target.URL) (specSource, error) {
 	if isURL(arg) {
-		su, err := target.Parse(arg)
+		su, _, err := target.OnOrigin(u, arg, "--openapi", false)
 		if err != nil {
-			return specSource{}, err
-		}
-		if su.Origin() != u.Origin() {
-			return specSource{}, fmt.Errorf("%s is not on the target's origin %s; SiegeKit sends requests only to the target, so download the spec and pass the file", su, u.Origin())
+			return specSource{}, fmt.Errorf("%w; to use another spec, download it and pass the file", err)
 		}
 		return specSource{path: su.Path}, nil
 	}

@@ -54,25 +54,9 @@ type Endpoint struct {
 // a search term. With a body the request is a POST: JSON when the body
 // starts with "{" or "[", a form otherwise.
 func Parse(rawURL, body string, t *target.URL) (*Endpoint, error) {
-	if strings.Contains(rawURL, "#") {
-		return nil, errors.New("--rate-limit-url must not have a fragment")
-	}
-	pathURL, query, _ := strings.Cut(rawURL, "?")
-	u, err := target.Parse(pathURL)
+	u, query, err := target.OnOrigin(t, rawURL, "--rate-limit-url", true)
 	if err != nil {
-		return nil, fmt.Errorf("--rate-limit-url: %w", err)
-	}
-	if u.Origin() != t.Origin() {
-		return nil, fmt.Errorf("--rate-limit-url %s is not on the target's origin %s; SiegeKit sends requests only to the target", u, t.Origin())
-	}
-	if !strings.HasPrefix(u.Path, "/") || strings.HasPrefix(u.Path, "//") {
-		return nil, errors.New("--rate-limit-url must have a path that starts with a single /")
-	}
-	if _, err := url.ParseQuery(query); err != nil {
-		return nil, fmt.Errorf("--rate-limit-url has an invalid query: %v", err)
-	}
-	if strings.ContainsAny(query, " \t\r\n") {
-		return nil, errors.New("--rate-limit-url has spaces in its query; encode them as %20")
+		return nil, err
 	}
 	e := &Endpoint{URL: u.String(), Path: u.Path, Method: http.MethodGet}
 	if query != "" {

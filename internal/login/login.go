@@ -62,15 +62,9 @@ type Login struct {
 // URL must be on the target's origin (ADR 0005). A body that starts with
 // "{" is sent as JSON, anything else as a form.
 func Parse(rawURL, user, body string, t *target.URL) (*Login, error) {
-	if strings.ContainsAny(rawURL, "?#") {
-		return nil, errors.New("--login-url must not have a query or fragment")
-	}
-	u, err := target.Parse(rawURL)
+	u, _, err := target.OnOrigin(t, rawURL, "--login-url", false)
 	if err != nil {
-		return nil, fmt.Errorf("--login-url: %w", err)
-	}
-	if u.Origin() != t.Origin() {
-		return nil, fmt.Errorf("--login-url %s is not on the target's origin %s; SiegeKit sends requests only to the target", u, t.Origin())
+		return nil, err
 	}
 	switch {
 	case user == "":
