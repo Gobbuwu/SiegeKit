@@ -21,10 +21,6 @@ const (
 	Blocked
 )
 
-func (c Class) String() string {
-	return [...]string{"public", "loopback", "private", "always blocked"}[c]
-}
-
 func prefixes(ss ...string) []netip.Prefix {
 	out := make([]netip.Prefix, len(ss))
 	for i, s := range ss {

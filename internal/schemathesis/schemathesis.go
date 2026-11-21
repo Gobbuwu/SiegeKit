@@ -85,7 +85,7 @@ func ToFindings(r io.Reader, opt Options) ([]findings.Finding, error) {
 		return nil, err
 	}
 	if len(data) > MaxSize {
-		return nil, fmt.Errorf("Schemathesis report larger than %d bytes", MaxSize)
+		return nil, fmt.Errorf("schemathesis report larger than %d bytes", MaxSize)
 	}
 	var rep report
 	if err := json.NewDecoder(bytes.NewReader(data)).Decode(&rep); err != nil {
@@ -99,11 +99,11 @@ func ToFindings(r io.Reader, opt Options) ([]findings.Finding, error) {
 		for _, e := range rep.Errors[:min(3, len(rep.Errors))] {
 			titles = append(titles, fmt.Sprintf("%s (%d)", clean(e.Title), e.Count))
 		}
-		return nil, fmt.Errorf("Schemathesis reported %d error(s), so some operations were not tested: %s", len(rep.Errors), strings.Join(titles, ", "))
+		return nil, fmt.Errorf("schemathesis reported %d error(s), so some operations were not tested: %s", len(rep.Errors), strings.Join(titles, ", "))
 	case !*rep.Complete:
-		return nil, fmt.Errorf("Schemathesis did not finish (stop reason %q)", clean(rep.StopReason))
+		return nil, fmt.Errorf("schemathesis did not finish (stop reason %q)", clean(rep.StopReason))
 	case rep.Operations.Tested == 0:
-		return nil, fmt.Errorf("Schemathesis tested no operation (%d selected, %d skipped)", rep.Operations.Selected, rep.Operations.Skipped)
+		return nil, fmt.Errorf("schemathesis tested no operation (%d selected, %d skipped)", rep.Operations.Selected, rep.Operations.Skipped)
 	}
 	type key struct{ code, path string }
 	methods := map[key][]string{}

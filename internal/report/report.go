@@ -150,8 +150,12 @@ type Run struct {
 
 // Environment is the machine and container engine of a run.
 type Environment struct {
-	OS     string  `json:"os"`
-	Arch   string  `json:"arch"`
+	OS   string `json:"os"`
+	Arch string `json:"arch"`
+	// Go is the Go release SiegeKit was built with, such as "go1.27.4"; it
+	// decides the built-in checks' and the relay's behavior (full project
+	// check F11). Tools in images bring their own.
+	Go     string  `json:"go,omitempty"`
 	Engine *Engine `json:"engine,omitempty"` // nil when no engine was found or it did not answer
 }
 
@@ -166,6 +170,9 @@ type Engine struct {
 // String is the form shown in the terminal and the HTML report.
 func (e *Environment) String() string {
 	s := e.OS + "/" + e.Arch
+	if e.Go != "" {
+		s += ", SiegeKit built with " + e.Go
+	}
 	if e.Engine == nil {
 		return s + ", no container engine"
 	}

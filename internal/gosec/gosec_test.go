@@ -1,6 +1,7 @@
 package gosec
 
 import (
+	"io"
 	"os"
 	"path/filepath"
 	"slices"
@@ -27,6 +28,13 @@ const offlineReport = `{
 	"Issues": [],
 	"Stats": {"files": 49, "lines": 9000, "nosec": 0, "found": 70}
 }`
+
+// Uncovered returns the package directories, relative to mount and sorted,
+// that gosec reported load or type errors for.
+func Uncovered(r io.Reader, mount string) ([]string, error) {
+	res, err := Read(r, mount)
+	return res.Uncovered, err
+}
 
 func TestUncovered(t *testing.T) {
 	got, err := Uncovered(strings.NewReader(offlineReport), "/target")

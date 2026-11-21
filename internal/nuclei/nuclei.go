@@ -64,7 +64,7 @@ func ToFindings(r io.Reader, opt Options) ([]findings.Finding, error) {
 		return nil, err
 	}
 	if len(data) > MaxSize {
-		return nil, fmt.Errorf("Nuclei report larger than %d bytes", MaxSize)
+		return nil, fmt.Errorf("nuclei report larger than %d bytes", MaxSize)
 	}
 	sc := bufio.NewScanner(bytes.NewReader(data))
 	sc.Buffer(make([]byte, 0, 64*1024), MaxLine)
