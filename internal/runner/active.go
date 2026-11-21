@@ -20,6 +20,11 @@ type ActiveResult struct {
 	Stopped string
 }
 
+// relayStarted is told the name of each relay container RunTargetOnly
+// starts. Tests use it to check only their own relays (other packages'
+// tests start relays on the same engine at the same time).
+var relayStarted = func(string) {}
+
 // RunTargetOnly runs s with no network except the egress proxy for cfg's
 // target (ADR 0018, ADR 0019). parent is a private directory for the
 // proxy's socket; it must be short enough for a Unix socket path. relayBin
@@ -73,6 +78,7 @@ func RunTargetOnly(ctx context.Context, e *sandbox.Engine, s sandbox.Spec, cfg e
 	if err != nil {
 		return nil, err
 	}
+	relayStarted(relay)
 	defer e.StopRelay(relay)
 	s.Relay = relay
 

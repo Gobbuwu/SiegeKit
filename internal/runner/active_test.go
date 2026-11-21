@@ -110,17 +110,47 @@ func activeSpec(t *testing.T, script string) sandbox.Spec {
 	return sandbox.Spec{Image: activeTestImage, Args: []string{"sh", "-c", script}, OutDir: out, CPUs: 1, MemoryMiB: 128, Timeout: 90 * time.Second}
 }
 
-func noRelaysLeft(t *testing.T, e *sandbox.Engine) {
+// startedRelays records the relay containers this test's runs start.
+// go test runs packages at the same time, and internal/sandbox's tests
+// start relays with the same name prefix on the same engine, so the
+// leftover check looks only at these (full project check F8).
+func startedRelays(t *testing.T) *[]string {
 	t.Helper()
-	out, err := exec.Command(e.Bin, "ps", "-a", "--filter", "name=siegekit-relay-", "--format", "{{.Names}}").CombinedOutput()
-	if err != nil || strings.TrimSpace(string(out)) != "" {
-		t.Errorf("relay containers left behind: %q %v", out, err)
+	var mu sync.Mutex
+	names := &[]string{}
+	old := relayStarted
+	relayStarted = func(n string) {
+		mu.Lock()
+		defer mu.Unlock()
+		*names = append(*names, n)
+	}
+	t.Cleanup(func() { relayStarted = old })
+	return names
+}
+
+// noRelaysLeft fails if the engine still lists any of the named relay
+// containers, or if none was started.
+func noRelaysLeft(t *testing.T, e *sandbox.Engine, names []string) {
+	t.Helper()
+	if len(names) == 0 {
+		t.Error("no relay was started")
+	}
+	out, err := exec.Command(e.Bin, "ps", "-a", "--format", "{{.Names}}").CombinedOutput()
+	if err != nil {
+		t.Errorf("list containers: %q %v", out, err)
+		return
+	}
+	for _, n := range strings.Fields(string(out)) {
+		if slices.Contains(names, n) {
+			t.Errorf("relay container left behind: %s", n)
+		}
 	}
 }
 
 // TestActiveRunOnlyReachesTarget runs a container behind the relay and the
 // egress proxy and tries every other way out (ADR 0019).
 func TestActiveRunOnlyReachesTarget(t *testing.T) {
+	relays := startedRelays(t)
 	e, cfg, hits, port := activeSetup(t, http.StatusOK)
 	script := fmt.Sprintf(`
 echo "allowed=$(wget -qO- http://app.test:%[1]d/ok 2>&1)"
@@ -157,12 +187,13 @@ echo "interfaces=$(ip -o addr | grep -v ' lo ' | wc -l)"
 	if hits.Load() != 1 || res.Stats.Requests != 1 || res.Stats.Refused < 2 {
 		t.Errorf("target hits %d, stats %+v", hits.Load(), res.Stats)
 	}
-	noRelaysLeft(t, e)
+	noRelaysLeft(t, e, *relays)
 }
 
 // TestActiveRunStopsOnServerErrors checks that the run ends early when the
 // target keeps failing (ADR 0005 item 3).
 func TestActiveRunStopsOnServerErrors(t *testing.T) {
+	relays := startedRelays(t)
 	e, cfg, hits, port := activeSetup(t, http.StatusInternalServerError)
 	script := fmt.Sprintf(`for i in 1 2 3 4 5 6 7 8 9 10; do wget -qO- http://app.test:%d/ >/dev/null 2>&1; done; sleep 80`, port)
 	start := time.Now()
@@ -179,7 +210,7 @@ func TestActiveRunStopsOnServerErrors(t *testing.T) {
 	if hits.Load() != 3 {
 		t.Errorf("target received %d requests, want 3", hits.Load())
 	}
-	noRelaysLeft(t, e)
+	noRelaysLeft(t, e, *relays)
 }
 
 // TestZAPFindsPlantedIssues runs the zap and zap-active plugins with the
@@ -239,6 +270,7 @@ func pinnedFiles(t *testing.T, ids ...string) string {
 
 func findsPlanted(t *testing.T, filesRoot string, ids ...string) {
 	t.Helper()
+	relays := startedRelays(t)
 	e, cfg, _, _ := activeSetup(t, http.StatusOK)
 	// Requests for the planted files are counted, so a miss shows whether
 	// the tool asked for them at all.
@@ -349,7 +381,7 @@ func findsPlanted(t *testing.T, filesRoot string, ids ...string) {
 			t.Errorf("finding outside the target: %s %+v: %s", f.RuleID, f.Location, f.Message)
 		}
 	}
-	noRelaysLeft(t, e)
+	noRelaysLeft(t, e, *relays)
 }
 
 // warnings returns the last 40 lines of a tool's output that report a
