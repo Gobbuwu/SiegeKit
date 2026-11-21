@@ -214,16 +214,29 @@ jobs:
         # rate-limit must send 20 requests and report rate-not-limited
         # (ADR 0036).
         run: |
-          set +e
-          SIEGEKIT_SESSION_B="$(cat "$RUNNER_TEMP/session-b")" "$RUNNER_TEMP/siegekit" scan --yes --authorized-host 127.0.0.1 --no-save --report-dir "$RUNNER_TEMP/report" \
+          # access-control asks a person at a terminal to type that accounts
+          # A and B are test accounts (ADR 0035 item 11). The gate created
+          # both accounts above, so it types the answer through a
+          # pseudo-terminal (script), standing for the owner's confirmation
+          # as --authorized-host does (ADR 0044, owner 2026-11-21).
+          cat > "$RUNNER_TEMP/gate-scan.sh" <<'SH'
+          #!/bin/bash
+          exec "$RUNNER_TEMP/siegekit" scan --yes --authorized-host 127.0.0.1 --no-save --report-dir "$RUNNER_TEMP/report" \
             --login-url http://127.0.0.1:3000/rest/user/login --login-user jim@juice-sh.op \
             --login-body '{"email":"{user}","password":"{password}"}' \
             --har "$RUNNER_TEMP/a.har" --har-user gate-a@siegekit.test \
             --rate-limit-url 'http://127.0.0.1:3000/rest/products/search?q=apple' http://127.0.0.1:3000/
+          SH
+          chmod +x "$RUNNER_TEMP/gate-scan.sh"
+          SIEGEKIT_SESSION_B="$(cat "$RUNNER_TEMP/session-b")"
+          export SIEGEKIT_SESSION_B
+          set +e
+          printf 'test accounts\n' | script -qec "$RUNNER_TEMP/gate-scan.sh" "$RUNNER_TEMP/scan.log"
           code=$?
           set -e
           echo "exit code $code"
           if [ "$code" -ne 0 ] && [ "$code" -ne 3 ]; then exit 1; fi
+          grep -q 'Type "test accounts" to confirm' "$RUNNER_TEMP/scan.log"
           r="$RUNNER_TEMP/report/report.json"
           jq -e --arg e "$EXPECT_ENGINE" '.environment.engine | (.name + (if .rootless then " rootless" else " rootful" end)) == $e' "$r"
           jq '.plugins[] | {id, status, cause, reason, input, result, requests, refused, refusedTo, findings}' "$r"

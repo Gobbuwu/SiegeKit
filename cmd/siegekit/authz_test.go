@@ -61,11 +61,20 @@ func TestScanURLAccessControl(t *testing.T) {
 	old := resolver
 	resolver = fakeResolver{"localhost": "127.0.0.1", "shop.example": "93.184.215.14"}
 	t.Cleanup(func() { resolver = old })
-	scan := func(args ...string) (int, string) {
+	// A person at a terminal types that the accounts are test accounts
+	// (owner Q5, 2026-11-21); scanIn tests other answers.
+	scanIn := func(tty bool, input string, args ...string) (int, string) {
 		t.Helper()
+		stdinIsTerminal = func() bool { return tty }
+		stdin = strings.NewReader(input)
 		var out, errb bytes.Buffer
 		code := run(append([]string{"scan", "--no-save"}, args...), &out, &errb)
 		return code, out.String() + errb.String()
+	}
+	t.Cleanup(func() { stdinIsTerminal = func() bool { return false } })
+	scan := func(args ...string) (int, string) {
+		t.Helper()
+		return scanIn(true, "test accounts\n", args...)
 	}
 	readReport := func() report.Run {
 		t.Helper()
@@ -115,13 +124,38 @@ func TestScanURLAccessControl(t *testing.T) {
 		t.Setenv(authz.SessionEnv, "Authorization: Bearer B")
 	}
 
-	// A local run: no confirmation needed (GET and HEAD only), read-only
-	// configuration, B's session passed, and the leak is a high finding.
+	// Without the typed confirmation nothing is sent: no terminal (as for an
+	// AI assistant, whatever flags it passes), or other words typed.
+	for _, c := range []struct {
+		tty         bool
+		input, want string
+		args        []string
+	}{
+		{false, "", "No flag skips this", nil},
+		{false, "test accounts\n", "No flag skips this", []string{"--yes", "--authorized-host", "localhost"}},
+		{true, "yes\n", `not confirmed: "test accounts" was not typed`, nil},
+		{true, "", `not confirmed: "test accounts" was not typed`, nil},
+	} {
+		useActive(t)
+		useData(t)
+		calls := useAuthz(t, leak, nil)
+		args := append(slices.Clone(c.args), "--har", harFile, "--only", "access-control,zap", "http://localhost:3000/")
+		code, out := scanIn(c.tty, c.input, args...)
+		p := readReport().Plugins[0]
+		if len(*calls) != 0 || code != report.ExitClean || p.Status != report.Skipped || p.Cause != report.CauseNotConfirmed || !strings.Contains(p.Reason, c.want) || !strings.Contains(out, "access-control       not run - ") {
+			t.Errorf("%v %q: exit %d, %d checks, %+v\n%s", c.tty, c.input, code, len(*calls), p, out)
+		}
+	}
+
+	// A local run: only the typed confirmation (GET and HEAD only, no "yes"),
+	// read-only configuration, B's session passed, and the leak is a high
+	// finding.
 	f := useActive(t)
 	data := useData(t)
 	calls := useAuthz(t, leak, nil)
 	code, out := scan("--har", harFile, "--har-user", "alice", "--only", "access-control,zap", "http://localhost:3000/")
 	if code != report.ExitFindings || len(*calls) != 1 || len(f.specs) != 1 || strings.Contains(out, "Type yes") ||
+		!strings.Contains(out, `access-control replays requests with the sessions of accounts A (the HAR file's session) and B (SIEGEKIT_SESSION_B). Type "test accounts"`) ||
 		!strings.Contains(out, "access-control       siegekit 0.0.0-dev: replay 2 GET and HEAD request(s) from a.har as account A, as account B and with no login") {
 		t.Fatalf("exit %d, %d checks, %d runs\n%s", code, len(*calls), len(f.specs), out)
 	}
@@ -200,10 +234,7 @@ func TestScanURLAccessControl(t *testing.T) {
 		t.Fatal(err)
 	}
 	useProver(t, &fakeProver{published: map[string]string{"shop.example": verify.Value(tok)}})
-	stdinIsTerminal = func() bool { return true }
-	stdin = strings.NewReader("shop.example\n")
-	t.Cleanup(func() { stdinIsTerminal = func() bool { return false } })
-	code, out = scan("--deployed", "--har", writeHAR(t, "https://shop.example/api/me"), "--only", "access-control", "https://shop.example/")
+	code, out = scanIn(true, "shop.example\ntest accounts\n", "--deployed", "--har", writeHAR(t, "https://shop.example/api/me"), "--only", "access-control", "https://shop.example/")
 	if code != exitOK || len(*calls) != 1 || !(*calls)[0].cfg.VerifyTLS || !(*calls)[0].cfg.ReadOnly || (*calls)[0].rate != 10 {
 		t.Errorf("deployed: exit %d %+v\n%s", code, *calls, out)
 	}
