@@ -1,0 +1,58 @@
+# 0049. Replaying recorded writes as another account (access-control-write)
+
+- Status: Accepted (design, owner 2026-11-21; build-time items 2b, 3b, 4b and 7, owner 2026-11-21, "Both fixes (recommended)" and "Both (recommended)" after the measurements below)
+- Date: 2026-11-21
+- Amends: [0035](0035-access-control-replay.md) ("Not covered: state-changing requests"; item 4 is unchanged: `access-control` stays GET and HEAD only)
+
+## Context
+
+`access-control` (ADR 0035) replays only GET and HEAD, so it cannot see one account changing or deleting another account's data. Item 2 of the ARTEX comparison asked for writes. The owner chose the recommended design on 2026-11-21 ([design](https://claude.ai/artifact/8devNYkvUihhY7JB2717oc)): Q1 tiers, Q2 re-create A's object, Q3 the HAR only, Q4 B and no login; local only, off by default, a second typed phrase.
+
+The design's prototype (Python, hand-written JSON requests on Juice Shop v20.4.0 and Gitea 1.24.6's token API) found 5 of 5 real write leaks, 3 at high with no false alarm and 2 at medium, plus 4 false alarms at medium.
+
+Measured while building, with the built Go code (2026-11-21, Claude's sandbox, Docker 29.10.0 rootful, cgroup v1; record in the project's shared files, `write-replay-build-2026-11-21.md`):
+
+- **Real browser recordings work for JSON apps.** Juice Shop, Chromium recording made with Playwright (login, basket, address, card, review). The recorded answers are in the HAR, and the new object's ID (`data.id`) is in the create's answer, so "find the ID the write uses in an earlier POST's answer" finds the create. A new address and a new card both got ID 7, so the create whose path shares the most segments with the write's is taken first.
+- **A's create can be refused the second time.** Juice Shop allows one basket item per product, so after the first replay's copy, A's create failed and the DELETE of a basket item fell back to the item A had deleted in the recording (404): a real leak was missed.
+- **B replaying A's plain creates is noise.** B adding its own address or card is allowed by design: 2 false medium findings in the Juice Shop recording.
+- **CSRF-protected forms.** On Gitea's web UI every write carries a CSRF token, in the body or in `X-Csrf-Token`. Sent with A's token, all 21 replays were refused with 400: nothing was tested.
+- **Successful form posts can answer 303.** 4 of the 13 Gitea web writes A recorded were answered with a redirect, not 2xx.
+
+## Decision
+
+1. **`access-control-write`** is SiegeKit's own check (ADR 0015), family `dast`, in `internal/authz` (`write.go`), for URL targets, **local targets only**: with `--deployed` the flag is refused and the check is skipped (`deployed-or-local-only`); `WriteCheck` itself refuses a deployed mode or a read-only configuration. It is left out of `--profile quick`. Linux only, like the other URL checks (ADR 0018).
+2. **Writes come from the HAR file only** (Q3): with `--replay-writes` and `--har`, its POST, PUT, PATCH and DELETE requests to the target's origin, in order, without duplicates (same method, path and body), at most 50, bodies and headers as recorded (`replayHeaders`). Form fields without body text are counted and not replayed.
+   - a. **A copy of A's object** (Q2). For each write, SiegeKit looks for an earlier recorded POST with a 2xx JSON answer holding an ID field (`id`, `_id`, `uuid`, `guid`, `number`, at most 3 objects deep) whose value the write uses: a path segment, a query value, or a body value at an ID-named key. Among several, it takes the one whose path shares the most leading segments with the write's, then the latest. Before each replay, A sends that create again and the write uses the new ID in its path, query and body. When no create is found, or A's create gives no ID, the write goes to A's recorded object; if B's replay of it is accepted (and it is not a POST without an ID), the request with no login is not sent for it, and the result says "not tested with no login".
+   - b. **A deletes its copy** after each replay when the URL ends with the copy's ID and the replay did not already delete it (one DELETE as A). Juice Shop recording: finds the DELETE leak that (a) alone misses, and leaves no copy in A's account; +1 request per copy.
+3. **Who sends** (Q4): account B (`SIEGEKIT_SESSION_B`: A's headers without the session headers, plus B's) and no login (A's headers without the session headers). Without B, only no login.
+   - b. **Plain creates are not sent as B**: a POST whose path holds no ID and not A's login name (`--har-user`), and whose body has no ID-named key with an ID value. B sending it makes B's own object. Juice Shop recording: 2 false medium findings fewer, no real case lost; it loses B tests of POSTs to resources named by something else, such as an organisation's slug.
+4. **When a write was accepted, and how sure** (Q1, tiers): the replay is accepted when it answers 2xx.
+   - a. **High** when it was a PUT, PATCH or DELETE, A read the same URL with 2xx before it, and A's read after it differs (status or bytes). **Medium**, "check it by hand", for any other accepted replay.
+   - b. A redirect (3xx) also counts as accepted when A's own recorded write was answered with a redirect too, this one does not lead to a login page (`login`, `logon`, `signin`, `auth`, `sso`, `oauth`, `authorize` in its path), and it does not only go where the request asked (its target is not a value of the request's query or form body). The last condition was added after the final Gitea run: Gitea's `/-/fetch-redirect` answers anyone with 303 to its `redirect` field and changes nothing, which gave 4 false medium findings with no login; with it, Gitea is back to the 4 medium findings of item 7.
+   - Findings: `cross-account-write` for B (CWE-639 with an ID in the URL, CWE-862 otherwise) and `no-login-write` (CWE-306), at the recorded write's URL without the query. Messages give the method, path and statuses, never bodies. Findings at the same URL and CWE merge (the existing dedupe), so a PUT and a DELETE on one URL give one finding; the result lists both.
+5. **Never replayed** (design safety rule 4): writes whose path or query names a login, logout, sign-up or registration, a password, a second factor (`2fa`, `mfa`, `otp`, `totp`, `twofactor`, `webauthn`, `passkey`), tokens, API keys or sessions, in any case, split at `-`, `_`, `.` and camelCase; and a DELETE whose last word (IDs left out) is `user`, `account`, `me`, `self` or `profile`. They are counted and named in the result. Login and logout are in the list because a browser recording always holds them (Juice Shop and Gitea, measured): replaying A's login as B or with no login logs in as A.
+6. **Caps:** at most 50 writes, each sent as B and with no login: at most 4 requests per replay (A's create, A's read before, the write, A's read after), plus a DELETE (2b) and a page GET (7), so at most 600; one at a time at the run's local rate (100 per second).
+7. **CSRF tokens.** A write carries a CSRF token when a header or field is named with `csrf`, `xsrf`, `authenticity_token` or `RequestVerificationToken`. Before sending such a write, the sender (B, or no login) loads a page (the recorded `Referer`, else `/`), takes the token the page gives it (a `csrf` meta tag, a hidden field, a `csrfToken:` script value, else a CSRF cookie) and its cookies, and sends it in place of A's token. Gitea web: 21 of 21 replays tested instead of 0; B refused on all 4 owner-only writes; 4 medium findings, all allowed by design (B's issue, comment and star on alice's public repository; a star with no login answered 204 and changed nothing); Juice Shop unchanged. +1 GET per CSRF replay. The result says how many writes went with the sender's own token, and how many went with A's because no page gave one (their refusals say nothing about access control).
+8. **A person confirms, twice.** The "test accounts" question (ADR 0035 item 11) names `access-control-write` too. Then SiegeKit lists every write it will send and asks the person to type `change test data`, saying that it changes data in the app and to use a throwaway database or a snapshot. Without a terminal, or with other words, the check is skipped with cause `not-confirmed`; the read-only `access-control` still runs after "test accounts". No flag or environment variable skips either question; a program that gives SiegeKit a pseudo-terminal can type both (ADR 0044).
+9. **The result says what changed**, so the person knows what to reset: the replays accepted (method, the path as sent, and who), the copies made and deleted again, the writes not tested with no login, the writes never replayed, and the CSRF note.
+
+## Evidence for the check as built
+
+- Unit tests (`internal/authz/write_test.go`): parsing (lockout, duplicates, the address-and-card ID collision, CSRF marks, the 50-write limit), the lockout words, ID replacement in path, query, JSON and form bodies, plain creates, redirects to login pages; the check against a test app shaped like Juice Shop (one item per product, an owner-checked card, own notes, a form that needs the sender's own CSRF token and answers 303), B's DELETE on A's recorded object, medium findings, the refusals for deployed mode and read-only configurations; `FuzzParseWrites` in CI. `cmd/siegekit/write_test.go`: the flags, both questions, the listing, the configuration (not read-only, local mode) and the report. The test app (`internal/runner`) gets carts that any account can change but only the owner can read or delete; `TestAuthzWriteFindsPlantedIssue` reports exactly the one planted change and leaves A's recorded cart untouched.
+- Measured on local Juice Shop and Gitea with browser recordings: see Context, items 2b, 3b, 4b and 7, and the shared record.
+- The labels ("real", "allowed by design") are Claude's, checked against each app's database or A's own reads; nobody else checked them.
+
+## Consequences
+
+- Writes between accounts get an automated check for the first time, on local targets, when the person asks for it.
+- It changes data in the app for real: B's accepted writes stay (for example B's forged review in A's name on Juice Shop), and copies the app will not let A delete stay. The result lists them; the guide says to use a throwaway database or a snapshot.
+- **Not covered:** writes the recording did not make; objects named by a slug, not an ID (the replay goes to A's real object); POST writes never reach high (no same-URL read), so on apps that write only with POST, such as Gitea's web UI, every hit is medium; multi-step flows (a checkout that needs items first); GraphQL single endpoints and WebSocket messages (not measured); a PUT that adds to a list reads as high whenever the list changes, which would be a false high on an app where B may add its own entry (Juice Shop's review was real: B posted in A's name); apps that redirect back to a form after a failed write would give false medium findings under 4b (not measured).
+- False-alarm rates on apps other than Juice Shop and Gitea are not measured.
+
+## Alternatives considered
+
+- **2xx alone, same-URL read alone, a marker in B's text** (Q1 options A, B, D): see the design. A: every finding needs a person; B: drops two real cases; D: 1 more false alarm and up to 202 more requests.
+- **Using A's recorded object** for every replay (Q2 option B): 5 of 16 Juice Shop replays changed A's data, so 5 no-login tests would be skipped.
+- **OpenAPI write routes** (Q3 option B): each needs real IDs and a valid body; not prototyped.
+- **B only** (Q4 option B): loses the no-login write test.
+- **Leaving CSRF-protected writes as "could not test"** (7): nothing tested on Gitea's web UI.

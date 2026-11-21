@@ -165,14 +165,43 @@ func writeApp(t *testing.T) (*httptest.Server, *[]string) {
 		w.WriteHeader(http.StatusCreated)
 		fmt.Fprint(w, `{"status":"success"}`)
 	}))
-	mux.HandleFunc("POST /settings", logged(func(w http.ResponseWriter, r *http.Request, u string) {
-		r.ParseForm()
-		if r.PostForm.Get("_csrf") != "tok-"+u {
-			http.Error(w, "bad csrf", http.StatusBadRequest)
+	// A page gives its viewer a CSRF token: logged-in accounts in a script
+	// value (as Gitea's start page does), anyone else in a meta tag with a
+	// cookie that holds it.
+	mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		defer mu.Unlock()
+		seen = append(seen, "GET / "+who(r))
+		if u := who(r); u != "" {
+			fmt.Fprintf(w, "<script>window.config = {csrfToken: 'tok-%s-0123456789'};</script>", u)
 			return
 		}
-		fmt.Fprint(w, "saved")
-	}))
+		http.SetCookie(w, &http.Cookie{Name: "_csrf", Value: "anon1"})
+		fmt.Fprint(w, `<meta name="_csrf" content="tok-anon1">`)
+	})
+	// An organisation's settings form: any logged-in account with its own
+	// CSRF token may change it (the planted flaw); a success redirects back
+	// with 303, as server-rendered forms do; no login redirects to /login.
+	settings := map[string]string{}
+	mux.HandleFunc("POST /orgs/{id}/settings", func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		defer mu.Unlock()
+		u := who(r)
+		seen = append(seen, r.Method+" "+r.URL.RequestURI()+" "+u)
+		r.ParseForm()
+		c, _ := r.Cookie("_csrf")
+		switch {
+		case u == "" && (c == nil || r.PostForm.Get("_csrf") != "tok-"+c.Value):
+			http.Error(w, "bad csrf", http.StatusBadRequest)
+		case u == "":
+			http.Redirect(w, r, "/login?next=/orgs", http.StatusSeeOther)
+		case r.PostForm.Get("_csrf") != "tok-"+u+"-0123456789":
+			http.Error(w, "bad csrf", http.StatusBadRequest)
+		default:
+			settings[r.PathValue("id")] = r.PostForm.Get("name")
+			http.Redirect(w, r, "/orgs/"+r.PathValue("id")+"/settings", http.StatusSeeOther)
+		}
+	})
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 	// A's recorded state, as in the Juice Shop recording: A deleted item 7
@@ -288,6 +317,34 @@ func TestLockoutReason(t *testing.T) {
 	}
 }
 
+func TestToLogin(t *testing.T) {
+	for loc, want := range map[string]bool{
+		"": true, "/user/login?redirect_to=%2F": true, "https://app.test/signIn": true, "/auth/realms/x": true, "/users/sign_in": true,
+		"/orgs/3/settings": false, "/alice/pub": false, "/": false, "/blog/authors": false,
+	} {
+		if got := toLogin(loc); got != want {
+			t.Errorf("%q: %v", loc, got)
+		}
+	}
+}
+
+func TestEchoed(t *testing.T) {
+	for _, c := range []struct {
+		loc, sent, body string
+		want            bool
+	}{
+		{"/alice/pub/issues/1", "/-/fetch-redirect", "redirect=%2Falice%2Fpub%2Fissues%2F1", true},
+		{"http://app.test/next", "/go?to=http%3A%2F%2Fapp.test%2Fnext", "", true},
+		{"/orgs/3/settings", "/orgs/3/settings", "_csrf=x&name=A", false},
+		{"/alice/pub", "/repo/create", "uid=1&repo_name=pub", false},
+		{"", "/x", "a=b", false},
+	} {
+		if got := echoed(c.loc, c.sent, []byte(c.body)); got != c.want {
+			t.Errorf("%+v: %v", c, got)
+		}
+	}
+}
+
 func TestWithID(t *testing.T) {
 	w := Write{Method: "PATCH", Path: "/api/items/7/notes?item=7&q=7x", Header: http.Header{"Content-Type": {"application/json"}},
 		Body: []byte(`{"id":7,"BasketId":"7","quantity":7,"note":"7","nested":{"item_id":7}}`)}
@@ -338,7 +395,7 @@ func appWrites(t *testing.T, srv *httptest.Server) *Writes {
 		{method: "DELETE", url: srv.URL + "/api/items/7", status: 200, headers: a},
 		{method: "DELETE", url: srv.URL + "/api/cards/7", status: 200, headers: a},
 		{method: "POST", url: srv.URL + "/api/notes", mime: "application/json", body: `{"text":"x"}`, status: 201, headers: a},
-		{method: "POST", url: srv.URL + "/settings", mime: "application/x-www-form-urlencoded", body: "_csrf=tok-alice&name=A", status: 200, headers: map[string]string{"Authorization": "Bearer A"}},
+		{method: "POST", url: srv.URL + "/orgs/3/settings", mime: "application/x-www-form-urlencoded", body: "_csrf=tok-alice-0123456789&name=A", status: 303, headers: map[string]string{"Authorization": "Bearer A"}},
 		{method: "POST", url: srv.URL + "/logout", status: 200, headers: a},
 	}), mustTarget(t, srv.URL+"/"))
 	if err != nil {
@@ -366,13 +423,14 @@ func TestWriteCheck(t *testing.T) {
 	}
 	// B changes and deletes A's item (high: A's read changed). The card
 	// checks its owner; A's own creates are B's own when B sends them
-	// (plain creates, not sent as B); the form is refused for its CSRF
-	// token; logout is never sent.
-	want := []string{"cross-account-write /api/items/7 CWE-639 high", "cross-account-write /api/items/7 CWE-639 high"}
+	// (plain creates, not sent as B); logout is never sent.
+	// B also changes organisation 3's settings with its own CSRF token,
+	// answered with a redirect like A's recorded write (medium: a POST).
+	want := []string{"cross-account-write /api/items/7 CWE-639 high", "cross-account-write /api/items/7 CWE-639 high", "cross-account-write /orgs/3/settings CWE-639 medium"}
 	if !slices.Equal(got, want) {
 		t.Errorf("findings %v, want %v", got, want)
 	}
-	if c := CountWrites(res); c != (WriteCounts{Cross: 2}) {
+	if c := CountWrites(res); c != (WriteCounts{Cross: 3}) {
 		t.Errorf("count %+v", c)
 	}
 	for _, s := range *seen {
@@ -386,6 +444,14 @@ func TestWriteCheck(t *testing.T) {
 	for _, r := range res.Replays {
 		if strings.Contains(r.Path, "/7") && (!r.Recreated || r.Sent == r.Path) {
 			t.Errorf("not on a copy: %+v", r)
+		}
+	}
+	// B fetched its own CSRF token for the form and changed A's
+	// organisation (a redirect, as A's recorded write got), so the request
+	// with no login is not sent on that recorded object.
+	for _, r := range res.Replays {
+		if pathOf(r.Path) == "/orgs/3/settings" && (r.Who == AsB && (!r.CSRFSwapped || r.Answer.Status != http.StatusSeeOther || !r.Accepted()) || r.Who == AsNoLogin && r.NotSent == "") {
+			t.Errorf("form replay %+v", r)
 		}
 	}
 	// Items 8 to 11 and cards 8 and 9; all but the one B deleted are
@@ -405,12 +471,12 @@ func TestWriteCheck(t *testing.T) {
 	s := res.WriteSummary(w)
 	for _, part := range []string{
 		"replayed 7 write(s) from the HAR file as account B and with no login",
-		"2 high, 0 medium",
-		"2 accepted and may have changed data: PUT /api/items/8 as account B, DELETE /api/items/10 as account B",
+		"2 high, 1 medium",
+		"3 accepted and may have changed data: PUT /api/items/8 as account B, DELETE /api/items/10 as account B, POST /orgs/3/settings as account B",
 		"6 object(s) made for account A with POST /api/items/, POST /api/cards/",
 		"1 not replayed because they could log in, log out or lock an account out: POST /logout",
-		"1 write(s) carry account A's CSRF token",
-		"not sent as account B because they make a new object that names no ID or login: POST /api/items/, POST /api/cards/, POST /api/notes, POST /settings",
+		"1 write(s) were sent with the sender's own CSRF token, taken from a page",
+		"not sent as account B because they make a new object that names no ID or login: POST /api/items/, POST /api/cards/, POST /api/notes",
 	} {
 		if !strings.Contains(s, part) {
 			t.Errorf("summary %q\nlacks %q", s, part)
@@ -438,6 +504,14 @@ func TestWriteCheckWithoutCopies(t *testing.T) {
 	}
 	if s := res.WriteSummary(nil); !strings.Contains(s, "not tested with no login, because B's replay was accepted on A's recorded object: DELETE /api/items/8") {
 		t.Errorf("%q", s)
+	}
+	// With no login, the form gets the anonymous page's token and cookie;
+	// the app redirects to its login page, which is a refusal.
+	form := Write{Method: "POST", Path: "/orgs/3/settings", RecordedStatus: 303, CSRF: true,
+		Header: http.Header{"Authorization": {"Bearer A"}, "Content-Type": {"application/x-www-form-urlencoded"}}, Body: []byte("_csrf=tok-alice-0123456789&name=A")}
+	res, err = WriteCheck(context.Background(), cfg, []Write{form}, nil, "", 10, target.Local)
+	if r := res.Replays[0]; err != nil || !r.CSRFSwapped || r.Answer.Status != http.StatusSeeOther || !strings.HasPrefix(r.Location, "/login") || r.Accepted() {
+		t.Errorf("no-login form %+v %v", r, err)
 	}
 	// Without B, only the request with no login is sent.
 	res, err = WriteCheck(context.Background(), cfg, []Write{{Method: "PUT", Path: "/api/cards/7", Header: http.Header{"Authorization": {"Bearer A"}}}}, nil, "", 10, target.Local)

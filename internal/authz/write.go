@@ -19,6 +19,7 @@ import (
 	"math"
 	"net/http"
 	"net/url"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -53,6 +54,8 @@ type Write struct {
 	// Create is A's recorded request that made this write's object, nil
 	// when no recorded create's answer holds an ID the write uses.
 	Create *Create
+	// RecordedStatus is the answer A got in the recording.
+	RecordedStatus int
 	// CSRF: the write carries an anti-forgery token from A's session, in
 	// a header or the body. A refusal of B's or the no-login replay may
 	// come from that token, not from access control (ADR 0049).
@@ -190,7 +193,7 @@ func ParseWrites(data []byte, t *target.URL) (*Writes, error) {
 		if len(body) == 0 {
 			hd.Del("Content-Type")
 		}
-		wr := Write{Method: method, Path: p, Header: hd, Body: body, CSRF: carriesCSRF(hd, body)}
+		wr := Write{Method: method, Path: p, Header: hd, Body: body, CSRF: carriesCSRF(hd, body), RecordedStatus: e.Response.Status}
 		if method == http.MethodPost {
 			if ids := answerIDs(e.Response.Status, e.Response.Content.Text, e.Response.Content.Encoding); len(ids) > 0 {
 				creates = append(creates, recordedCreate{index: i, c: Create{Path: p, Header: hd.Clone(), Body: body}, ids: ids})
@@ -632,6 +635,9 @@ type WriteReplay struct {
 	NotSent string
 	// CleanedUp: A deleted the copy after the replay.
 	CleanedUp bool
+	// CSRFSwapped: the replay carried a CSRF token fetched as its sender.
+	CSRFSwapped bool
+	Location    string // the write answer's Location header
 }
 
 // WriteResult is what WriteCheck did.
@@ -645,12 +651,6 @@ type WriteResult struct {
 	PlainCreates []string
 	BTested      bool
 }
-
-// Build-time options being measured (ADR 0049); removed once decided.
-var (
-	cleanupCopies   = true
-	plainCreatesNoB = true
-)
 
 // plainCreate: a POST whose path holds no ID and not A's login name, and
 // whose body has no ID-named key with an ID value. B sending it makes B's
@@ -699,7 +699,9 @@ func WriteCheck(ctx context.Context, cfg egress.Config, ws []Write, b http.Heade
 	}
 	res := WriteResult{BTested: b != nil}
 	var last time.Time
+	var lastHeader http.Header
 	do := func(method, p string, h http.Header, body []byte) (Answer, error) {
+		lastHeader = nil
 		if !last.IsZero() {
 			if err := sleep(ctx, interval-now().Sub(last)); err != nil {
 				return Answer{}, err
@@ -714,6 +716,7 @@ func WriteCheck(ctx context.Context, cfg egress.Config, ws []Write, b http.Heade
 			return Answer{Err: errString(err)}, nil
 		}
 		res.Requests++
+		lastHeader = a.Header
 		if err != nil {
 			return Answer{Status: a.Status, Err: errString(err)}, nil
 		}
@@ -722,7 +725,7 @@ func WriteCheck(ctx context.Context, cfg egress.Config, ws []Write, b http.Heade
 	session := sessionNames(b)
 	for _, w := range ws {
 		bOnRecorded := false // B's replay was accepted on A's recorded object
-		plain := plainCreatesNoB && plainCreate(w, loginName)
+		plain := plainCreate(w, loginName)
 		for _, who := range []string{AsB, AsNoLogin} {
 			if who == AsB && (b == nil || plain) {
 				if b != nil {
@@ -766,9 +769,38 @@ func WriteCheck(ctx context.Context, cfg egress.Config, ws []Write, b http.Heade
 					h[k] = append([]string(nil), vs...)
 				}
 			}
-			if rp.Answer, err = do(sw.Method, sw.Path, h, sw.Body); err != nil {
+			body := sw.Body
+			if w.CSRF {
+				if old := csrfValue(sw); old != "" {
+					page := "/"
+					if ref, err := url.Parse(sw.Header.Get("Referer")); err == nil && ref.Path != "" && target.SendablePath(ref.EscapedPath()) {
+						page = ref.EscapedPath()
+					}
+					ph := h.Clone()
+					ph.Del("Content-Type")
+					pa, err := do(http.MethodGet, page, ph, nil)
+					if err != nil {
+						return res, err
+					}
+					tok, cookies := pageCSRF(pa, lastHeader)
+					if tok != "" {
+						body = bytes.ReplaceAll(body, []byte(old), []byte(tok))
+						for k, vs := range h {
+							for i, v := range vs {
+								h[k][i] = strings.ReplaceAll(v, old, tok)
+							}
+						}
+						rp.CSRFSwapped = true
+					}
+					if len(cookies) > 0 {
+						h.Set("Cookie", mergeCookies(h.Get("Cookie"), cookies))
+					}
+				}
+			}
+			if rp.Answer, err = do(sw.Method, sw.Path, h, body); err != nil {
 				return res, err
 			}
+			rp.Location = lastHeader.Get("Location")
 			if rp.Read && ok2xx(rp.Before) {
 				if rp.After, err = do(http.MethodGet, sw.Path, readHeader, nil); err != nil {
 					return res, err
@@ -777,8 +809,8 @@ func WriteCheck(ctx context.Context, cfg egress.Config, ws []Write, b http.Heade
 			// A deletes the copy it made, so A's create works again for the
 			// next replay on apps that refuse a second identical object
 			// (ADR 0049 item 2).
-			if cleanupCopies && rp.Recreated && strings.HasSuffix(pathOf(sw.Path), "/"+url.PathEscape(copyID)) &&
-				!(w.Method == http.MethodDelete && ok2xx(rp.Answer)) {
+			if rp.Recreated && strings.HasSuffix(pathOf(sw.Path), "/"+url.PathEscape(copyID)) &&
+				!(w.Method == http.MethodDelete && rp.Accepted()) {
 				ca, err := do(http.MethodDelete, pathOf(sw.Path), readHeader, nil)
 				if err != nil {
 					return res, err
@@ -788,7 +820,7 @@ func WriteCheck(ctx context.Context, cfg egress.Config, ws []Write, b http.Heade
 					res.CleanedUp++
 				}
 			}
-			if who == AsB && !rp.Recreated && ok2xx(rp.Answer) && (w.Method != http.MethodPost || hasID(w.Path)) {
+			if who == AsB && !rp.Recreated && rp.Accepted() && (w.Method != http.MethodPost || hasID(w.Path)) {
 				bOnRecorded = true
 			}
 			res.Replays = append(res.Replays, rp)
@@ -816,11 +848,73 @@ func newID(a Answer, field []string) (string, bool) {
 	return idValue(v)
 }
 
+// Accepted reports whether the app took the replayed write: a 2xx answer,
+// or a redirect when A's own recorded write was answered with a redirect
+// too and this one does not lead to a login page. Server-rendered forms
+// answer a successful write with 303 (4 of 13 Gitea web writes, measured
+// 2026-11-21, ADR 0049).
+func (r WriteReplay) Accepted() bool {
+	if ok2xx(r.Answer) {
+		return true
+	}
+	return r.Answer.Err == "" && r.Answer.Status >= 300 && r.Answer.Status < 400 &&
+		r.RecordedStatus >= 300 && r.RecordedStatus < 400 && !toLogin(r.Location) && !echoed(r.Location, r.Sent, r.Body)
+}
+
+// echoed reports whether a redirect only goes where the request asked: its
+// target is a value of the request's query or form body. Gitea's
+// /-/fetch-redirect answers anyone with 303 to its "redirect" field and
+// changes nothing (4 false medium findings before this rule, measured
+// 2026-11-21, ADR 0049).
+func echoed(loc, sent string, body []byte) bool {
+	if loc == "" {
+		return false
+	}
+	_, q, _ := strings.Cut(sent, "?")
+	for _, raw := range []string{q, string(body)} {
+		vals, err := url.ParseQuery(raw)
+		if err != nil {
+			continue
+		}
+		for _, vs := range vals {
+			for _, v := range vs {
+				if v != "" && (v == loc || strings.HasSuffix(loc, v) && strings.HasPrefix(v, "/")) {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+// loginWords in a redirect's path mean "log in first".
+var loginWords = map[string]bool{"login": true, "logon": true, "signin": true, "auth": true, "sso": true, "oauth": true, "oauth2": true, "authorize": true}
+
+// toLogin reports whether a redirect leads to a login page, or nowhere.
+func toLogin(loc string) bool {
+	u, err := url.Parse(loc)
+	if loc == "" || err != nil {
+		return true
+	}
+	for _, seg := range strings.Split(u.Path, "/") {
+		joined := strings.NewReplacer("-", "", "_", "").Replace(strings.ToLower(seg))
+		if loginWords[joined] {
+			return true
+		}
+		for _, w := range splitWords(seg) {
+			if loginWords[w] {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // Severity is the replay's tier (ADR 0049 item 1), and false when it is
 // not reported: high when a PUT, PATCH or DELETE was accepted and A's read
 // of the same URL changed, medium for any other accepted (2xx) replay.
 func (r WriteReplay) Severity() (findings.Severity, bool) {
-	if r.NotSent != "" || !ok2xx(r.Answer) {
+	if r.NotSent != "" || !r.Accepted() {
 		return 0, false
 	}
 	if r.Read && ok2xx(r.Before) && r.After.Err == "" && r.After.Status != 0 &&
@@ -885,7 +979,7 @@ func (r WriteResult) WriteSummary(w *Writes) string {
 		} else if ok {
 			medium++
 		}
-		if ok2xx(rp.Answer) {
+		if rp.Accepted() {
 			accepted = appendOnce(accepted, fmt.Sprintf("%s %s as %s", rp.Method, pathOf(rp.Sent), whoName(rp.Who)))
 		}
 		if rp.Recreated && rp.Create != nil {
@@ -937,20 +1031,32 @@ func (r WriteResult) WriteSummary(w *Writes) string {
 			}
 		}
 	}
-	if n := csrfWrites(r.Replays); n > 0 {
-		notes = append(notes, fmt.Sprintf("%d write(s) carry account A's CSRF token, so a refusal of them may come from that token and says nothing about access control", n))
+	swapped, stale := csrfWrites(r.Replays)
+	if swapped > 0 {
+		notes = append(notes, fmt.Sprintf("%d write(s) were sent with the sender's own CSRF token, taken from a page", swapped))
+	}
+	if stale > 0 {
+		notes = append(notes, fmt.Sprintf("%d write(s) were sent with account A's CSRF token because no page gave the sender one, so a refusal of them says nothing about access control", stale))
 	}
 	return s + "; " + strings.Join(notes, "; ")
 }
 
-func csrfWrites(rs []WriteReplay) int {
-	m := map[string]bool{}
+// csrfWrites counts the CSRF-carrying writes sent with the sender's own
+// token (swapped) and those sent with A's because no token was found.
+func csrfWrites(rs []WriteReplay) (swapped, stale int) {
+	sw, st := map[string]bool{}, map[string]bool{}
 	for _, r := range rs {
-		if r.CSRF {
-			m[r.Method+" "+r.Path+" "+string(r.Body)] = true
+		if !r.CSRF || r.NotSent != "" {
+			continue
+		}
+		k := r.Method + " " + r.Path + " " + string(r.Body)
+		if r.CSRFSwapped {
+			sw[k] = true
+		} else {
+			st[k] = true
 		}
 	}
-	return len(m)
+	return len(sw), len(st)
 }
 
 func whoName(who string) string {
@@ -997,4 +1103,86 @@ func CountWrites(res WriteResult) WriteCounts {
 		}
 	}
 	return c
+}
+
+// csrfValue returns A's recorded CSRF token: a CSRF-named header's value,
+// or a CSRF-named form, multipart or JSON field's value.
+func csrfValue(w Write) string {
+	for k, vs := range w.Header {
+		if csrfName(k) && len(vs) > 0 && vs[0] != "" {
+			return vs[0]
+		}
+	}
+	if m := reMultipartCSRF.FindSubmatch(w.Body); m != nil {
+		return string(m[1])
+	}
+	if vals, err := url.ParseQuery(string(w.Body)); err == nil {
+		for k, vs := range vals {
+			if csrfName(k) && len(vs) > 0 && vs[0] != "" {
+				return vs[0]
+			}
+		}
+	}
+	var v map[string]any
+	if json.Unmarshal(w.Body, &v) == nil {
+		for k, x := range v {
+			if s, ok := x.(string); ok && csrfName(k) && s != "" {
+				return s
+			}
+		}
+	}
+	return ""
+}
+
+var (
+	reMultipartCSRF = regexp.MustCompile(`(?i)name="[^"]*csrf[^"]*"\r?\n\r?\n([^\r\n]+)`)
+	reMetaCSRF      = regexp.MustCompile(`(?i)<meta[^>]+name="[^"]*csrf[^"]*"[^>]+content="([^"]+)"`)
+	reScriptCSRF    = regexp.MustCompile(`(?i)csrf_?token["']?\s*[:=]\s*["']([^"']{8,})["']`)
+	reInputCSRF     = regexp.MustCompile(`(?i)<input[^>]+name="[^"]*(?:csrf|authenticity_token|requestverificationtoken)[^"]*"[^>]+value="([^"]+)"`)
+)
+
+// pageCSRF returns the CSRF token a page gives its viewer (a meta tag or a
+// hidden field, else a CSRF-named cookie) and the cookies it sets.
+func pageCSRF(a Answer, h http.Header) (string, []*http.Cookie) {
+	var cookies []*http.Cookie
+	if h != nil {
+		cookies = (&http.Response{Header: h}).Cookies()
+	}
+	if m := reMetaCSRF.FindSubmatch(a.Body); m != nil {
+		return string(m[1]), cookies
+	}
+	if m := reInputCSRF.FindSubmatch(a.Body); m != nil {
+		return string(m[1]), cookies
+	}
+	if m := reScriptCSRF.FindSubmatch(a.Body); m != nil {
+		return string(m[1]), cookies
+	}
+	for _, c := range cookies {
+		if csrfName(c.Name) && c.Value != "" {
+			return c.Value, cookies
+		}
+	}
+	return "", cookies
+}
+
+// mergeCookies sets the new cookies in a Cookie header, replacing those of
+// the same name.
+func mergeCookies(header string, set []*http.Cookie) string {
+	var out []string
+	names := map[string]bool{}
+	for _, c := range set {
+		names[c.Name] = true
+	}
+	for _, part := range strings.Split(header, ";") {
+		name, _, _ := strings.Cut(strings.TrimSpace(part), "=")
+		if name != "" && !names[name] {
+			out = append(out, strings.TrimSpace(part))
+		}
+	}
+	for _, c := range set {
+		if c.MaxAge >= 0 && c.Value != "" {
+			out = append(out, c.Name+"="+c.Value)
+		}
+	}
+	return strings.Join(out, "; ")
 }
