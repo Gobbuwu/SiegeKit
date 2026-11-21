@@ -42,7 +42,8 @@
       "count": 1
     },
     "gosec": {
-      "status": "ran",
+      "status": "failed",
+      "reason": "gosec could not load",
       "match": "exact",
       "findings": [
         "G104 _examples/custom-handler/main.go:16",
@@ -108,7 +109,7 @@
         "G710 middleware/profiler.go:30",
         "G710 middleware/strip.go:62"
       ],
-      "why": "gosec 2.30.0's taint rules (G7xx) reported 4, 4, 3 and 1 of these on four identical CI runs; 20 local runs of the same version on the same commit, also without module downloads, gave all 4 every time. Cause not found yet: an M2 known gap"
+      "why": "Scans have no network, so gosec cannot load the packages that import modules not in this repository; it skips them and reports the rest (ADR 0040). Measured 2026-11-21: CI gate run 44849990603 shows gosec failed; the offline gap on this commit is in gosec-offline-gap-measurement-2026-11-21.md (project files). The missed findings are listed under notMetYet. Unstable: gosec 2.30.0's taint rules (G7xx) reported 4, 4, 3 and 1 of these on four identical CI runs; 20 local runs of the same version on the same commit, also without module downloads, gave all 4 every time. Cause not found yet: an M2 known gap"
     },
     "trivy": {
       "status": "ran",
@@ -124,5 +125,175 @@
     "weak-passwords": {
       "status": "ran"
     }
-  }
+  },
+  "notMetYet": [
+    {
+      "check": "gosec",
+      "finding": "G104 _examples/rest/main.go:111",
+      "needs": "Go modules in the scan: vendored, or the consented module download step (ADR 0040, owner decision pending)",
+      "confirmed": "gosec 2.30.0 run natively with the modules downloaded, 2026-11-21"
+    },
+    {
+      "check": "gosec",
+      "finding": "G104 _examples/rest/main.go:116",
+      "needs": "Go modules in the scan: vendored, or the consented module download step (ADR 0040, owner decision pending)",
+      "confirmed": "gosec 2.30.0 run natively with the modules downloaded, 2026-11-21"
+    },
+    {
+      "check": "gosec",
+      "finding": "G104 _examples/rest/main.go:134",
+      "needs": "Go modules in the scan: vendored, or the consented module download step (ADR 0040, owner decision pending)",
+      "confirmed": "gosec 2.30.0 run natively with the modules downloaded, 2026-11-21"
+    },
+    {
+      "check": "gosec",
+      "finding": "G104 _examples/rest/main.go:138",
+      "needs": "Go modules in the scan: vendored, or the consented module download step (ADR 0040, owner decision pending)",
+      "confirmed": "gosec 2.30.0 run natively with the modules downloaded, 2026-11-21"
+    },
+    {
+      "check": "gosec",
+      "finding": "G104 _examples/rest/main.go:150",
+      "needs": "Go modules in the scan: vendored, or the consented module download step (ADR 0040, owner decision pending)",
+      "confirmed": "gosec 2.30.0 run natively with the modules downloaded, 2026-11-21"
+    },
+    {
+      "check": "gosec",
+      "finding": "G104 _examples/rest/main.go:158",
+      "needs": "Go modules in the scan: vendored, or the consented module download step (ADR 0040, owner decision pending)",
+      "confirmed": "gosec 2.30.0 run natively with the modules downloaded, 2026-11-21"
+    },
+    {
+      "check": "gosec",
+      "finding": "G104 _examples/rest/main.go:163",
+      "needs": "Go modules in the scan: vendored, or the consented module download step (ADR 0040, owner decision pending)",
+      "confirmed": "gosec 2.30.0 run natively with the modules downloaded, 2026-11-21"
+    },
+    {
+      "check": "gosec",
+      "finding": "G104 _examples/rest/main.go:166",
+      "needs": "Go modules in the scan: vendored, or the consented module download step (ADR 0040, owner decision pending)",
+      "confirmed": "gosec 2.30.0 run natively with the modules downloaded, 2026-11-21"
+    },
+    {
+      "check": "gosec",
+      "finding": "G104 _examples/rest/main.go:180",
+      "needs": "Go modules in the scan: vendored, or the consented module download step (ADR 0040, owner decision pending)",
+      "confirmed": "gosec 2.30.0 run natively with the modules downloaded, 2026-11-21"
+    },
+    {
+      "check": "gosec",
+      "finding": "G104 _examples/rest/main.go:191",
+      "needs": "Go modules in the scan: vendored, or the consented module download step (ADR 0040, owner decision pending)",
+      "confirmed": "gosec 2.30.0 run natively with the modules downloaded, 2026-11-21"
+    },
+    {
+      "check": "gosec",
+      "finding": "G104 _examples/rest/main.go:195",
+      "needs": "Go modules in the scan: vendored, or the consented module download step (ADR 0040, owner decision pending)",
+      "confirmed": "gosec 2.30.0 run natively with the modules downloaded, 2026-11-21"
+    },
+    {
+      "check": "gosec",
+      "finding": "G104 _examples/rest/main.go:197",
+      "needs": "Go modules in the scan: vendored, or the consented module download step (ADR 0040, owner decision pending)",
+      "confirmed": "gosec 2.30.0 run natively with the modules downloaded, 2026-11-21"
+    },
+    {
+      "check": "gosec",
+      "finding": "G104 _examples/rest/main.go:211",
+      "needs": "Go modules in the scan: vendored, or the consented module download step (ADR 0040, owner decision pending)",
+      "confirmed": "gosec 2.30.0 run natively with the modules downloaded, 2026-11-21"
+    },
+    {
+      "check": "gosec",
+      "finding": "G104 _examples/rest/main.go:215",
+      "needs": "Go modules in the scan: vendored, or the consented module download step (ADR 0040, owner decision pending)",
+      "confirmed": "gosec 2.30.0 run natively with the modules downloaded, 2026-11-21"
+    },
+    {
+      "check": "gosec",
+      "finding": "G104 _examples/rest/main.go:223",
+      "needs": "Go modules in the scan: vendored, or the consented module download step (ADR 0040, owner decision pending)",
+      "confirmed": "gosec 2.30.0 run natively with the modules downloaded, 2026-11-21"
+    },
+    {
+      "check": "gosec",
+      "finding": "G104 _examples/rest/main.go:226",
+      "needs": "Go modules in the scan: vendored, or the consented module download step (ADR 0040, owner decision pending)",
+      "confirmed": "gosec 2.30.0 run natively with the modules downloaded, 2026-11-21"
+    },
+    {
+      "check": "gosec",
+      "finding": "G104 _examples/rest/main.go:229",
+      "needs": "Go modules in the scan: vendored, or the consented module download step (ADR 0040, owner decision pending)",
+      "confirmed": "gosec 2.30.0 run natively with the modules downloaded, 2026-11-21"
+    },
+    {
+      "check": "gosec",
+      "finding": "G104 _examples/rest/main.go:67",
+      "needs": "Go modules in the scan: vendored, or the consented module download step (ADR 0040, owner decision pending)",
+      "confirmed": "gosec 2.30.0 run natively with the modules downloaded, 2026-11-21"
+    },
+    {
+      "check": "gosec",
+      "finding": "G104 _examples/rest/main.go:71",
+      "needs": "Go modules in the scan: vendored, or the consented module download step (ADR 0040, owner decision pending)",
+      "confirmed": "gosec 2.30.0 run natively with the modules downloaded, 2026-11-21"
+    },
+    {
+      "check": "gosec",
+      "finding": "G104 _examples/versions/main.go:139",
+      "needs": "Go modules in the scan: vendored, or the consented module download step (ADR 0040, owner decision pending)",
+      "confirmed": "gosec 2.30.0 run natively with the modules downloaded, 2026-11-21"
+    },
+    {
+      "check": "gosec",
+      "finding": "G104 _examples/versions/main.go:48",
+      "needs": "Go modules in the scan: vendored, or the consented module download step (ADR 0040, owner decision pending)",
+      "confirmed": "gosec 2.30.0 run natively with the modules downloaded, 2026-11-21"
+    },
+    {
+      "check": "gosec",
+      "finding": "G114 _examples/rest/main.go:111",
+      "needs": "Go modules in the scan: vendored, or the consented module download step (ADR 0040, owner decision pending)",
+      "confirmed": "gosec 2.30.0 run natively with the modules downloaded, 2026-11-21"
+    },
+    {
+      "check": "gosec",
+      "finding": "G114 _examples/versions/main.go:48",
+      "needs": "Go modules in the scan: vendored, or the consented module download step (ADR 0040, owner decision pending)",
+      "confirmed": "gosec 2.30.0 run natively with the modules downloaded, 2026-11-21"
+    },
+    {
+      "check": "gosec",
+      "finding": "G404 _examples/rest/main.go:470",
+      "needs": "Go modules in the scan: vendored, or the consented module download step (ADR 0040, owner decision pending)",
+      "confirmed": "gosec 2.30.0 run natively with the modules downloaded, 2026-11-21"
+    },
+    {
+      "check": "gosec",
+      "finding": "G404 _examples/versions/main.go:147",
+      "needs": "Go modules in the scan: vendored, or the consented module download step (ADR 0040, owner decision pending)",
+      "confirmed": "gosec 2.30.0 run natively with the modules downloaded, 2026-11-21"
+    },
+    {
+      "check": "gosec",
+      "finding": "G404 _examples/versions/main.go:149",
+      "needs": "Go modules in the scan: vendored, or the consented module download step (ADR 0040, owner decision pending)",
+      "confirmed": "gosec 2.30.0 run natively with the modules downloaded, 2026-11-21"
+    },
+    {
+      "check": "gosec",
+      "finding": "G404 _examples/versions/presenter/v3/article.go:26",
+      "needs": "Go modules in the scan: vendored, or the consented module download step (ADR 0040, owner decision pending)",
+      "confirmed": "gosec 2.30.0 run natively with the modules downloaded, 2026-11-21"
+    },
+    {
+      "check": "gosec",
+      "finding": "G705 _examples/rest/main.go:229",
+      "needs": "Go modules in the scan: vendored, or the consented module download step (ADR 0040, owner decision pending)",
+      "confirmed": "gosec 2.30.0 run natively with the modules downloaded, 2026-11-21"
+    }
+  ]
 }

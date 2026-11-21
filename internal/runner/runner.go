@@ -606,11 +606,11 @@ func openOutput(path string) (*os.File, error) {
 	}
 	st, err := f.Stat()
 	if err != nil {
-		f.Close()
+		_ = f.Close() // read-only; the Stat error is the one to report
 		return nil, err
 	}
 	if !st.Mode().IsRegular() {
-		f.Close()
+		_ = f.Close() // read-only; nothing was read
 		return nil, fmt.Errorf("report %q is not a regular file", filepath.Base(path))
 	}
 	return f, nil

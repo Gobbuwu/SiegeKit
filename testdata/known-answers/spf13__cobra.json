@@ -27,7 +27,9 @@
       "status": "ran"
     },
     "gosec": {
-      "status": "ran"
+      "status": "failed",
+      "reason": "gosec could not load",
+      "why": "Scans have no network, so gosec cannot load the packages that import modules not in this repository; it skips them and reports the rest (ADR 0040). Measured 2026-11-21: CI gate run 44849990603 shows gosec failed; the offline gap on this commit is in gosec-offline-gap-measurement-2026-11-21.md (project files). The missed findings are listed under notMetYet."
     },
     "trivy": {
       "status": "ran"
@@ -35,5 +37,79 @@
     "weak-passwords": {
       "status": "ran"
     }
-  }
+  },
+  "notMetYet": [
+    {
+      "check": "gosec",
+      "finding": "G302 completions.go:962-963",
+      "needs": "Go modules in the scan: vendored, or the consented module download step (ADR 0040, owner decision pending)",
+      "confirmed": "gosec 2.30.0 run natively with the modules downloaded, 2026-11-21"
+    },
+    {
+      "check": "gosec",
+      "finding": "G304 bash_completions.go:702",
+      "needs": "Go modules in the scan: vendored, or the consented module download step (ADR 0040, owner decision pending)",
+      "confirmed": "gosec 2.30.0 run natively with the modules downloaded, 2026-11-21"
+    },
+    {
+      "check": "gosec",
+      "finding": "G304 bash_completionsV2.go:471",
+      "needs": "Go modules in the scan: vendored, or the consented module download step (ADR 0040, owner decision pending)",
+      "confirmed": "gosec 2.30.0 run natively with the modules downloaded, 2026-11-21"
+    },
+    {
+      "check": "gosec",
+      "finding": "G304 completions.go:962-963",
+      "needs": "Go modules in the scan: vendored, or the consented module download step (ADR 0040, owner decision pending)",
+      "confirmed": "gosec 2.30.0 run natively with the modules downloaded, 2026-11-21"
+    },
+    {
+      "check": "gosec",
+      "finding": "G304 doc/man_docs.go:72",
+      "needs": "Go modules in the scan: vendored, or the consented module download step (ADR 0040, owner decision pending)",
+      "confirmed": "gosec 2.30.0 run natively with the modules downloaded, 2026-11-21"
+    },
+    {
+      "check": "gosec",
+      "finding": "G304 doc/md_docs.go:145",
+      "needs": "Go modules in the scan: vendored, or the consented module download step (ADR 0040, owner decision pending)",
+      "confirmed": "gosec 2.30.0 run natively with the modules downloaded, 2026-11-21"
+    },
+    {
+      "check": "gosec",
+      "finding": "G304 doc/rest_docs.go:157",
+      "needs": "Go modules in the scan: vendored, or the consented module download step (ADR 0040, owner decision pending)",
+      "confirmed": "gosec 2.30.0 run natively with the modules downloaded, 2026-11-21"
+    },
+    {
+      "check": "gosec",
+      "finding": "G304 doc/yaml_docs.go:72",
+      "needs": "Go modules in the scan: vendored, or the consented module download step (ADR 0040, owner decision pending)",
+      "confirmed": "gosec 2.30.0 run natively with the modules downloaded, 2026-11-21"
+    },
+    {
+      "check": "gosec",
+      "finding": "G304 fish_completions.go:285",
+      "needs": "Go modules in the scan: vendored, or the consented module download step (ADR 0040, owner decision pending)",
+      "confirmed": "gosec 2.30.0 run natively with the modules downloaded, 2026-11-21"
+    },
+    {
+      "check": "gosec",
+      "finding": "G304 powershell_completions.go:321",
+      "needs": "Go modules in the scan: vendored, or the consented module download step (ADR 0040, owner decision pending)",
+      "confirmed": "gosec 2.30.0 run natively with the modules downloaded, 2026-11-21"
+    },
+    {
+      "check": "gosec",
+      "finding": "G304 zsh_completions.go:71",
+      "needs": "Go modules in the scan: vendored, or the consented module download step (ADR 0040, owner decision pending)",
+      "confirmed": "gosec 2.30.0 run natively with the modules downloaded, 2026-11-21"
+    },
+    {
+      "check": "gosec",
+      "finding": "G703 completions.go:962",
+      "needs": "Go modules in the scan: vendored, or the consented module download step (ADR 0040, owner decision pending)",
+      "confirmed": "gosec 2.30.0 run natively with the modules downloaded, 2026-11-21"
+    }
+  ]
 }
