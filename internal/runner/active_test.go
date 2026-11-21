@@ -261,7 +261,18 @@ func findsPlanted(t *testing.T, filesRoot string, ids ...string) {
 	}
 	var ms []*manifest.Manifest
 	for _, id := range ids {
-		ms = append(ms, builtin(t, id))
+		m := builtin(t, id)
+		if id == "schemathesis" {
+			// Unseeded, Schemathesis stops at the first failure it finds, so
+			// the number of requests it sends depends on its random inputs:
+			// 13 to 32 on the test app in 40 runs of the tool alone, and 13
+			// to 27 in 12 runs of this test (2026-11-21). With a fixed seed
+			// the inputs, and so the count, are the same every run, and the
+			// floor in vulnAppMinRequests can tell a cut-short run from an
+			// unlucky one. Scans stay unseeded.
+			m.Run.Args = append(m.Run.Args, "--seed", vulnAppSchemathesisSeed)
+		}
+		ms = append(ms, m)
 	}
 	for _, m := range ms {
 		img, _ := ImageFor(m)

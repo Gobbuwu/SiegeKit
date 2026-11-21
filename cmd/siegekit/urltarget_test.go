@@ -544,6 +544,9 @@ func TestScanURLOpenAPI(t *testing.T) {
 		{"default path", "", map[string]string{"/v3/api-docs": testSpec}, report.ExitClean, report.Ran, "OpenAPI spec http://localhost:3000/v3/api-docs", 5},
 		{"none found", "", map[string]string{}, report.ExitIncomplete, report.Skipped, "none was found at /openapi.json, /openapi.yaml", len(openapi.DefaultPaths)},
 		{"other origin", "http://localhost:3001/spec.json", nil, exitInvalid, "", "is not on the target's origin", 0},
+		// F7 of the full project check (ADR 0042): refused here, not later by the proxy.
+		{"double slash", "http://localhost:3000//x/openapi.json", nil, exitInvalid, "", "--openapi must have a path that starts with a single /", 0},
+		{"query", "http://localhost:3000/spec.json?v=1", nil, exitInvalid, "", "--openapi must not have a query", 0},
 		{"missing file", filepath.Join(t.TempDir(), "nope.json"), nil, exitInvalid, "", "no such file", 0},
 		{"file not a spec", "/dev/null", nil, exitInvalid, "", "empty document", 0},
 	} {

@@ -73,6 +73,7 @@ func TestParseHAR(t *testing.T) {
 		{"GET", "http://evil.test/rest/basket/1"},          // other host
 		{"GET", "http://u:p@localhost:3000/rest/basket/1"}, // credentials in the URL
 		{"GET", "ws://localhost:3000/socket.io/"},          // not HTTP
+		{"GET", "http://localhost:3000//evil.test/x"},      // path not sendable (ADR 0042)
 	}, map[string]string{
 		"Authorization": "Bearer A", "Cookie": "token=A", "Accept": "application/json",
 		":authority": "localhost:3000", "Host": "evil.test", "User-Agent": "Chrome", "Sec-Fetch-Mode": "cors",
@@ -89,7 +90,7 @@ func TestParseHAR(t *testing.T) {
 	if !slices.Equal(paths, []string{"GET /rest/basket/1", "GET /api/Users/1?x=2", "HEAD /"}) {
 		t.Errorf("requests %v", paths)
 	}
-	if h.Duplicate != 1 || h.OtherMethod != 1 || h.Static != 2 || h.OtherOrigin != 5 || h.OverLimit != 0 {
+	if h.Duplicate != 1 || h.OtherMethod != 1 || h.Static != 2 || h.OtherOrigin != 5 || h.BadPath != 1 || h.OverLimit != 0 {
 		t.Errorf("counts %+v", h)
 	}
 	got := h.Requests[0].Header

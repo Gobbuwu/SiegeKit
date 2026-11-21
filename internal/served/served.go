@@ -61,6 +61,7 @@ type Result struct {
 	Files       []File
 	Requests    int // GET requests the target answered, redirects included
 	OtherOrigin int // links to another origin, not fetched (ADR 0005)
+	BadPath     int // links whose path does not start with a single /, not fetched (ADR 0042)
 	Failed      int // answered with a status other than 200, did not answer, or redirected elsewhere
 	TooLarge    int // answers larger than MaxFileSize
 	OverLimit   int // links not fetched because MaxRequests was reached
@@ -85,6 +86,7 @@ func (r Result) Summary() string {
 		what string
 	}{
 		{r.OtherOrigin, "on another origin"},
+		{r.BadPath, "with a path that does not start with a single /"},
 		{r.Failed, "not answered with 200"},
 		{r.TooLarge, "larger than 10 MiB"},
 		{r.OverLimit, fmt.Sprintf("over the %d-request limit", MaxRequests)},
@@ -232,6 +234,10 @@ func (c *collector) resolve(base *url.URL, ref string) (*url.URL, bool) {
 		return nil, false
 	}
 	u.Fragment, u.RawFragment = "", ""
+	if !target.SendablePath(requestPath(u)) {
+		c.res.BadPath++
+		return nil, false
+	}
 	return u, true
 }
 

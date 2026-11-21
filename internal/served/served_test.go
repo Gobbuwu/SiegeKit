@@ -129,7 +129,7 @@ func TestCollect(t *testing.T) {
 		"/app/": page(`<script src="app.js"></script><script src="https://cdn.example.com/x.js"></script>
 <script src="//other.example/y.js"></script><link rel=stylesheet href="/s.css"><script src="/app/app.js#frag"></script>
 <script src="/gone.js"></script><script src="/big.js"></script><script src="/down.js"></script>
-<script src="data:text/javascript,alert(1)"></script><link rel=manifest href="/r"><script src="/off"></script>`),
+<script src="data:text/javascript,alert(1)"></script><script src="http://app.test:8080//x.js"></script><link rel=manifest href="/r"><script src="/off"></script>`),
 		"/app/app.js":     js,
 		"/app/app.js.map": page(`{"sources":[]}`),
 		"/s.css":          css,
@@ -162,10 +162,10 @@ func TestCollect(t *testing.T) {
 	if urls[3] != "http://app.test:8080/manifest.json" || urls[0] != "http://app.test:8080/app/" {
 		t.Errorf("urls %v", urls)
 	}
-	if r.Requests != 10 || r.OtherOrigin != 2 || r.Failed != 3 || r.TooLarge != 1 || r.OverLimit != 0 {
+	if r.Requests != 10 || r.OtherOrigin != 2 || r.BadPath != 1 || r.Failed != 3 || r.TooLarge != 1 || r.OverLimit != 0 {
 		t.Errorf("result %+v", r)
 	}
-	want := "scanned 6 file(s): 1 page, 1 script, 1 style, 1 JSON, 2 source maps; not scanned: 2 on another origin, 3 not answered with 200, 1 larger than 10 MiB"
+	want := "scanned 6 file(s): 1 page, 1 script, 1 style, 1 JSON, 2 source maps; not scanned: 2 on another origin, 1 with a path that does not start with a single /, 3 not answered with 200, 1 larger than 10 MiB"
 	if s := r.Summary(); s != want {
 		t.Errorf("Summary =\n%s\nwant\n%s", s, want)
 	}

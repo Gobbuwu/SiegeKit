@@ -254,7 +254,8 @@ func Send(ctx context.Context, cfg Config, method, path, contentType string, bod
 // the access-control check (ADR 0035). User-Agent is always SiegeKit's own,
 // and Host, the connection, transfer and proxy headers cannot be set.
 func SendHeader(ctx context.Context, cfg Config, method, path string, header http.Header, body []byte, max int64) (*Answer, error) {
-	if !strings.HasPrefix(path, "/") || strings.HasPrefix(path, "//") {
+	// A backstop: the flags' URLs are checked by target.OnOrigin (ADR 0042).
+	if !target.SendablePath(path) {
 		return nil, fmt.Errorf("path %q must start with a single /", path)
 	}
 	if cfg.ReadOnly && method != http.MethodGet && method != http.MethodHead {
