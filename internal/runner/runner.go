@@ -397,7 +397,7 @@ func runPlugin(ctx context.Context, ex Executor, m *manifest.Manifest, opt Optio
 	if o := m.Output.Stdout; o != nil {
 		// What the tool did not do (ADR 0040): its findings are kept, but
 		// the run is incomplete (exit code 4), as for unreadable files.
-		missed, err := notDone(filepath.Join(out, o.File), o.Parser)
+		missed, err := notDone(filepath.Join(out, o.File), o.Parser, opt.TargetDir)
 		if err != nil {
 			pr.Status, pr.Reason = report.Failed, err.Error()
 		} else if missed != "" {
@@ -419,9 +419,9 @@ func stdoutFile(m *manifest.Manifest) string {
 }
 
 // notDone reads the saved standard output with parser and says what the
-// tool did not do, "" if nothing. Unreadable output is an error: the run
-// cannot be called complete without it.
-func notDone(path, parser string) (string, error) {
+// tool did not do in target, "" if nothing. Unreadable output is an error:
+// the run cannot be called complete without it.
+func notDone(path, parser, target string) (string, error) {
 	f, err := openOutput(path)
 	if err != nil {
 		return "", fmt.Errorf("could not read the tool's error list: %w", err)
@@ -429,14 +429,11 @@ func notDone(path, parser string) (string, error) {
 	defer f.Close()
 	switch parser {
 	case "gosec-errors":
-		dirs, err := gosec.Uncovered(f, sandbox.TargetMount)
+		why, err := gosec.Check(f, target, sandbox.TargetMount)
 		if err != nil {
 			return "", fmt.Errorf("could not read the tool's error list: %w", err)
 		}
-		if len(dirs) == 0 {
-			return "", nil
-		}
-		return gosec.Reason(dirs), nil
+		return why, nil
 	}
 	return "", fmt.Errorf("unknown stdout parser %q", parser)
 }

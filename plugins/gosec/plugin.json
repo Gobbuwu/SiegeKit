@@ -47,7 +47,10 @@
       "-no-fail",
       "-track-suppressions",
       "{target}/..."
-    ]
+    ],
+    "env": {
+      "GOPATH": "/tmp/go"
+    }
   },
   "output": {
     "format": "sarif",
