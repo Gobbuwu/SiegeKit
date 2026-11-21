@@ -93,8 +93,10 @@ Flags:
                     confirm without a terminal that you are authorized to
                     test HOST; must match the URL's host exactly
                     (private addresses only, not --deployed)
-  --require-all     treat tests skipped for a missing dependency as an
-                    incomplete run (exit code 4 unless there are findings)
+  --require-all     treat tests skipped for a missing or declined dependency
+                    as an incomplete run (exit code 4 unless there are
+                    findings); tests left out by the mode, the profile, a
+                    missing input or the target's files do not count
   --openapi FILE_OR_URL
                     the API's OpenAPI or Swagger 2.0 spec (JSON or YAML) for
                     Schemathesis; a URL must be on the target's origin.
@@ -312,15 +314,23 @@ func scan(args []string, stdout, stderr io.Writer) int {
 		return fail(err)
 	}
 
-	return finish(run, *reportDir, *noSave, filepath.Base(target), threshold, *requireAll, unavailable, stdout, stderr)
+	return finish(run, *reportDir, *noSave, filepath.Base(target), threshold, *requireAll, stdout, stderr)
 }
+
+// badCause is told which checks were skipped with no valid cause; the
+// tests make it fail them, so every skip in every tested path has one.
+var badCause = func([]string) {}
 
 // finish writes the reports, prints the summary, saves the run unless
 // noSave, and returns the exit code.
-func finish(run *report.Run, reportDir string, noSave bool, name string, threshold findings.Severity, requireAll bool, unavailable map[string]runner.Unavailable, stdout, stderr io.Writer) int {
+func finish(run *report.Run, reportDir string, noSave bool, name string, threshold findings.Severity, requireAll bool, stdout, stderr io.Writer) int {
 	fail := func(err error) int {
 		fmt.Fprintf(stderr, "siegekit scan: %v\n", err)
 		return exitInvalid
+	}
+	if bad := run.CheckCauses(); len(bad) > 0 {
+		badCause(bad)
+		fmt.Fprintf(stderr, "siegekit scan: SiegeKit bug: %s skipped with no valid cause; reported as failed\n", strings.Join(bad, ", "))
 	}
 	var st *store.Store
 	dir, dirErr := dataDir()
@@ -393,8 +403,11 @@ func finish(run *report.Run, reportDir string, noSave bool, name string, thresho
 	fmt.Fprintln(stdout, "Automated checks do not cover everything; see \"Not tested by SiegeKit\" in the HTML report.")
 	code := run.ExitCode(threshold)
 	if requireAll && code == report.ExitClean {
+		// Only a missing or declined dependency counts (ADR 0016, ADR 0041):
+		// a check left out by the target mode, the profile, a missing input
+		// or the target's files is not a missing dependency.
 		for _, p := range run.Plugins {
-			if u, ok := unavailable[p.ID]; ok && u.Status == report.Skipped {
+			if p.Status == report.Skipped && p.Cause.MissingDependency() {
 				fmt.Fprintln(stdout, "Incomplete (--require-all): tests were skipped for missing dependencies.")
 				return report.ExitIncomplete
 			}
@@ -462,17 +475,23 @@ func prepare(ctx context.Context, selected []*manifest.Manifest, roots deps.Root
 		deps.Describe(out, all)
 	}
 	var chosen []deps.Dep
-	notChosen := func(d deps.Dep) string { return "you declined " + d.Name() }
+	notChosen := func(d deps.Dep) runner.Unavailable {
+		return runner.Skip(report.CauseDeclined, "you declined "+d.Name())
+	}
 	switch {
 	case len(missing) == 0:
 	case c.yes:
 		chosen = missing
 	case c.none:
 		fmt.Fprintln(out, "Not installing anything (--no-install).")
-		notChosen = func(d deps.Dep) string { return d.Name() + " is not installed (--no-install)" }
+		notChosen = func(d deps.Dep) runner.Unavailable {
+			return runner.Skip(report.CauseMissingDependency, d.Name()+" is not installed (--no-install)")
+		}
 	case !stdinIsTerminal():
 		fmt.Fprintln(out, "Not installing anything: no terminal to ask in. Use --yes to install, or --no-install to silence this.")
-		notChosen = func(d deps.Dep) string { return d.Name() + " is not installed (no terminal to ask; use --yes)" }
+		notChosen = func(d deps.Dep) runner.Unavailable {
+			return runner.Skip(report.CauseMissingDependency, d.Name()+" is not installed (no terminal to ask; use --yes)")
+		}
 	default:
 		chosen = deps.Ask(stdin, out, missing)
 	}

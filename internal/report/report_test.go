@@ -3,6 +3,7 @@ package report
 import (
 	"bytes"
 	"encoding/json"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -153,5 +154,38 @@ func TestHTMLShowsProxyCounts(t *testing.T) {
 	}
 	if strings.Count(out, "Requests answered by the target") != 1 {
 		t.Error("counts shown for a check with no requests")
+	}
+}
+
+// TestCheckCauses checks that a skip with no valid cause is never read as
+// an acceptable skip (ADR 0041).
+func TestCheckCauses(t *testing.T) {
+	r := &Run{Plugins: []PluginResult{
+		{ID: "a", Status: Skipped, Cause: CauseNoFiles, Reason: "no files matching *.go"},
+		{ID: "b", Status: Skipped, Reason: "no cause"},
+		{ID: "c", Status: Skipped, Cause: "no files", Reason: "misspelled cause"},
+		{ID: "d", Status: Ran},
+		{ID: "e", Status: Failed, Reason: "tool error"},
+	}}
+	if bad := r.CheckCauses(); !slices.Equal(bad, []string{"b", "c"}) {
+		t.Fatalf("CheckCauses = %v", bad)
+	}
+	if r.Plugins[0].Status != Skipped || r.Plugins[1].Status != Failed || r.Plugins[2].Status != Failed || r.Plugins[4].Status != Failed {
+		t.Errorf("statuses: %+v", r.Plugins)
+	}
+	if !strings.Contains(r.Plugins[1].Reason, "SiegeKit bug") || r.Complete() {
+		t.Errorf("a skip with no cause must make the run incomplete: %+v", r.Plugins[1])
+	}
+	for _, c := range Causes {
+		if !c.Valid() {
+			t.Errorf("%q not valid", c)
+		}
+	}
+	if !CauseDeclined.MissingDependency() || !CauseMissingDependency.MissingDependency() || CauseNoFiles.MissingDependency() || CauseTargetMode.MissingDependency() || CauseProfile.MissingDependency() {
+		t.Error("MissingDependency must be true for missing-dependency and declined only")
+	}
+	var j bytes.Buffer
+	if err := WriteJSON(&j, r); err != nil || !strings.Contains(j.String(), `"cause": "no-files"`) {
+		t.Errorf("report.json has no cause: %v\n%s", err, j.String())
 	}
 }

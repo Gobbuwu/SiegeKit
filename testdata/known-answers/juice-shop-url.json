@@ -16,7 +16,8 @@
     },
     "backend-live": {
       "status": "skipped",
-      "reason": "no backend URL was given"
+      "reason": "no backend URL was given",
+      "cause": "no-input"
     },
     "ffuf": {
       "status": "ran",
@@ -94,7 +95,8 @@
     },
     "schemathesis": {
       "status": "skipped",
-      "reason": "none was found at /openapi.json"
+      "reason": "none was found at /openapi.json",
+      "cause": "no-input"
     },
     "served-secrets": {
       "status": "ran",

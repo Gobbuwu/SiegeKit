@@ -124,6 +124,8 @@ func ProfileReason(m *manifest.Manifest, profile string) string {
 
 // ProfileSkip says why a check that is destructive or not does not run in
 // profile, or "". SiegeKit's own login throttling check uses it too.
+//
+// Its cause is report.CauseProfile.
 func ProfileSkip(destructive bool, profile string) string {
 	if profile == "quick" && destructive {
 		return "not run with --profile quick, which leaves out attack tests; use --profile full (the default) to run it"
@@ -150,7 +152,26 @@ type Options struct {
 // Unavailable is the reported outcome of a plugin that was not run.
 type Unavailable struct {
 	Status report.Status // report.Skipped or report.Failed
+	Cause  report.Cause  // required when skipped (ADR 0041)
 	Reason string
+}
+
+// Skip is a plugin skipped for cause, explained by reason.
+func Skip(cause report.Cause, reason string) Unavailable {
+	return Unavailable{Status: report.Skipped, Cause: cause, Reason: reason}
+}
+
+// Fail is a plugin that failed before it started; cause may be "".
+func Fail(cause report.Cause, reason string) Unavailable {
+	return Unavailable{Status: report.Failed, Cause: cause, Reason: reason}
+}
+
+// Result is u as the report of plugin m.
+func (u Unavailable) Result(m *manifest.Manifest) report.PluginResult {
+	return report.PluginResult{
+		ID: m.ID, Family: m.Family, Tool: m.Tool.Name, Version: m.Tool.Version,
+		Status: u.Status, Cause: u.Cause, Reason: u.Reason,
+	}
 }
 
 // getuid and getgid are replaced in tests.
@@ -276,10 +297,7 @@ func Run(ctx context.Context, ex Executor, selected []*manifest.Manifest, opt Op
 			}
 		}
 		if u, ok := opt.Unavailable[m.ID]; ok {
-			run.Plugins = append(run.Plugins, report.PluginResult{
-				ID: m.ID, Family: m.Family, Tool: m.Tool.Name, Version: m.Tool.Version,
-				Status: u.Status, Reason: u.Reason,
-			})
+			run.Plugins = append(run.Plugins, u.Result(m))
 			continue
 		}
 		pr, fs := runPlugin(ctx, ex, m, opt, work)
@@ -312,8 +330,12 @@ func runPlugin(ctx context.Context, ex Executor, m *manifest.Manifest, opt Optio
 		pr.Reason = fmt.Sprintf(format, a...)
 		return pr, nil
 	}
+	skip := func(cause report.Cause, format string, a ...any) (report.PluginResult, []findings.Finding) {
+		pr.Cause = cause
+		return fail(report.Skipped, format, a...)
+	}
 	if m.Mode != "passive" {
-		return fail(report.Skipped, "%s plugins are not supported yet", m.Mode)
+		return skip(report.CauseUnsupported, "%s plugins are not supported yet", m.Mode)
 	}
 	if len(m.AppliesTo) > 0 {
 		// A tree too large to search is scanned anyway.
@@ -323,7 +345,7 @@ func runPlugin(ctx context.Context, ex Executor, m *manifest.Manifest, opt Optio
 		case err != nil:
 			return fail(report.Failed, "look for files to scan: %v", err)
 		case !found:
-			return fail(report.Skipped, "no files matching %s", strings.Join(m.AppliesTo, ", "))
+			return skip(report.CauseNoFiles, "no files matching %s", strings.Join(m.AppliesTo, ", "))
 		}
 	}
 	if m.RequiresGit {
@@ -331,12 +353,12 @@ func runPlugin(ctx context.Context, ex Executor, m *manifest.Manifest, opt Optio
 		// only a .git directory counts.
 		st, err := os.Lstat(filepath.Join(opt.TargetDir, ".git"))
 		if err != nil || !st.IsDir() {
-			return fail(report.Skipped, "not a git repository (no .git directory at the top level)")
+			return skip(report.CauseNoFiles, "not a git repository (no .git directory at the top level)")
 		}
 	}
 	image, ok := ImageFor(m)
 	if !ok {
-		return fail(report.Skipped, "no container image for linux/%s", runtime.GOARCH)
+		return skip(report.CausePlatform, "no container image for linux/%s", runtime.GOARCH)
 	}
 	var dataDir, dataMount, warning string
 	if m.Data != nil {

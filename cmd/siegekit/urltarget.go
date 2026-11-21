@@ -455,17 +455,17 @@ func runURL(ctx context.Context, u *target.URL, addrs []netip.Addr, mode target.
 		}
 		switch r := runner.SkipReason(m, o.deployed); {
 		case r != "":
-			unavailable[m.ID] = runner.Unavailable{Status: report.Skipped, Reason: r}
+			unavailable[m.ID] = runner.Skip(runner.SkipCause(m), r)
 		case runner.ProfileReason(m, o.profile) != "":
-			unavailable[m.ID] = runner.Unavailable{Status: report.Skipped, Reason: runner.ProfileReason(m, o.profile)}
+			unavailable[m.ID] = runner.Skip(report.CauseProfile, runner.ProfileReason(m, o.profile))
 		case hostOS != "linux":
-			unavailable[m.ID] = runner.Unavailable{Status: report.Failed, Reason: "active tests run only on Linux for now (ADR 0018)"}
+			unavailable[m.ID] = runner.Fail(report.CausePlatform, "active tests run only on Linux for now (ADR 0018)")
 		default:
 			runnable = append(runnable, m)
 		}
 	}
 	if servedSelected && hostOS != "linux" {
-		unavailable[served.ID] = runner.Unavailable{Status: report.Failed, Reason: "active tests run only on Linux for now (ADR 0018)"}
+		unavailable[served.ID] = runner.Fail(report.CausePlatform, "active tests run only on Linux for now (ADR 0018)")
 	}
 	// Active plugins need no tool data, but some need pinned files. The
 	// served-secrets check needs the Gitleaks image.
@@ -487,40 +487,40 @@ func runURL(ctx context.Context, u *target.URL, addrs []netip.Addr, mode target.
 	if loginSelected {
 		switch {
 		case o.deployed:
-			unavailable[login.ID] = runner.Unavailable{Status: report.Skipped, Reason: "runs only on local targets: deployed targets get only GET and HEAD requests until request limits are measured (M2.10)"}
+			unavailable[login.ID] = runner.Skip(report.CauseTargetMode, "runs only on local targets: deployed targets get only GET and HEAD requests until request limits are measured (M2.10)")
 		case runner.ProfileSkip(true, o.profile) != "":
-			unavailable[login.ID] = runner.Unavailable{Status: report.Skipped, Reason: runner.ProfileSkip(true, o.profile)}
+			unavailable[login.ID] = runner.Skip(report.CauseProfile, runner.ProfileSkip(true, o.profile))
 		case lg == nil:
-			unavailable[login.ID] = runner.Unavailable{Status: report.Skipped, Reason: "no login was given: pass --login-url, --login-user and --login-body to test whether failed logins are limited"}
+			unavailable[login.ID] = runner.Skip(report.CauseNoInput, "no login was given: pass --login-url, --login-user and --login-body to test whether failed logins are limited")
 		case hostOS != "linux":
-			unavailable[login.ID] = runner.Unavailable{Status: report.Failed, Reason: "active tests run only on Linux for now (ADR 0018)"}
+			unavailable[login.ID] = runner.Fail(report.CausePlatform, "active tests run only on Linux for now (ADR 0018)")
 		}
 	}
 	if rateSelected {
 		switch {
 		case o.deployed:
-			unavailable[ratelimit.ID] = runner.Unavailable{Status: report.Skipped, Reason: "runs only on local targets until request limits are measured (M2.10)"}
+			unavailable[ratelimit.ID] = runner.Skip(report.CauseTargetMode, "runs only on local targets until request limits are measured (M2.10)")
 		case runner.ProfileSkip(true, o.profile) != "":
-			unavailable[ratelimit.ID] = runner.Unavailable{Status: report.Skipped, Reason: runner.ProfileSkip(true, o.profile)}
+			unavailable[ratelimit.ID] = runner.Skip(report.CauseProfile, runner.ProfileSkip(true, o.profile))
 		case o.rateEndpoint == nil:
-			unavailable[ratelimit.ID] = runner.Unavailable{Status: report.Skipped, Reason: "no URL was given: pass --rate-limit-url (an expensive URL such as a search) to test whether its requests are limited"}
+			unavailable[ratelimit.ID] = runner.Skip(report.CauseNoInput, "no URL was given: pass --rate-limit-url (an expensive URL such as a search) to test whether its requests are limited")
 		case hostOS != "linux":
-			unavailable[ratelimit.ID] = runner.Unavailable{Status: report.Failed, Reason: "active tests run only on Linux for now (ADR 0018)"}
+			unavailable[ratelimit.ID] = runner.Fail(report.CausePlatform, "active tests run only on Linux for now (ADR 0018)")
 		}
 	}
 	var bp *backendPlan
 	if backendSelected {
 		switch {
 		case o.backend == nil:
-			unavailable[backend.ID] = runner.Unavailable{Status: report.Skipped, Reason: "no backend URL was given: pass --backend-url (the Supabase or Firebase Realtime Database URL the app reads from the browser) to test whether its data can be read with the app's public key"}
+			unavailable[backend.ID] = runner.Skip(report.CauseNoInput, "no backend URL was given: pass --backend-url (the Supabase or Firebase Realtime Database URL the app reads from the browser) to test whether its data can be read with the app's public key")
 		case hostOS != "linux":
-			unavailable[backend.ID] = runner.Unavailable{Status: report.Failed, Reason: "active tests run only on Linux for now (ADR 0018)"}
+			unavailable[backend.ID] = runner.Fail(report.CausePlatform, "active tests run only on Linux for now (ADR 0018)")
 		default:
 			rctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 			p, reason := planBackend(rctx, o.backend, mode)
 			cancel()
 			if reason != "" {
-				unavailable[backend.ID] = runner.Unavailable{Status: report.Failed, Reason: reason}
+				unavailable[backend.ID] = runner.Fail("", reason)
 			}
 			bp = p
 		}
@@ -528,9 +528,9 @@ func runURL(ctx context.Context, u *target.URL, addrs []netip.Addr, mode target.
 	if authzSelected {
 		switch {
 		case o.harRequests == nil:
-			unavailable[authz.ID] = runner.Unavailable{Status: report.Skipped, Reason: "no HAR file was given: pass --har (a browser recording made as test account A) and set " + authz.SessionEnv + " to account B's session headers to test access between accounts"}
+			unavailable[authz.ID] = runner.Skip(report.CauseNoInput, "no HAR file was given: pass --har (a browser recording made as test account A) and set "+authz.SessionEnv+" to account B's session headers to test access between accounts")
 		case hostOS != "linux":
-			unavailable[authz.ID] = runner.Unavailable{Status: report.Failed, Reason: "active tests run only on Linux for now (ADR 0018)"}
+			unavailable[authz.ID] = runner.Fail(report.CausePlatform, "active tests run only on Linux for now (ADR 0018)")
 		}
 	}
 	limits := runner.LocalLimits
@@ -661,7 +661,7 @@ func runURL(ctx context.Context, u *target.URL, addrs []netip.Addr, mode target.
 		}
 		if reason != "" {
 			for _, id := range destructive {
-				unavailable[id] = runner.Unavailable{Status: report.Skipped, Reason: reason}
+				unavailable[id] = runner.Skip(report.CauseNotConfirmed, reason)
 				planned = slices.DeleteFunc(planned, func(p string) bool { return p == id })
 				fmt.Fprintf(stdout, "  %-20s not run - %s\n", id, reason)
 			}
@@ -685,7 +685,7 @@ func runURL(ctx context.Context, u *target.URL, addrs []netip.Addr, mode target.
 			reason = fmt.Sprintf("the backend %s is not on this machine, so a person must type its host name in a terminal; run this command yourself (an AI assistant should ask you to). No flag skips this", o.backend.URL.Host)
 		}
 		if reason != "" {
-			unavailable[backend.ID] = runner.Unavailable{Status: report.Skipped, Reason: reason}
+			unavailable[backend.ID] = runner.Skip(report.CauseNotConfirmed, reason)
 			planned = slices.DeleteFunc(planned, func(p string) bool { return p == backend.ID })
 			fmt.Fprintf(stdout, "  %-20s not run - %s\n", backend.ID, reason)
 		}
@@ -726,7 +726,7 @@ func runURL(ctx context.Context, u *target.URL, addrs []netip.Addr, mode target.
 				fmt.Fprintf(stdout, "OpenAPI spec: %s.\n", reason)
 				for _, m := range selected {
 					if runner.UsesOpenAPI(m) {
-						unavailable[m.ID] = runner.Unavailable{Status: report.Failed, Reason: reason}
+						unavailable[m.ID] = runner.Fail("", reason)
 					}
 				}
 			case needSpec:
@@ -745,7 +745,7 @@ func runURL(ctx context.Context, u *target.URL, addrs []netip.Addr, mode target.
 	if loginSelected {
 		pr := report.PluginResult{ID: login.ID, Family: login.Family, Tool: "siegekit", Version: version}
 		if r, ok := unavailable[login.ID]; ok {
-			pr.Status, pr.Reason = r.Status, r.Reason
+			pr.Status, pr.Cause, pr.Reason = r.Status, r.Cause, r.Reason
 		} else {
 			pr.Input = fmt.Sprintf("POST %s as %q", lg.URL, lg.User)
 			fmt.Fprintf(stdout, "%s: sending %d logins, one per second.\n", login.ID, o.login.attempts)
@@ -769,7 +769,7 @@ func runURL(ctx context.Context, u *target.URL, addrs []netip.Addr, mode target.
 	if rateSelected {
 		pr := report.PluginResult{ID: ratelimit.ID, Family: ratelimit.Family, Tool: "siegekit", Version: version}
 		if r, ok := unavailable[ratelimit.ID]; ok {
-			pr.Status, pr.Reason = r.Status, r.Reason
+			pr.Status, pr.Cause, pr.Reason = r.Status, r.Cause, r.Reason
 		} else {
 			e := o.rateEndpoint
 			pr.Input = e.Method + " " + e.URL
@@ -806,7 +806,7 @@ func runURL(ctx context.Context, u *target.URL, addrs []netip.Addr, mode target.
 	if servedSelected {
 		pr := report.PluginResult{ID: served.ID, Family: served.Family, Tool: gitleaks.Tool.Name, Version: gitleaks.Tool.Version}
 		if r, ok := unavailable[served.ID]; ok {
-			pr.Status, pr.Reason = r.Status, r.Reason
+			pr.Status, pr.Cause, pr.Reason = r.Status, r.Cause, r.Reason
 		} else {
 			fmt.Fprintf(stdout, "%s: scanning the start page and the files it links.\n", served.ID)
 			pr, servedFindings = runServed(ctx, ex, gitleaks, u.String(), col, rootsIn(dir).Files, pr)
@@ -821,7 +821,7 @@ func runURL(ctx context.Context, u *target.URL, addrs []netip.Addr, mode target.
 	if backendSelected {
 		pr := report.PluginResult{ID: backend.ID, Family: backend.Family, Tool: "siegekit", Version: version}
 		if r, ok := unavailable[backend.ID]; ok {
-			pr.Status, pr.Reason = r.Status, r.Reason
+			pr.Status, pr.Cause, pr.Reason = r.Status, r.Cause, r.Reason
 		} else {
 			// Fetches made only for this check count as its requests.
 			extra := 0
@@ -841,7 +841,7 @@ func runURL(ctx context.Context, u *target.URL, addrs []netip.Addr, mode target.
 	if authzSelected {
 		pr := report.PluginResult{ID: authz.ID, Family: authz.Family, Tool: "siegekit", Version: version}
 		if r, ok := unavailable[authz.ID]; ok {
-			pr.Status, pr.Reason = r.Status, r.Reason
+			pr.Status, pr.Cause, pr.Reason = r.Status, r.Cause, r.Reason
 		} else {
 			if spec != nil {
 				base, _ := openapi.BasePath(spec.Data, spec.Format)
@@ -904,7 +904,7 @@ func runURL(ctx context.Context, u *target.URL, addrs []netip.Addr, mode target.
 			run.Findings = []findings.Finding{}
 		}
 	}
-	return finish(run, o.reportDir, o.noSave, u.Host, o.threshold, o.requireAll, unavailable, stdout, stderr)
+	return finish(run, o.reportDir, o.noSave, u.Host, o.threshold, o.requireAll, stdout, stderr)
 }
 
 // servedTool is the plugin that reads the served files (ADR 0032).

@@ -37,7 +37,7 @@ func run(engine string) *report.Run {
 		Plugins: []report.PluginResult{
 			{ID: "gosec", Status: report.Ran, Findings: 2},
 			{ID: "zap-active", Status: report.Ran, Requests: 3443, Findings: 1},
-			{ID: "bandit", Status: report.Skipped, Reason: "no files matching *.py"},
+			{ID: "bandit", Status: report.Skipped, Cause: report.CauseNoFiles, Reason: "no files matching *.py"},
 		},
 		Findings: []findings.Finding{
 			{RuleID: "a", Location: findings.Location{URI: "main.go", StartLine: 3}, Sources: []findings.Source{{Plugin: "gosec", RuleID: "G401"}}},
@@ -53,7 +53,7 @@ func answers() *Answers {
 		Checks: map[string]Check{
 			"gosec":      {Status: "ran", Match: Exact, Findings: []string{"G104 x.go:1", "G401 main.go:3"}, Count: 2},
 			"zap-active": {Status: "ran", Match: Includes, Findings: []string{"10104 /"}, MinRequests: 3000},
-			"bandit":     {Status: "skipped", Reason: "no files matching"},
+			"bandit":     {Status: "skipped", Reason: "no files matching", Cause: "no-files"},
 		},
 		NotMetYet: []Gap{{Check: "zap-active", Finding: "40018 /rest/products/search", Needs: "part 5", Confirmed: "by hand"}},
 	}
@@ -82,6 +82,7 @@ func TestCompareShortfalls(t *testing.T) {
 		"count":     {func(r *report.Run, _ *Answers) { r.Plugins[0].Findings = 1 }, "gosec: 1 findings, known answer is 2"},
 		"failed":    {func(r *report.Run, _ *Answers) { r.Plugins[0].Status, r.Plugins[0].Reason = report.Failed, "exit 137" }, "gosec: failed exit 137, known answer is ran"},
 		"reason":    {func(r *report.Run, _ *Answers) { r.Plugins[2].Reason = "disabled" }, `bandit: reason "disabled", known answer contains "no files matching"`},
+		"cause":     {func(r *report.Run, _ *Answers) { r.Plugins[2].Cause = report.CauseDeclined }, `bandit: cause "declined", known answer is "no-files"`},
 		"no answer": {func(_ *report.Run, a *Answers) { delete(a.Checks, "bandit") }, "bandit: no known answer for this check on test"},
 		"missing":   {func(r *report.Run, _ *Answers) { r.Plugins = r.Plugins[:2] }, "bandit: not in the report"},
 		"met now": {func(r *report.Run, _ *Answers) {
@@ -152,7 +153,10 @@ func TestLoadRejects(t *testing.T) {
 		"bad status":      `{"fixture":"f","measured":"m","checks":{"a":{"status":"failed"}}}`,
 		"no match":        `{"fixture":"f","measured":"m","checks":{"a":{"status":"ran","findings":["x y"]}}}`,
 		"skip no reason":  `{"fixture":"f","measured":"m","checks":{"a":{"status":"skipped"}}}`,
-		"skip findings":   `{"fixture":"f","measured":"m","checks":{"a":{"status":"skipped","reason":"r","match":"exact"}}}`,
+		"skip findings":   `{"fixture":"f","measured":"m","checks":{"a":{"status":"skipped","reason":"r","cause":"no-files","match":"exact"}}}`,
+		"skip no cause":   `{"fixture":"f","measured":"m","checks":{"a":{"status":"skipped","reason":"r"}}}`,
+		"skip bad cause":  `{"fixture":"f","measured":"m","checks":{"a":{"status":"skipped","reason":"r","cause":"no files"}}}`,
+		"ran with cause":  `{"fixture":"f","measured":"m","checks":{"a":{"status":"ran","cause":"no-files"}}}`,
 		"engine no why":   `{"fixture":"f","measured":"m","checks":{"a":{"status":"ran","byEngine":{"docker":{"status":"ran"}}}}}`,
 		"unknown engine":  `{"fixture":"f","measured":"m","checks":{"a":{"status":"ran","why":"w","byEngine":{"lxc":{"status":"ran"}}}}}`,
 		"gap no check":    `{"fixture":"f","measured":"m","checks":{"a":{"status":"ran"}},"notMetYet":[{"check":"b","finding":"x","needs":"n","confirmed":"c"}]}`,

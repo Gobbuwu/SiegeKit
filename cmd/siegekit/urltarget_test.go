@@ -278,6 +278,9 @@ func TestScanURLDeployed(t *testing.T) {
 		want  string
 	}{
 		{"typed", true, "Shop.Example.\n", []string{"https://shop.example/app"}, exitOK, "Target allowed (well-known file + typed confirmation)"},
+		// Checks left out on deployed targets, or for want of a login, are
+		// not missing dependencies (ADR 0041).
+		{"typed --require-all", true, "shop.example\n", []string{"--require-all", "--only", "zap,zap-active,login-throttle,rate-limit,backend-live,access-control", "https://shop.example/app"}, exitOK, "Target allowed"},
 		{"typed wrong", true, "api.shop.example\n", []string{"https://shop.example"}, exitInvalid, "did not match"},
 		{"no terminal", false, "", []string{"https://shop.example"}, exitInvalid, "typed in a terminal"},
 		{"flag refused", true, "shop.example\n", []string{"--authorized-host", "shop.example", "https://shop.example"}, exitInvalid, "not accepted for deployed targets"},

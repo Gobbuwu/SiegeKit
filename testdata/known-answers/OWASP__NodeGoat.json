@@ -7,7 +7,8 @@
     },
     "bandit": {
       "status": "skipped",
-      "reason": "no files matching *.py, *.pyw"
+      "reason": "no files matching *.py, *.pyw",
+      "cause": "no-files"
     },
     "checkov": {
       "status": "ran",
@@ -44,7 +45,8 @@
     },
     "gosec": {
       "status": "skipped",
-      "reason": "no files matching *.go"
+      "reason": "no files matching *.go",
+      "cause": "no-files"
     },
     "trivy": {
       "status": "ran",

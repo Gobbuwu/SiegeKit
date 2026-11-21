@@ -105,7 +105,7 @@ jobs:
           echo "exit code $code"
           # 4 is allowed only when the known answer lists a check as
           # failed: one that did part of its work and says what it left out
-          # (ADR 0040). The Known answers step checks status and reason.
+          # (ADR 0040). The Known answers step checks status, cause and reason.
           if [ "$code" -eq 4 ] && jq -e '[.checks[] | select(.status == "failed")] | length > 0' "$ANSWERS" > /dev/null; then code=0; fi
           if [ "$code" -ne 0 ] && [ "$code" -ne 3 ]; then exit 1; fi
           # The gate's results hold for this engine only (ADR 0038). Fail if
@@ -114,7 +114,7 @@ jobs:
           # Belt and braces: every plugin ran, was skipped because the
           # repository has no files of its language, or failed as its known
           # answer says (ADR 0040).
-          jq -e --slurpfile a "$ANSWERS" '[.plugins[] | select(.status != "ran" and (.status != "skipped" or (.reason | startswith("no files matching") | not)) and (.status != "failed" or $a[0].checks[.id].status != "failed"))] | length == 0' "$RUNNER_TEMP/report/report.json"
+          jq -e --slurpfile a "$ANSWERS" '[.plugins[] | select(.status != "ran" and (.status != "skipped" or .cause != "no-files") and (.status != "failed" or $a[0].checks[.id].status != "failed"))] | length == 0' "$RUNNER_TEMP/report/report.json"
       - name: Known answers
         if: ${{ !cancelled() }}
         # Every check must find what it is known to find on this commit, and
@@ -226,9 +226,9 @@ jobs:
           if [ "$code" -ne 0 ] && [ "$code" -ne 3 ]; then exit 1; fi
           r="$RUNNER_TEMP/report/report.json"
           jq -e --arg e "$EXPECT_ENGINE" '.environment.engine | (.name + (if .rootless then " rootless" else " rootful" end)) == $e' "$r"
-          jq '.plugins[] | {id, status, reason, input, result, requests, refused, refusedTo, findings}' "$r"
+          jq '.plugins[] | {id, status, cause, reason, input, result, requests, refused, refusedTo, findings}' "$r"
           jq -e '[.plugins[] | select(.status == "ran" and .requests > 0) | .id] | sort == ["access-control", "ffuf", "login-throttle", "nuclei", "nuclei-default-login", "nuclei-intrusive", "rate-limit", "served-secrets", "zap", "zap-active"]' "$r"
-          jq -e '[.plugins[] | select(.id == "schemathesis" and .status == "skipped" and (.reason | contains("none was found at /openapi.json")))] | length == 1' "$r"
+          jq -e '[.plugins[] | select(.id == "schemathesis" and .status == "skipped" and .cause == "no-input" and (.reason | contains("none was found at /openapi.json")))] | length == 1' "$r"
           jq -e '[.plugins[] | select(.id == "login-throttle" and .requests == 20)] | length == 1' "$r"
           jq -e '[.plugins[] | select(.id == "served-secrets" and .requests >= 9 and (.result | startswith("scanned ")))] | length == 1' "$r"
           jq -e '[.findings[] | select(.ruleId == "login-not-limited" and .location.uri == "http://127.0.0.1:3000/rest/user/login")] | length == 1' "$r"

@@ -3,7 +3,7 @@
 - Status: Accepted
 - Date: 2026-11-19
 - Amends: [0006](0006-sandbox.md) (images were pulled on first use) and [0014](0014-offline-tool-data.md) (missing data failed the check)
-- Amended by: [0024](0024-pinned-file-downloads.md) (pinned files are a fourth kind of dependency)
+- Amended by: [0024](0024-pinned-file-downloads.md) (pinned files are a fourth kind of dependency), [0041](0041-typed-skip-causes.md) (`--require-all` counts only skips caused by a missing or declined dependency)
 
 ## Context
 
