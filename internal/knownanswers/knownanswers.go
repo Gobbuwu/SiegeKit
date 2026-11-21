@@ -40,7 +40,7 @@ type Answers struct {
 
 // Check is the known answer of one check on one fixture.
 type Check struct {
-	Status      string   `json:"status"`                // "ran" or "skipped"
+	Status      string   `json:"status"`                // "ran", "skipped", or "failed" for a known incomplete run (ADR 0040)
 	Reason      string   `json:"reason,omitempty"`      // text the plugin's reason must contain
 	Match       string   `json:"match,omitempty"`       // Exact or Includes; "" when the check finds nothing to compare
 	Findings    []string `json:"findings,omitempty"`    // keys, see Key
@@ -122,6 +122,13 @@ func (a *Answers) validate() error {
 func (c Check) validate() error {
 	switch c.Status {
 	case string(report.Ran), string(report.Skipped):
+	case string(report.Failed):
+		// A check that did part of its work and says what it left out
+		// (ADR 0040): its findings are still compared, and the reason must
+		// name what was left out.
+		if c.Reason == "" || c.Why == "" {
+			return fmt.Errorf("a failed check needs the reason it gives and a why")
+		}
 	default:
 		return fmt.Errorf("status %q", c.Status)
 	}
@@ -314,15 +321,23 @@ func AnswerFrom(fixture, measured string, r *report.Run, old *Answers) *Answers 
 	}
 	for id, o := range Observe(r) {
 		c := Check{Status: o.Status, Findings: o.Findings}
-		if o.Status == string(report.Skipped) {
+		if o.Status == string(report.Skipped) || o.Status == string(report.Failed) {
 			c.Reason = o.Reason
+		}
+		if o.Status == string(report.Failed) {
+			// To be reviewed: a failed check is only a known answer with
+			// a why (ADR 0040), which Load requires.
+			c.Why = "failed in the measured runs: " + o.Reason
 		}
 		if len(o.Findings) > 0 {
 			c.Match, c.Count = Exact, o.Count
 		}
 		if old != nil {
 			if prev, ok := old.Checks[id]; ok {
-				c.Why, c.ByEngine, c.ByRule, c.Unstable = prev.Why, prev.ByEngine, prev.ByRule, prev.Unstable
+				if prev.Why != "" {
+					c.Why = prev.Why
+				}
+				c.ByEngine, c.ByRule, c.Unstable = prev.ByEngine, prev.ByRule, prev.Unstable
 				if c.ByRule {
 					c.Findings = rules(c.Findings)
 				}

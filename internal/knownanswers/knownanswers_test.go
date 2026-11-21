@@ -160,6 +160,7 @@ func TestLoadRejects(t *testing.T) {
 		"both":            `{"fixture":"f","measured":"m","checks":{"a":{"status":"ran","match":"exact","findings":["x y"],"unstable":["x y"],"why":"w"}}}`,
 		"count unstable":  `{"fixture":"f","measured":"m","checks":{"a":{"status":"ran","match":"exact","findings":["x y"],"count":1,"unstable":["z y"],"why":"w"}}}`,
 		"gap unconfirmed": `{"fixture":"f","measured":"m","checks":{"a":{"status":"ran"}},"notMetYet":[{"check":"a","finding":"x","needs":"n"}]}`,
+		"failed no why":   `{"fixture":"f","measured":"m","checks":{"a":{"status":"failed","reason":"r"}}}`,
 	} {
 		p := filepath.Join(t.TempDir(), "a.json")
 		if err := os.WriteFile(p, []byte(body), 0o600); err != nil {
@@ -215,6 +216,33 @@ func TestFixtureFiles(t *testing.T) {
 	for _, p := range paths {
 		if _, err := Load(p); err != nil {
 			t.Error(err)
+		}
+	}
+}
+
+// TestFailedAnswer: a known incomplete run (ADR 0040) is met only by the
+// same status and reason, and its findings are still compared.
+func TestFailedAnswer(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "a.json")
+	body := `{"fixture":"f","measured":"m","checks":{"gosec":{"status":"failed","reason":"could not load 2 Go packages","why":"modules not in the repository","match":"exact","findings":["G104 a.go:1"]}}}`
+	if err := os.WriteFile(p, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	a, err := Load(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ok := Observed{Status: "failed", Reason: "gosec could not load 2 Go packages, so ...", Findings: []string{"G104 a.go:1"}}
+	if f := compareCheck("gosec", a.Checks["gosec"], ok); len(f) != 0 {
+		t.Errorf("met answer failed: %v", f)
+	}
+	for name, o := range map[string]Observed{
+		"ran":            {Status: "ran", Findings: []string{"G104 a.go:1"}},
+		"other reason":   {Status: "failed", Reason: "could not read the tool's error list", Findings: []string{"G104 a.go:1"}},
+		"missed finding": {Status: "failed", Reason: "could not load 2 Go packages"},
+	} {
+		if f := compareCheck("gosec", a.Checks["gosec"], o); len(f) == 0 {
+			t.Errorf("%s: met", name)
 		}
 	}
 }

@@ -92,6 +92,10 @@ type Spec struct {
 	// TmpMiB is the size of the in-memory /tmp; 0 means 256. Its pages count
 	// against MemoryMiB, so it cannot exceed the memory limit.
 	TmpMiB int
+	// StdoutFile, if set, is a plain file name inside OutDir that receives
+	// the tool's standard output, which is then not mixed into Stderr
+	// (ADR 0040). It counts against OutputLimit.
+	StdoutFile string
 }
 
 // FileMount is a host directory mounted read-only at Mount, which must be
@@ -183,6 +187,9 @@ func (s *Spec) validate() error {
 	}
 	if len(s.Args) == 0 {
 		return errors.New("no arguments")
+	}
+	if s.StdoutFile != "" && !reStdoutFile.MatchString(s.StdoutFile) {
+		return fmt.Errorf("stdout file %q is not a plain file name", s.StdoutFile)
 	}
 	switch s.Network {
 	case "none":
@@ -420,6 +427,20 @@ func (e *Engine) Run(ctx context.Context, s Spec) (*Result, error) {
 	var stderr tailBuffer
 	cmd.Stdout = &stderr // tools that log to stdout are captured with stderr
 	cmd.Stderr = &stderr
+	if s.StdoutFile != "" {
+		// Created by SiegeKit before the tool starts, so the tool cannot
+		// make it a link; written only by this process.
+		f, err := os.OpenFile(filepath.Join(s.OutDir, s.StdoutFile), os.O_WRONLY|os.O_CREATE|os.O_EXCL|syscall.O_NOFOLLOW, 0o600) // #nosec G304 -- a plain file name (checked in validate) in the private output directory
+		if err != nil {
+			return nil, fmt.Errorf("create stdout file: %w", err)
+		}
+		defer f.Close()
+		limit := s.OutputLimit
+		if limit == 0 {
+			limit = DefaultOutputLimit
+		}
+		cmd.Stdout = &cappedWriter{w: f, left: limit + 1}
+	}
 	cmd.Env = minimalEnv()
 	start := time.Now()
 	runErr := cmd.Run()
@@ -667,6 +688,28 @@ func dirSize(root string) (int64, error) {
 }
 
 // tailBuffer keeps the last 64 KiB written to it.
+// cappedWriter writes at most left bytes and drops the rest, so a tool
+// cannot fill the disk through its standard output. Writing one byte more
+// than the output limit is enough for the size check after the run to fail.
+type cappedWriter struct {
+	w    io.Writer
+	left int64
+}
+
+func (c *cappedWriter) Write(p []byte) (int, error) {
+	n := len(p)
+	if int64(len(p)) > c.left {
+		p = p[:c.left]
+	}
+	if len(p) > 0 {
+		if _, err := c.w.Write(p); err != nil {
+			return 0, err
+		}
+		c.left -= int64(len(p))
+	}
+	return n, nil
+}
+
 type tailBuffer struct{ b bytes.Buffer }
 
 const tailMax = 64 << 10
@@ -705,7 +748,9 @@ const (
 
 var (
 	reRelay = regexp.MustCompile(`^siegekit-relay-[0-9a-f]{16}$`)
-	goos    = runtime.GOOS
+	// reStdoutFile is a plain file name, as for a manifest's output.file.
+	reStdoutFile = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$`)
+	goos         = runtime.GOOS
 )
 
 // StartRelay starts the relay container for one active run: no network,

@@ -41,6 +41,9 @@
       "sarif",
       "-out",
       "{outdir}/gosec.sarif",
+      "-stdout",
+      "-verbose",
+      "json",
       "-no-fail",
       "-track-suppressions",
       "{target}/..."
@@ -49,6 +52,10 @@
   "output": {
     "format": "sarif",
     "parser": "sarif",
-    "file": "gosec.sarif"
+    "file": "gosec.sarif",
+    "stdout": {
+      "file": "gosec-stdout.json",
+      "parser": "gosec-errors"
+    }
   }
 }

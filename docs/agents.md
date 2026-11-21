@@ -61,7 +61,7 @@ Every request from the tools goes through SiegeKit's egress proxy, which allows 
 |---|---|
 | 0 | No findings at or above `--fail-on` |
 | 3 | Findings at or above `--fail-on` |
-| 4 | Incomplete: a check failed or timed out (or, with `--require-all`, was skipped for a missing dependency) |
+| 4 | Incomplete: a check failed or timed out, or did only part of its work, such as gosec skipping Go packages whose modules are not in the repository (their findings are kept; the check's `reason` names what was left out). With `--require-all`, also a check skipped for a missing dependency |
 | 1 | Error, or the target was refused |
 | 2 | Usage error |
 
