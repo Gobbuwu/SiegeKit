@@ -111,8 +111,9 @@ func TestAuthzWriteFindsPlantedIssue(t *testing.T) {
 		t.Fatal(ans, err)
 	}
 	w, err := authz.ParseWrites(data, tu)
-	// The second identical create is a duplicate.
-	if err != nil || len(w.Writes) != 3 || w.Duplicate != 1 || w.Writes[1].Create == nil || w.Writes[2].Create == nil {
+	// The second identical create is a duplicate; the recording never
+	// used PATCH, so it is tried on a copy (the test app refuses it).
+	if r, tried := w.Recorded(); err != nil || r != 3 || tried != 1 || w.Duplicate != 1 || w.Writes[1].Create == nil || w.Writes[2].Create == nil || w.Writes[3].Create == nil {
 		t.Fatalf("%+v %v", w, err)
 	}
 	res, err := authz.WriteCheck(context.Background(), cfg, w.Writes, http.Header{"Authorization": {"Bearer token-b"}}, "alice@shop.test", 100, target.Local)

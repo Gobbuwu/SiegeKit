@@ -64,6 +64,26 @@ type Write struct {
 	// has no name), empty for other requests. GraphQL answers a refused
 	// operation with 200 and an "errors" list, so Accepted reads the body.
 	GraphQL string
+	// Tried: not in the recording. SiegeKit tries this method on an object
+	// account A read or made, because the recording did not use it there
+	// (ADR 0049 item 2c).
+	Tried bool
+	// Steps are A's earlier recorded writes that named this write's object
+	// in their body, such as the basket items before a checkout; A sends
+	// them again before each replay (ADR 0049 item 2d).
+	Steps []Step
+	// Parent is a recorded GET of the object a POST with Steps acts on
+	// (the basket of a checkout): A reads it twice before the replay, to
+	// see that it is stable, and once after.
+	Parent       string
+	ParentHeader http.Header
+}
+
+// Step is one of A's earlier recorded writes, sent again as A.
+type Step struct {
+	Method, Path string
+	Header       http.Header
+	Body         []byte
 }
 
 // Label is the write as people read it: method and path, plus the
@@ -98,6 +118,21 @@ type Writes struct {
 	// GraphQLReads counts GraphQL queries and subscriptions sent with
 	// POST: they read, so they are not replayed as writes.
 	GraphQLReads int
+	// TriesOverLimit counts tries left out past MaxTries.
+	TriesOverLimit int
+}
+
+// Recorded and Tried count the writes from the recording and those
+// SiegeKit adds on A's objects.
+func (w *Writes) Recorded() (recorded, tried int) {
+	for _, x := range w.Writes {
+		if x.Tried {
+			tried++
+		} else {
+			recorded++
+		}
+	}
+	return recorded, tried
 }
 
 type harWriteFile struct {
@@ -125,6 +160,12 @@ type harPostBody struct {
 	MimeType string            `json:"mimeType"`
 	Text     *string           `json:"text"`
 	Params   []json.RawMessage `json:"params"`
+}
+
+// pending is a recorded write and its place in the HAR file.
+type pending struct {
+	index int
+	w     Write
 }
 
 // recordedCreate is a recorded POST with the IDs its answer holds.
@@ -155,14 +196,17 @@ func ParseWrites(data []byte, t *target.URL) (*Writes, error) {
 	w := &Writes{}
 	seen := map[string]bool{}
 	var creates []recordedCreate
-	type pending struct {
-		index int
-		w     Write
-	}
 	var kept []pending
+	var reads []recordedRead
 	for i, e := range f.Log.Entries {
 		r := e.Request
 		method := strings.ToUpper(r.Method)
+		if method == http.MethodGet {
+			if rd, ok := objectRead(i, r.URL, r.Headers, e.Response.Status, e.Response.Content.Text, e.Response.Content.Encoding, t); ok {
+				reads = append(reads, rd)
+			}
+			continue
+		}
 		if !writeMethods[method] {
 			continue
 		}
@@ -239,10 +283,14 @@ func ParseWrites(data []byte, t *target.URL) (*Writes, error) {
 		}
 		kept = append(kept, pending{index: i, w: wr})
 	}
-	for _, k := range kept {
+	for j, k := range kept {
 		k.w.Create = findCreate(k.w, k.index, creates)
+		k.w.Steps, k.w.Parent, k.w.ParentHeader = stepsFor(k.w, k.index, kept[:j], reads)
 		w.Writes = append(w.Writes, k.w)
 	}
+	tries, over := triesFor(w.Writes, reads, creates)
+	w.Writes = append(w.Writes, tries...)
+	w.TriesOverLimit = over
 	return w, nil
 }
 
@@ -656,9 +704,15 @@ type WriteReplay struct {
 	// object. RecreateFailed: it was sent and gave no ID, so the write
 	// used A's recorded object.
 	Recreated, RecreateFailed bool
-	// Read: A read the same URL before and after (PUT, PATCH, DELETE).
-	Read                  bool
+	// Read: A read ReadPath before and after: the same URL for a PUT,
+	// PATCH or DELETE, the object's recorded read for a POST with Steps.
+	// Noisy: A's two reads of that object before the POST differed, so a
+	// change after it proves nothing.
+	Read, Noisy           bool
+	ReadPath              string
 	Before, Answer, After Answer
+	// StepsSent counts A's earlier writes sent again before this replay.
+	StepsSent int
 	// NotSent says why this identity was not sent, or "".
 	NotSent string
 	// CleanedUp: A deleted the copy after the replay.
@@ -678,6 +732,7 @@ type WriteResult struct {
 	// names no ID or login, which B may make as its own.
 	PlainCreates []string
 	BTested      bool
+	StepsSent    int // A's earlier writes sent again before replays
 }
 
 // plainCreate: a POST whose path holds no ID and not A's login name, and
@@ -784,11 +839,32 @@ func WriteCheck(ctx context.Context, cfg egress.Config, ws []Write, b http.Heade
 			}
 			readHeader := sw.Header.Clone()
 			readHeader.Del("Content-Type")
-			rp.Read = w.Method != http.MethodPost
+			// A prepares its object again with its earlier writes, as in
+			// the recording (ADR 0049 item 2d).
+			for _, st := range w.Steps {
+				if _, err := do(st.Method, st.Path, st.Header, st.Body); err != nil {
+					return res, err
+				}
+				rp.StepsSent++
+				res.StepsSent++
+			}
+			rp.Read, rp.ReadPath = w.Method != http.MethodPost, sw.Path
+			if w.Method == http.MethodPost && w.Parent != "" {
+				rp.Read, rp.ReadPath = true, w.Parent
+				readHeader = w.ParentHeader.Clone()
+				readHeader.Del("Content-Type")
+			}
 			var err error
 			if rp.Read {
-				if rp.Before, err = do(http.MethodGet, sw.Path, readHeader, nil); err != nil {
+				if rp.Before, err = do(http.MethodGet, rp.ReadPath, readHeader, nil); err != nil {
 					return res, err
+				}
+				if rp.ReadPath != sw.Path {
+					again, err := do(http.MethodGet, rp.ReadPath, readHeader, nil)
+					if err != nil {
+						return res, err
+					}
+					rp.Noisy = again.Status != rp.Before.Status || !bytes.Equal(again.Body, rp.Before.Body)
 				}
 			}
 			h := without(sw.Header, session)
@@ -830,7 +906,7 @@ func WriteCheck(ctx context.Context, cfg egress.Config, ws []Write, b http.Heade
 			}
 			rp.Location = lastHeader.Get("Location")
 			if rp.Read && ok2xx(rp.Before) {
-				if rp.After, err = do(http.MethodGet, sw.Path, readHeader, nil); err != nil {
+				if rp.After, err = do(http.MethodGet, rp.ReadPath, readHeader, nil); err != nil {
 					return res, err
 				}
 			}
@@ -839,7 +915,9 @@ func WriteCheck(ctx context.Context, cfg egress.Config, ws []Write, b http.Heade
 			// (ADR 0049 item 2).
 			if rp.Recreated && strings.HasSuffix(pathOf(sw.Path), "/"+url.PathEscape(copyID)) &&
 				!(w.Method == http.MethodDelete && rp.Accepted()) {
-				ca, err := do(http.MethodDelete, pathOf(sw.Path), readHeader, nil)
+				dh := sw.Header.Clone()
+				dh.Del("Content-Type")
+				ca, err := do(http.MethodDelete, pathOf(sw.Path), dh, nil)
 				if err != nil {
 					return res, err
 				}
@@ -945,7 +1023,7 @@ func (r WriteReplay) Severity() (findings.Severity, bool) {
 	if r.NotSent != "" || !r.Accepted() {
 		return 0, false
 	}
-	if r.Read && ok2xx(r.Before) && r.After.Err == "" && r.After.Status != 0 &&
+	if r.Read && !r.Noisy && ok2xx(r.Before) && r.After.Err == "" && r.After.Status != 0 &&
 		(r.After.Status != r.Before.Status || !bytes.Equal(r.After.Body, r.Before.Body)) {
 		return findings.High, true
 	}
@@ -963,9 +1041,17 @@ func WriteFindings(origin string, res WriteResult) []findings.Finding {
 		}
 		pathOnly, _, _ := strings.Cut(r.Path, "?")
 		f := findings.Finding{Severity: sev, Location: findings.Location{URI: origin + pathOnly}, Family: Family}
-		proof := fmt.Sprintf("Account A's read of the same URL changed (status %d, %d bytes before; status %d, %d bytes after).", r.Before.Status, len(r.Before.Body), r.After.Status, len(r.After.Body))
+		readOf := "the same URL"
+		if pathOf(r.ReadPath) != pathOf(r.Sent) {
+			readOf = pathOf(r.ReadPath) + ", which A's earlier recorded writes prepared and A read twice, the same both times, before the replay"
+		}
+		proof := fmt.Sprintf("Account A's read of %s changed (status %d, %d bytes before; status %d, %d bytes after).", readOf, r.Before.Status, len(r.Before.Body), r.After.Status, len(r.After.Body))
 		if sev != findings.High {
-			proof = "SiegeKit could not see account A's data change (only a PUT, PATCH or DELETE whose URL A can read is checked), and some apps allow this by design, such as a comment on a public item: check it by hand."
+			proof = "SiegeKit could not see account A's data change (only a PUT, PATCH or DELETE whose URL A can read is checked, or a POST on an object A's earlier writes prepared), and some apps allow this by design, such as a comment on a public item: check it by hand."
+		}
+		how := "recorded as account A and sent"
+		if r.Tried {
+			how = "not in the recording but tried by SiegeKit on an object account A read or made, sent"
 		}
 		obj := "account A's recorded object"
 		if r.Recreated {
@@ -977,10 +1063,10 @@ func WriteFindings(origin string, res WriteResult) []findings.Finding {
 				cwe = "CWE-639"
 			}
 			f.RuleID, f.Title, f.CWEs = "cross-account-write", "Another account can change this data", []string{cwe}
-			f.Message = fmt.Sprintf("%s %s, recorded as account A and sent as account B on %s, was accepted (status %d). Account B can likely change or delete account A's data: broken access control (OWASP API1 and API5). %s", r.Method, gqlPath(pathOnly, r.GraphQL), obj, r.Answer.Status, proof)
+			f.Message = fmt.Sprintf("%s %s, %s as account B on %s, was accepted (status %d). Account B can likely change or delete account A's data: broken access control (OWASP API1 and API5). %s", r.Method, gqlPath(pathOnly, r.GraphQL), how, obj, r.Answer.Status, proof)
 		} else {
 			f.RuleID, f.Title, f.CWEs = "no-login-write", "Data can be changed with no login", []string{"CWE-306"}
-			f.Message = fmt.Sprintf("%s %s, recorded as account A and sent with no login on %s, was accepted (status %d). Anyone may be able to change this data: missing authentication (OWASP API2). %s", r.Method, gqlPath(pathOnly, r.GraphQL), obj, r.Answer.Status, proof)
+			f.Message = fmt.Sprintf("%s %s, %s with no login on %s, was accepted (status %d). Anyone may be able to change this data: missing authentication (OWASP API2). %s", r.Method, gqlPath(pathOnly, r.GraphQL), how, obj, r.Answer.Status, proof)
 		}
 		out = append(out, f)
 	}
@@ -1021,7 +1107,12 @@ func (r WriteResult) WriteSummary(w *Writes) string {
 	if !r.BTested {
 		who = "with no login (" + SessionEnv + " not set: account B is not tested)"
 	}
-	s := fmt.Sprintf("replayed %d write(s) from the HAR file %s (%d replay(s)): %d high, %d medium", len(uniqueWrites(r.Replays)), who, sent, high, medium)
+	recorded, tried := uniqueWrites(r.Replays)
+	more := ""
+	if tried > 0 {
+		more = fmt.Sprintf(" and %d not in it (PUT, PATCH or DELETE on objects account A read or made)", tried)
+	}
+	s := fmt.Sprintf("replayed %d write(s) from the HAR file%s %s (%d replay(s)): %d high, %d medium", recorded, more, who, sent, high, medium)
 	if len(accepted) > 0 {
 		s += fmt.Sprintf("; %d accepted and may have changed data: %s", len(accepted), strings.Join(accepted, ", "))
 	} else {
@@ -1035,6 +1126,9 @@ func (r WriteResult) WriteSummary(w *Writes) string {
 		if r.CleanedUp > 0 {
 			s += fmt.Sprintf(", %d of them deleted again by A", r.CleanedUp)
 		}
+	}
+	if r.StepsSent > 0 {
+		s += fmt.Sprintf("; %d of account A's earlier recorded writes sent again first, to prepare the object of a later one", r.StepsSent)
 	}
 	var notes []string
 	if len(recreateFailed) > 0 {
@@ -1053,7 +1147,7 @@ func (r WriteResult) WriteSummary(w *Writes) string {
 		for _, x := range []struct {
 			n    int
 			what string
-		}{{w.NoBody, "with form fields but no body text in the HAR file"}, {w.GraphQLReads, "GraphQL queries or subscriptions (reads)"}, {w.Duplicate, "duplicates"}, {w.OverLimit, fmt.Sprintf("over the %d-write limit", MaxWrites)}} {
+		}{{w.NoBody, "with form fields but no body text in the HAR file"}, {w.GraphQLReads, "GraphQL queries or subscriptions (reads)"}, {w.Duplicate, "duplicates"}, {w.OverLimit, fmt.Sprintf("over the %d-write limit", MaxWrites)}, {w.TriesOverLimit, fmt.Sprintf("tries on A's objects over the %d-try limit", MaxTries)}} {
 			if x.n > 0 {
 				notes = append(notes, fmt.Sprintf("%d %s not replayed", x.n, x.what))
 			}
@@ -1106,12 +1200,21 @@ func appendOnce(list []string, s string) []string {
 	return append(list, s)
 }
 
-func uniqueWrites(rs []WriteReplay) map[string]bool {
+func uniqueWrites(rs []WriteReplay) (recorded, tried int) {
 	m := map[string]bool{}
 	for _, r := range rs {
-		m[r.Method+" "+r.Path+" "+string(r.Body)] = true
+		k := r.Method + " " + r.Path + " " + string(r.Body)
+		if m[k] {
+			continue
+		}
+		m[k] = true
+		if r.Tried {
+			tried++
+		} else {
+			recorded++
+		}
 	}
-	return m
+	return recorded, tried
 }
 
 // csrfValue returns A's recorded CSRF token: a CSRF-named header's value,

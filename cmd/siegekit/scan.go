@@ -123,7 +123,11 @@ Flags:
                     requests as account B and with no login
                     (access-control-write, local targets only). It changes
                     data in the app: use a throwaway database or a
-                    snapshot. A person types "change test data" first
+                    snapshot. A person types "change test data" first.
+                    It also tries PUT, PATCH and DELETE on A's objects.
+                    Record every kind of change the app has (create,
+                    edit and delete each kind of object, send each form,
+                    finish a purchase): what A never did is not tested
   --rate-limit-url URL
                     an expensive URL on the target's origin, such as a
                     search, for the rate-limit check (local targets only);

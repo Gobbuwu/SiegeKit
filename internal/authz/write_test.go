@@ -252,8 +252,13 @@ func TestParseWrites(t *testing.T) {
 		if x.CSRF {
 			s += " csrf"
 		}
+		if x.Tried {
+			s += " tried " + string(x.Body)
+		}
 		got = append(got, s)
 	}
+	// The recording never used PATCH on items, nor PUT or PATCH on cards:
+	// SiegeKit tries them on copies, with A's create body.
 	want := []string{
 		"POST /api/items/",
 		"PUT /api/items/7 <- /api/items/ [data id]=7",
@@ -262,6 +267,9 @@ func TestParseWrites(t *testing.T) {
 		"DELETE /api/cards/7 <- /api/cards/ [data id]=7",
 		"POST /settings csrf",
 		"POST /api/items/",
+		`PATCH /api/items/7 <- /api/items/ [data id]=7 tried {"Product":1,"Qty":1}`,
+		`PUT /api/cards/7 <- /api/cards/ [data id]=7 tried {}`,
+		`PATCH /api/cards/7 <- /api/cards/ [data id]=7 tried {}`,
 	}
 	if !slices.Equal(got, want) {
 		t.Errorf("writes\n%q\nwant\n%q", got, want)
@@ -451,9 +459,10 @@ func TestWriteCheck(t *testing.T) {
 			t.Errorf("form replay %+v", r)
 		}
 	}
-	// Items 8 to 11 and cards 8 and 9; all but the one B deleted are
-	// deleted again by A.
-	if res.Recreated != 6 || res.CleanedUp != 5 {
+	// Items 8 to 11 and cards 8 and 9 for the recorded writes, and 6 more
+	// for the tries (PATCH on items, PUT and PATCH on cards, which the app
+	// refuses); all but the one B deleted are deleted again by A.
+	if res.Recreated != 12 || res.CleanedUp != 11 {
 		t.Errorf("recreated %d, cleaned up %d", res.Recreated, res.CleanedUp)
 	}
 	a := http.Header{"Authorization": {"Bearer A"}}
@@ -467,10 +476,10 @@ func TestWriteCheck(t *testing.T) {
 	}
 	s := res.WriteSummary(w)
 	for _, part := range []string{
-		"replayed 7 write(s) from the HAR file as account B and with no login",
+		"replayed 7 write(s) from the HAR file and 3 not in it (PUT, PATCH or DELETE on objects account A read or made) as account B and with no login",
 		"2 high, 1 medium",
 		"3 accepted and may have changed data: PUT /api/items/8 as account B, DELETE /api/items/10 as account B, POST /orgs/3/settings as account B",
-		"6 object(s) made for account A with POST /api/items/, POST /api/cards/",
+		"12 object(s) made for account A with POST /api/items/, POST /api/cards/, 11 of them deleted again by A",
 		"1 not replayed because they could log in, log out or lock an account out: POST /logout",
 		"1 write(s) were sent with the sender's own CSRF token, taken from a page",
 		"not sent as account B because they make a new object that names no ID or login: POST /api/items/, POST /api/cards/, POST /api/notes",
@@ -712,4 +721,115 @@ func TestWriteCheckGraphQL(t *testing.T) {
 			t.Errorf("summary %s", sum)
 		}
 	}
+}
+
+// TestWriteCheckTriesAndSteps: a DELETE the recording never made is tried
+// on a copy of A's note and found; A's basket items are sent again before
+// B's checkout, and A's read of the basket shows the change (high), unless
+// that read differs on its own (medium).
+func TestWriteCheckTriesAndSteps(t *testing.T) {
+	for _, noisy := range []bool{false, true} {
+		var mu sync.Mutex
+		notes, basket, next, reads := map[int]string{}, []int{}, 7, 0
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			mu.Lock()
+			defer mu.Unlock()
+			u := map[string]string{"Bearer A": "alice", "Bearer B": "bob"}[r.Header.Get("Authorization")]
+			if u == "" {
+				http.Error(w, "log in", http.StatusUnauthorized)
+				return
+			}
+			var id int
+			switch {
+			case r.Method == "POST" && r.URL.Path == "/api/notes/":
+				next++
+				notes[next] = u
+				fmt.Fprintf(w, `{"data":{"id":%d}}`, next)
+			case r.Method == "GET" && sscan(r.URL.Path, "/api/notes/%d", &id):
+				if notes[id] != u {
+					http.NotFound(w, r)
+					return
+				}
+				fmt.Fprintf(w, `{"data":{"id":%d,"text":"x"}}`, id)
+			case r.Method == "DELETE" && sscan(r.URL.Path, "/api/notes/%d", &id): // no owner check
+				if notes[id] == "" {
+					http.NotFound(w, r)
+					return
+				}
+				delete(notes, id)
+			case r.Method == "PUT" || r.Method == "PATCH":
+				http.Error(w, "no", http.StatusMethodNotAllowed)
+			case r.Method == "POST" && r.URL.Path == "/api/basketitems/":
+				if u != "alice" { // basket 5 is alice's
+					http.Error(w, "not your basket", http.StatusForbidden)
+					return
+				}
+				basket = append(basket, 1)
+				fmt.Fprint(w, `{"ok":true}`)
+			case r.Method == "GET" && r.URL.Path == "/rest/basket/5":
+				reads++
+				if noisy {
+					fmt.Fprintf(w, `{"items":%d,"at":%d}`, len(basket), reads)
+					return
+				}
+				fmt.Fprintf(w, `{"items":%d}`, len(basket))
+			case r.Method == "POST" && r.URL.Path == "/rest/basket/5/checkout": // no owner check
+				basket = nil
+				fmt.Fprint(w, `{"ok":true}`)
+			default:
+				http.NotFound(w, r)
+			}
+		}))
+		noSleep(t)
+		a := map[string]string{"Authorization": "Bearer A"}
+		u := srv.URL
+		har := writeHAR(t, []writeEntry{
+			{method: "POST", url: u + "/api/notes/", headers: a, mime: "application/json", body: `{"text":"x"}`, status: 201, answer: `{"data":{"id":7}}`},
+			{method: "GET", url: u + "/api/notes/7", headers: a, status: 200, answer: `{"data":{"id":7,"text":"x"}}`},
+			{method: "POST", url: u + "/api/basketitems/", headers: a, mime: "application/json", body: `{"ProductId":1,"BasketId":"5"}`, status: 200, answer: `{"ok":true}`},
+			{method: "GET", url: u + "/rest/basket/5", headers: a, status: 200, answer: `{"items":1}`},
+			{method: "POST", url: u + "/rest/basket/5/checkout", headers: a, mime: "application/json", body: `{"pay":"card"}`, status: 200, answer: `{"ok":true}`},
+		})
+		tu := mustTarget(t, u+"/")
+		ws, err := ParseWrites(har, tu)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var labels []string
+		for _, x := range ws.Writes {
+			labels = append(labels, fmt.Sprintf("%s %v %d %s", x.Label(), x.Tried, len(x.Steps), x.Parent))
+		}
+		want := []string{"POST /api/notes/ false 0 ", "POST /api/basketitems/ false 0 ", "POST /rest/basket/5/checkout false 1 /rest/basket/5", "PUT /api/notes/7 true 0 ", "PATCH /api/notes/7 true 0 ", "PUT /rest/basket/5 true 0 ", "PATCH /rest/basket/5 true 0 ", "DELETE /api/notes/7 true 0 ", "DELETE /rest/basket/5 true 0 "}
+		if !slices.Equal(labels, want) {
+			t.Fatalf("writes %q\nwant %q", labels, want)
+		}
+		cfg := egress.Config{Target: tu, Addrs: []netip.Addr{netip.MustParseAddr("127.0.0.1")}, Version: "test"}
+		res, err := WriteCheck(context.Background(), cfg, ws.Writes, http.Header{"Authorization": {"Bearer B"}}, "alice", 10, target.Local)
+		srv.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+		var got []string
+		for _, f := range WriteFindings(u, res) {
+			got = append(got, fmt.Sprintf("%s %s %v", f.RuleID, strings.TrimPrefix(f.Location.URI, u), f.Severity))
+		}
+		checkout := "cross-account-write /rest/basket/5/checkout high"
+		if noisy {
+			checkout = "cross-account-write /rest/basket/5/checkout medium"
+		}
+		wantF := []string{checkout, "cross-account-write /api/notes/7 high"}
+		if !slices.Equal(got, wantF) {
+			t.Errorf("noisy %v: findings %q, want %q", noisy, got, wantF)
+		}
+		// Sent once, before B's checkout: B's was accepted on A's recorded
+		// basket, so the checkout is not sent with no login.
+		if res.StepsSent != 1 || !strings.Contains(res.WriteSummary(ws), "1 of account A's earlier recorded writes sent again first") {
+			t.Errorf("steps %d: %s", res.StepsSent, res.WriteSummary(ws))
+		}
+	}
+}
+
+func sscan(s, format string, id *int) bool {
+	n, err := fmt.Sscanf(s, format, id)
+	return err == nil && n == 1
 }

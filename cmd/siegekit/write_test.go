@@ -159,17 +159,17 @@ func TestScanURLWriteReplay(t *testing.T) {
 	code, out := scanIn(true, "test accounts\nchange test data\n", "--har", harFile, "--har-user", "alice", "--replay-writes", "--only", "access-control,access-control-write,zap", "http://localhost:3000/")
 	if code != report.ExitFindings || len(*calls) != 1 ||
 		!strings.Contains(out, "access-control replays requests, and access-control-write replays writes with the sessions of accounts A (the HAR file's session) and B (SIEGEKIT_SESSION_B)") ||
-		!strings.Contains(out, "access-control-write siegekit 0.0.0-dev: replay 2 POST, PUT, PATCH and DELETE request(s) from a.har as account B and with no login") ||
-		!strings.Contains(out, "access-control-write will send these 2 request(s) to http://localhost:3000/:\n  POST /api/items/\n  PUT /api/items/7\n") ||
+		!strings.Contains(out, "access-control-write siegekit 0.0.0-dev: replay 2 POST, PUT, PATCH and DELETE request(s) from a.har, and try 2 PUT, PATCH or DELETE request(s) it did not make on account A's objects, as account B and with no login") ||
+		!strings.Contains(out, "access-control-write will send these 4 request(s) to http://localhost:3000/:\n  POST /api/items/\n  PUT /api/items/7\n  PATCH /api/items/7 (not in the recording)\n  DELETE /api/items/7 (not in the recording)\n") ||
 		!strings.Contains(out, `Type "change test data" to run them: `) || strings.Contains(out, "  POST /logout\n") {
 		t.Fatalf("exit %d, %d calls\n%s", code, len(*calls), out)
 	}
 	c := (*calls)[0]
-	if c.cfg.ReadOnly || c.cfg.VerifyTLS || c.mode != target.Local || c.rate != 100 || c.loginName != "alice" || c.b.Get("Authorization") != "Bearer B" || len(c.ws) != 2 || c.ws[1].Create == nil || c.ws[1].Create.OldID != "7" {
+	if c.cfg.ReadOnly || c.cfg.VerifyTLS || c.mode != target.Local || c.rate != 100 || c.loginName != "alice" || c.b.Get("Authorization") != "Bearer B" || len(c.ws) != 4 || c.ws[1].Create == nil || c.ws[1].Create.OldID != "7" {
 		t.Errorf("call %+v", c)
 	}
 	p := plugin(authz.WriteID)
-	if p.Status != report.Ran || p.Requests != 9 || p.Findings != 1 || p.Input != "a.har, 2 write(s) recorded as account A; account B from SIEGEKIT_SESSION_B" ||
+	if p.Status != report.Ran || p.Requests != 9 || p.Findings != 1 || p.Input != "a.har, 2 write(s) recorded as account A, 2 tried on A's objects; account B from SIEGEKIT_SESSION_B" ||
 		!strings.Contains(p.Result, "1 not replayed because they could log in, log out or lock an account out: POST /logout") || !strings.Contains(p.Result, "PUT /api/items/8 as account B") {
 		t.Errorf("plugin %+v", p)
 	}

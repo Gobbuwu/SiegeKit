@@ -655,8 +655,9 @@ func runURL(ctx context.Context, u *target.URL, addrs []netip.Addr, mode target.
 			if o.sessionB == nil {
 				who = "with no login (" + authz.SessionEnv + " not set: account B is not tested)"
 			}
-			fmt.Fprintf(stdout, "  %-20s siegekit %s: replay %d POST, PUT, PATCH and DELETE request(s) from %s %s, each on a copy of account A's object where the recording shows how A made it; this changes data\n",
-				authz.WriteID, version, len(o.writes.Writes), filepath.Base(o.har), who)
+			recorded, tried := o.writes.Recorded()
+			fmt.Fprintf(stdout, "  %-20s siegekit %s: replay %d POST, PUT, PATCH and DELETE request(s) from %s, and try %d PUT, PATCH or DELETE request(s) it did not make on account A's objects, %s, each on a copy of account A's object where the recording shows how A made it; this changes data\n",
+				authz.WriteID, version, recorded, filepath.Base(o.har), tried, who)
 		}
 	}
 	reach := strings.TrimSuffix(u.String(), u.Path)
@@ -801,9 +802,16 @@ func runURL(ctx context.Context, u *target.URL, addrs []netip.Addr, mode target.
 		case stdinIsTerminal():
 			fmt.Fprintf(stdout, "%s will send these %d request(s) to %s:\n", authz.WriteID, len(o.writes.Writes), u)
 			for _, w := range o.writes.Writes {
-				fmt.Fprintf(stdout, "  %s\n", w.Label())
+				note := ""
+				if w.Tried {
+					note = " (not in the recording)"
+				}
+				if len(w.Steps) > 0 {
+					note += fmt.Sprintf(" (account A first sends %d of its earlier writes again)", len(w.Steps))
+				}
+				fmt.Fprintf(stdout, "  %s%s\n", w.Label(), note)
 			}
-			fmt.Fprintf(stdout, "Each is sent as account B and with no login; where the recording shows how account A made the object, SiegeKit first makes a copy with A's request. This changes data in the app: use a throwaway database or a snapshot. Type %q to run them: ", changeTestData)
+			fmt.Fprintf(stdout, "Each is sent as account B and with no login; where the recording shows how account A made the object, SiegeKit first makes a copy with A's request. Only what the recording did is tested, plus PUT, PATCH and DELETE on A's objects: record every kind of change the app has (create, edit and delete each kind of object, send each form, finish a purchase). This changes data in the app: use a throwaway database or a snapshot. Type %q to run them: ", changeTestData)
 			line, _ := o.in.ReadString('\n')
 			if strings.TrimSpace(line) != changeTestData {
 				reason = fmt.Sprintf("not confirmed: %q was not typed", changeTestData)
@@ -1050,7 +1058,8 @@ func runURL(ctx context.Context, u *target.URL, addrs []netip.Addr, mode target.
 		if r, ok := unavailable[authz.WriteID]; ok {
 			pr.Status, pr.Cause, pr.Reason = r.Status, r.Cause, r.Reason
 		} else {
-			pr.Input = fmt.Sprintf("%s, %d write(s) recorded as account A", filepath.Base(o.har), len(o.writes.Writes))
+			recorded, tried := o.writes.Recorded()
+			pr.Input = fmt.Sprintf("%s, %d write(s) recorded as account A, %d tried on A's objects", filepath.Base(o.har), recorded, tried)
 			if o.sessionB != nil {
 				pr.Input += "; account B from " + authz.SessionEnv
 			}
