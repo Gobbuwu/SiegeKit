@@ -113,7 +113,11 @@
         "G114 _examples/rest/main.go:111",
         "G114 _examples/todos-resource/main.go:29",
         "G404 _examples/limits/main.go:49",
-        "G404 _examples/rest/main.go:470"
+        "G404 _examples/rest/main.go:470",
+        "G705 _examples/pathvalue/main.go:24",
+        "G710 middleware/profiler.go:27",
+        "G710 middleware/profiler.go:30",
+        "G710 middleware/strip.go:62"
       ]
     },
     "trivy": {
