@@ -301,8 +301,8 @@ func parseAnswer(a string, missing []Dep) ([]Dep, bool) {
 // Install downloads the chosen images, files and data. Data needs its
 // plugin's image, so data whose image or files are still missing is not
 // downloaded. It returns the plugins that cannot run, with the reason;
-// notChosen gives the reason for a dependency that was not chosen.
-func Install(ctx context.Context, eng Engine, ex runner.Executor, deps, chosen []Dep, roots Roots, notChosen func(Dep) string, out io.Writer) (map[string]runner.Unavailable, error) {
+// notChosen gives the outcome of a plugin whose dependency was not chosen.
+func Install(ctx context.Context, eng Engine, ex runner.Executor, deps, chosen []Dep, roots Roots, notChosen func(Dep) runner.Unavailable, out io.Writer) (map[string]runner.Unavailable, error) {
 	pick := func(d Dep) bool {
 		return slices.ContainsFunc(chosen, func(c Dep) bool { return c.key() == d.key() })
 	}
@@ -319,7 +319,7 @@ func Install(ctx context.Context, eng Engine, ex runner.Executor, deps, chosen [
 			}
 		case !pick(d):
 			for _, m := range d.users() {
-				un[m.ID] = runner.Unavailable{Status: report.Skipped, Reason: notChosen(d)}
+				un[m.ID] = notChosen(d)
 			}
 		default:
 			fmt.Fprintf(out, "Downloading %s...\n", d.Name())
@@ -328,7 +328,7 @@ func Install(ctx context.Context, eng Engine, ex runner.Executor, deps, chosen [
 					return nil, ctx.Err()
 				}
 				for _, m := range d.users() {
-					un[m.ID] = runner.Unavailable{Status: report.Failed, Reason: fmt.Sprintf("could not install %s: %v", d.Name(), err)}
+					un[m.ID] = runner.Fail(report.CauseMissingDependency, fmt.Sprintf("could not install %s: %v", d.Name(), err))
 				}
 				continue
 			}
@@ -350,7 +350,7 @@ func Install(ctx context.Context, eng Engine, ex runner.Executor, deps, chosen [
 			continue
 		}
 		if !pick(d) {
-			mark(d, runner.Unavailable{Status: report.Skipped, Reason: notChosen(d)})
+			mark(d, notChosen(d))
 			continue
 		}
 		if roots.Files == "" {
@@ -361,7 +361,7 @@ func Install(ctx context.Context, eng Engine, ex runner.Executor, deps, chosen [
 			if ctx.Err() != nil {
 				return nil, ctx.Err()
 			}
-			mark(d, runner.Unavailable{Status: report.Failed, Reason: fmt.Sprintf("could not install %s: %v", d.Name(), err)})
+			mark(d, runner.Fail(report.CauseMissingDependency, fmt.Sprintf("could not install %s: %v", d.Name(), err)))
 		}
 	}
 	var update []*manifest.Manifest
@@ -373,7 +373,7 @@ func Install(ctx context.Context, eng Engine, ex runner.Executor, deps, chosen [
 			continue // its image or a file is missing; already reported
 		}
 		if !pick(d) {
-			un[d.Plugin.ID] = runner.Unavailable{Status: report.Skipped, Reason: notChosen(d)}
+			un[d.Plugin.ID] = notChosen(d)
 			continue
 		}
 		update = append(update, d.Plugin)
@@ -389,7 +389,7 @@ func Install(ctx context.Context, eng Engine, ex runner.Executor, deps, chosen [
 		}
 		for _, r := range results {
 			if r.Err != nil {
-				un[r.ID] = runner.Unavailable{Status: report.Failed, Reason: fmt.Sprintf("could not download data: %v", r.Err)}
+				un[r.ID] = runner.Fail(report.CauseMissingDependency, fmt.Sprintf("could not download data: %v", r.Err))
 			}
 		}
 	}
@@ -401,7 +401,7 @@ func Install(ctx context.Context, eng Engine, ex runner.Executor, deps, chosen [
 func NoEngine(ms []*manifest.Manifest, reason string) map[string]runner.Unavailable {
 	un := map[string]runner.Unavailable{}
 	for _, m := range ms {
-		un[m.ID] = runner.Unavailable{Status: report.Skipped, Reason: reason}
+		un[m.ID] = runner.Skip(report.CauseMissingDependency, reason)
 	}
 	return un
 }

@@ -173,6 +173,10 @@ func TestScanURLRateLimit(t *testing.T) {
 	if code, out := scan(false, "", append(slices.Clone(rateArgs), "--profile", "quick", "--only", "dast", "http://localhost:3000/")...); len(*calls) != 0 || !strings.Contains(out, "rate-limit           not run - not run with --profile quick") {
 		t.Errorf("quick: exit %d\n%s", code, out)
 	}
+	// Left out by the profile is not a missing dependency (ADR 0041).
+	if code, out := scan(false, "", append(slices.Clone(rateArgs), "--require-all", "--profile", "quick", "--only", "dast", "http://localhost:3000/")...); code != exitOK || !strings.Contains(out, "rate-limit           not run - not run with --profile quick") {
+		t.Errorf("quick --require-all: exit %d\n%s", code, out)
+	}
 	if code, out := scan(false, "", append(slices.Clone(rateArgs), "--profile", "quick", "--only", "zap,rate-limit", "http://localhost:3000/")...); code != exitInvalid || !strings.Contains(out, "--only names rate-limit, which --profile quick does not run") {
 		t.Errorf("--only with quick: exit %d\n%s", code, out)
 	}

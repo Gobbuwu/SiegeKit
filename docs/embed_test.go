@@ -33,6 +33,16 @@ func TestAgentsGuideListsEveryField(t *testing.T) {
 	}
 }
 
+// TestAgentsGuideListsEveryCause keeps the guide's list of skip causes
+// complete (ADR 0041).
+func TestAgentsGuideListsEveryCause(t *testing.T) {
+	for _, c := range report.Causes {
+		if !strings.Contains(docs.Agents, "`"+string(c)+"`") {
+			t.Errorf("cause %q is not described in agents.md", c)
+		}
+	}
+}
+
 func TestEmbeddedGuideIsCurrent(t *testing.T) {
 	b, err := os.ReadFile("agents.md")
 	if err != nil || string(b) != docs.Agents {

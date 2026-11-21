@@ -89,10 +89,7 @@ func RunURL(ctx context.Context, run ActiveRunner, selected []*manifest.Manifest
 			return nil, err
 		}
 		if u, ok := opt.Unavailable[m.ID]; ok {
-			out.Plugins = append(out.Plugins, report.PluginResult{
-				ID: m.ID, Family: m.Family, Tool: m.Tool.Name, Version: m.Tool.Version,
-				Status: u.Status, Reason: u.Reason,
-			})
+			out.Plugins = append(out.Plugins, u.Result(m))
 			continue
 		}
 		pr, fs := runActive(ctx, run, m, opt, work)
@@ -123,6 +120,14 @@ func SkipReason(m *manifest.Manifest, deployed bool) string {
 	return ""
 }
 
+// SkipCause is the cause of a non-empty SkipReason.
+func SkipCause(m *manifest.Manifest) report.Cause {
+	if m.Mode != "active" || m.Network != "target-only" {
+		return report.CauseUnsupported
+	}
+	return report.CauseTargetMode
+}
+
 func runActive(ctx context.Context, run ActiveRunner, m *manifest.Manifest, opt URLOptions, work string) (report.PluginResult, []findings.Finding) {
 	pr := report.PluginResult{ID: m.ID, Family: m.Family, Tool: m.Tool.Name, Version: m.Tool.Version}
 	fail := func(status report.Status, format string, a ...any) (report.PluginResult, []findings.Finding) {
@@ -130,12 +135,16 @@ func runActive(ctx context.Context, run ActiveRunner, m *manifest.Manifest, opt 
 		pr.Reason = fmt.Sprintf(format, a...)
 		return pr, nil
 	}
+	skip := func(cause report.Cause, format string, a ...any) (report.PluginResult, []findings.Finding) {
+		pr.Cause = cause
+		return fail(report.Skipped, format, a...)
+	}
 	if r := SkipReason(m, opt.Deployed); r != "" {
-		return fail(report.Skipped, "%s", r)
+		return skip(SkipCause(m), "%s", r)
 	}
 	image, ok := ImageFor(m)
 	if !ok {
-		return fail(report.Skipped, "no container image for linux/%s", runtime.GOARCH)
+		return skip(report.CausePlatform, "no container image for linux/%s", runtime.GOARCH)
 	}
 	fileMounts, err := FileMounts(m, opt.FilesRoot)
 	if err != nil {
@@ -160,7 +169,7 @@ func runActive(ctx context.Context, run ActiveRunner, m *manifest.Manifest, opt 
 			if reason == "" {
 				reason = "no OpenAPI spec was given"
 			}
-			return fail(report.Skipped, "%s", reason)
+			return skip(report.CauseNoInput, "%s", reason)
 		}
 		dir, name, err := writeSpec(work, m.ID, opt.OpenAPI)
 		if err != nil {

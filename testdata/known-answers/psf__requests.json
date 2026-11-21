@@ -760,7 +760,8 @@
     },
     "gosec": {
       "status": "skipped",
-      "reason": "no files matching *.go"
+      "reason": "no files matching *.go",
+      "cause": "no-files"
     },
     "trivy": {
       "status": "ran"

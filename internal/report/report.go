@@ -27,15 +27,70 @@ const (
 	TimedOut Status = "timed-out"
 )
 
+// Cause says, as a fixed word, why a check did not run (ADR 0041). Code,
+// CI and AI agents decide on the cause; Reason is the explanation for
+// people and can be reworded.
+type Cause string
+
+// Causes of a check that did not run. Every skipped check has one; a check
+// that failed before it started can have one too.
+const (
+	// The container engine, an image, a file or data is not installed, or
+	// could not be installed.
+	CauseMissingDependency Cause = "missing-dependency"
+	// The person said no to installing a dependency.
+	CauseDeclined Cause = "declined"
+	// The target has nothing the check reads: no files of its kind, or no
+	// git history.
+	CauseNoFiles Cause = "no-files"
+	// The check does not run in this target mode: local-only checks on
+	// deployed targets, or checks that can change data.
+	CauseTargetMode Cause = "deployed-or-local-only"
+	// The chosen --profile leaves the check out.
+	CauseProfile Cause = "profile"
+	// The check needs an input that was not given or not found: a login,
+	// a URL, a HAR file, a backend URL, an OpenAPI spec.
+	CauseNoInput Cause = "no-input"
+	// The check needs a person's confirmation, which was not given.
+	CauseNotConfirmed Cause = "not-confirmed"
+	// The check does not run on this operating system or architecture.
+	CausePlatform Cause = "platform"
+	// The plugin's kind does not fit this kind of target (a passive plugin
+	// on a URL); a bug in how plugins were selected.
+	CauseUnsupported Cause = "unsupported"
+)
+
+// Causes lists every cause, in the order documented in docs/agents.md.
+var Causes = []Cause{CauseMissingDependency, CauseDeclined, CauseNoFiles, CauseTargetMode, CauseProfile, CauseNoInput, CauseNotConfirmed, CausePlatform, CauseUnsupported}
+
+// Valid reports whether c is one of Causes.
+func (c Cause) Valid() bool {
+	for _, k := range Causes {
+		if c == k {
+			return true
+		}
+	}
+	return false
+}
+
+// MissingDependency reports whether c means a dependency is missing or was
+// declined: the skips --require-all counts (ADR 0016, ADR 0041).
+func (c Cause) MissingDependency() bool {
+	return c == CauseMissingDependency || c == CauseDeclined
+}
+
 // PluginResult is the coverage record for one plugin (ADR 0009 item 2).
 type PluginResult struct {
-	ID       string `json:"id"`
-	Family   string `json:"family"`
-	Tool     string `json:"tool"`
-	Version  string `json:"version"`
-	Status   Status `json:"status"`
-	Reason   string `json:"reason,omitempty"`
-	Findings int    `json:"findings"`
+	ID      string `json:"id"`
+	Family  string `json:"family"`
+	Tool    string `json:"tool"`
+	Version string `json:"version"`
+	Status  Status `json:"status"`
+	Reason  string `json:"reason,omitempty"`
+	// Cause is set on every skipped check, and on a check that failed
+	// before it started when the cause is known (ADR 0041).
+	Cause    Cause `json:"cause,omitempty"`
+	Findings int   `json:"findings"`
 	// What the scanned repository told the tool to ignore (owner decision,
 	// 2026-11-19: obey it, but show it). Suppressed counts findings the tool
 	// reported as suppressed by comments in the code; RepoSettings lists the
@@ -186,6 +241,21 @@ func (r *Run) Complete() bool {
 		}
 	}
 	return true
+}
+
+// CheckCauses makes every skipped check without a valid cause failed, so a
+// missing cause is never read as an acceptable skip (ADR 0041). It returns
+// the IDs it changed; any is a bug in SiegeKit.
+func (r *Run) CheckCauses() []string {
+	var bad []string
+	for i, p := range r.Plugins {
+		if p.Status == Skipped && !p.Cause.Valid() {
+			r.Plugins[i].Status = Failed
+			r.Plugins[i].Reason = fmt.Sprintf("SiegeKit bug: skipped with no valid cause (%q): %s", p.Cause, p.Reason)
+			bad = append(bad, p.ID)
+		}
+	}
+	return bad
 }
 
 // RanCount returns how many plugins ran to completion.

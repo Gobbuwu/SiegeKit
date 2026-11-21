@@ -42,6 +42,7 @@ type Answers struct {
 type Check struct {
 	Status      string   `json:"status"`                // "ran", "skipped", or "failed" for a known incomplete run (ADR 0040)
 	Reason      string   `json:"reason,omitempty"`      // text the plugin's reason must contain
+	Cause       string   `json:"cause,omitempty"`       // a skipped check's cause, compared exactly (ADR 0041)
 	Match       string   `json:"match,omitempty"`       // Exact or Includes; "" when the check finds nothing to compare
 	Findings    []string `json:"findings,omitempty"`    // keys, see Key
 	Count       int      `json:"count,omitempty"`       // Exact: the plugin's own finding count (two findings can share a key)
@@ -152,8 +153,11 @@ func (c Check) validate() error {
 			return fmt.Errorf("%q is both required and unstable", k)
 		}
 	}
-	if c.Status == string(report.Skipped) && (c.Match != "" || c.MinRequests > 0 || c.Reason == "") {
-		return fmt.Errorf("a skipped check has a reason and no findings or requests")
+	if c.Status == string(report.Skipped) && (c.Match != "" || c.MinRequests > 0 || c.Reason == "" || !report.Cause(c.Cause).Valid()) {
+		return fmt.Errorf("a skipped check has a reason, a valid cause and no findings or requests")
+	}
+	if c.Status != string(report.Skipped) && c.Cause != "" {
+		return fmt.Errorf("only a skipped check has a cause in its answer")
 	}
 	return nil
 }
@@ -179,6 +183,7 @@ func Key(rule, uri string, line int) string {
 type Observed struct {
 	Status   string
 	Reason   string
+	Cause    string
 	Requests int
 	Count    int      // the plugin's own finding count
 	Findings []string // sorted, unique keys
@@ -197,7 +202,7 @@ func Observe(r *report.Run) map[string]Observed {
 	}
 	out := map[string]Observed{}
 	for _, p := range r.Plugins {
-		o := Observed{Status: string(p.Status), Reason: p.Reason, Requests: p.Requests, Count: p.Findings}
+		o := Observed{Status: string(p.Status), Reason: p.Reason, Cause: string(p.Cause), Requests: p.Requests, Count: p.Findings}
 		for k := range keys[p.ID] {
 			o.Findings = append(o.Findings, k)
 		}
@@ -266,6 +271,9 @@ func compareCheck(id string, want Check, got Observed) []string {
 	}
 	if !strings.Contains(got.Reason, want.Reason) {
 		fails = append(fails, fmt.Sprintf("%s: reason %q, known answer contains %q", id, got.Reason, want.Reason))
+	}
+	if want.Status == string(report.Skipped) && got.Cause != want.Cause {
+		fails = append(fails, fmt.Sprintf("%s: cause %q, known answer is %q", id, got.Cause, want.Cause))
 	}
 	if got.Requests < want.MinRequests {
 		fails = append(fails, fmt.Sprintf("%s: sent %d requests, a complete run sends at least %d", id, got.Requests, want.MinRequests))
@@ -355,7 +363,7 @@ func AnswerFrom(fixture, measured string, r *report.Run, old *Answers) *Answers 
 			}
 		}
 		if c.Status == string(report.Skipped) {
-			c.Match, c.Findings, c.MinRequests = "", nil, 0
+			c.Match, c.Findings, c.MinRequests, c.Cause = "", nil, 0, o.Cause
 		}
 		a.Checks[id] = c
 	}

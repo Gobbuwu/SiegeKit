@@ -78,8 +78,8 @@ func TestPlanAndInstall(t *testing.T) {
 	}
 	// Data was chosen but its image was not: nothing is downloaded and the
 	// reason names the image.
-	un, err := Install(context.Background(), e, noRun{t}, ds, ds[1:], Roots{Data: root}, func(d Dep) string { return "declined " + d.Name() }, &out)
-	if err != nil || un["trivy"].Status != report.Skipped || un["trivy"].Reason != "declined trivy 0.76.2 container image" || e.pulled != 0 {
+	un, err := Install(context.Background(), e, noRun{t}, ds, ds[1:], Roots{Data: root}, func(d Dep) runner.Unavailable { return runner.Skip(report.CauseDeclined, "declined "+d.Name()) }, &out)
+	if err != nil || un["trivy"].Status != report.Skipped || un["trivy"].Reason != "declined trivy 0.76.2 container image" || un["trivy"].Cause != report.CauseDeclined || e.pulled != 0 {
 		t.Errorf("install %+v %v pulled %d", un, err, e.pulled)
 	}
 	// Data counts as installed only with its stamp.
@@ -231,11 +231,11 @@ func TestInstallPullsAndUpdates(t *testing.T) {
 		t.Fatalf("plan %+v %v", ds, err)
 	}
 	var out bytes.Buffer
-	never := func(Dep) string { t.Error("everything was chosen"); return "" }
+	never := func(Dep) runner.Unavailable { t.Error("everything was chosen"); return runner.Unavailable{} }
 
 	// Everything chosen, data update fails: trivy fails, gitleaks is fine.
 	un, err := Install(context.Background(), e, dataRun{ok: false}, ds, ds, Roots{Data: root}, never, &out)
-	if err != nil || e.pulled != 2 || len(un) != 1 || un["trivy"].Status != report.Failed || !strings.Contains(un["trivy"].Reason, "could not download data") {
+	if err != nil || e.pulled != 2 || len(un) != 1 || un["trivy"].Status != report.Failed || un["trivy"].Cause != report.CauseMissingDependency || !strings.Contains(un["trivy"].Reason, "could not download data") {
 		t.Fatalf("install %+v %v pulled %d", un, err, e.pulled)
 	}
 	if !strings.Contains(out.String(), "Downloading trivy 0.76.2 container image...") || !strings.Contains(out.String(), "Downloading tool data") {
@@ -267,7 +267,7 @@ func TestInstallPullFailure(t *testing.T) {
 		t.Fatal(err)
 	}
 	var out bytes.Buffer
-	un, err := Install(context.Background(), e, noRun{t}, ds, ds, Roots{Data: t.TempDir()}, func(Dep) string { return "" }, &out)
+	un, err := Install(context.Background(), e, noRun{t}, ds, ds, Roots{Data: t.TempDir()}, func(Dep) runner.Unavailable { return runner.Unavailable{} }, &out)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -284,7 +284,7 @@ func TestInstallPullFailure(t *testing.T) {
 	// A cancelled run returns the context error, not a per-plugin failure.
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if _, err := Install(ctx, e, noRun{t}, ds, ds, Roots{Data: t.TempDir()}, func(Dep) string { return "" }, &out); !errors.Is(err, context.Canceled) {
+	if _, err := Install(ctx, e, noRun{t}, ds, ds, Roots{Data: t.TempDir()}, func(Dep) runner.Unavailable { return runner.Unavailable{} }, &out); !errors.Is(err, context.Canceled) {
 		t.Errorf("cancelled: %v", err)
 	}
 }
@@ -292,7 +292,7 @@ func TestInstallPullFailure(t *testing.T) {
 func TestNoEngine(t *testing.T) {
 	ms := builtins(t, "trivy", "gitleaks")
 	un := NoEngine(ms, "no engine")
-	if len(un) != 2 || un["trivy"].Status != report.Skipped || un["gitleaks"].Reason != "no engine" {
+	if len(un) != 2 || un["trivy"].Status != report.Skipped || un["gitleaks"].Reason != "no engine" || un["gitleaks"].Cause != report.CauseMissingDependency {
 		t.Errorf("%+v", un)
 	}
 }
@@ -348,7 +348,7 @@ func TestFiles(t *testing.T) {
 		}
 		return nil
 	}
-	un, err := Install(context.Background(), e, noRun{t}, ds, missing[1:], Roots{Files: root}, func(d Dep) string { return "declined " + d.Name() }, &out)
+	un, err := Install(context.Background(), e, noRun{t}, ds, missing[1:], Roots{Files: root}, func(d Dep) runner.Unavailable { return runner.Skip(report.CauseDeclined, "declined "+d.Name()) }, &out)
 	if err != nil || len(fetched) != 1 || fetched[0] != "tool" {
 		t.Fatalf("install %v fetched %v", err, fetched)
 	}

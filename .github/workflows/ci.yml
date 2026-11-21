@@ -75,7 +75,7 @@ jobs:
           jq '.findings[] | {ruleId, severity, uri: .location.uri, line: .location.startLine}' "$RUNNER_TEMP/self-report/report.json"
           if [ "$code" -ne 0 ]; then exit 1; fi
           jq -e --arg e "$SIEGEKIT_ENGINE" '.environment.engine.name == $e' "$RUNNER_TEMP/self-report/report.json"
-          jq -e '[.plugins[] | select(.status != "ran" and (.status != "skipped" or (.reason | startswith("no files matching") | not)))] | length == 0' "$RUNNER_TEMP/self-report/report.json"
+          jq -e '[.plugins[] | select(.status != "ran" and (.status != "skipped" or .cause != "no-files"))] | length == 0' "$RUNNER_TEMP/self-report/report.json"
       - name: Fuzz parsers
         if: matrix.engine == 'podman'
         run: |

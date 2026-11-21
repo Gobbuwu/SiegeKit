@@ -33,7 +33,7 @@ Useful scan flags:
 - `--no-save`: do not keep a copy of the run.
 - `--no-install`: install nothing.
 - `--yes`: install missing dependencies without asking, only after the person agrees.
-- `--require-all`: treat checks skipped for a missing dependency as an incomplete run.
+- `--require-all`: treat checks skipped for a missing or declined dependency (`cause` `missing-dependency` or `declined`) as an incomplete run. Checks left out by the mode, the profile, a missing input or the target's files do not count.
 - `--login-url URL`, `--login-user NAME`, `--login-body TEMPLATE`: a login for the login throttling check, all three together. Use only a test account the person gave you for this; the check can lock it.
 - `--login-attempts N`: how many wrong-password logins it sends, from 2 to 50 (default 20).
 
@@ -74,10 +74,21 @@ Each scan writes `report.json`, `report.sarif` (SARIF 2.1.0) and `report.html` t
 Top level:
 - `schemaVersion`, `siegekitVersion`, `target`, `mode`, `started`, `finished`.
 - `environment`: where the run happened: `os`, `arch`, and `engine` (`name` docker or podman, `version`, `rootless`, `cgroup` v1 or v2), absent when no engine answered. Results from one engine or cgroup version do not carry over to another (ADR 0038); say which one a result came from when you report it. `SIEGEKIT_ENGINE=docker` or `podman` picks the engine when both are installed (Podman otherwise); never change it to make a check pass.
-- `plugins`: one entry per check, with `id`, `family`, `tool`, `version`, `status` (`ran`, `skipped`, `failed` or `timed-out`), `reason` (why it was skipped or failed) and `findings` (a count). When the scanned repository told the tool to ignore something, three more fields say so, and are left out when there is nothing to report:
+- `plugins`: one entry per check, with `id`, `family`, `tool`, `version`, `status` (`ran`, `skipped`, `failed` or `timed-out`), `reason` (why it was skipped or failed, for people; its wording can change), `cause` and `findings` (a count). When the scanned repository told the tool to ignore something, three more fields say so, and are left out when there is nothing to report:
   - `suppressed`: how many findings the tool left out because of comments in the code, such as `# nosec` or `checkov:skip=`, where the tool reports this.
   - `repoSettings`: the repository's own settings files that the tool obeyed, such as `.gitleaksignore`, `.gitleaks.toml`, `.bandit` or `.checkov.yaml`. They can hide findings without a count.
   - `ignoreMarkers`: how many lines carry the tool's ignore comment (`gitleaks:allow`), counted by SiegeKit outside dependency directories, for tools that do not report what they suppressed.
+  - `cause`: why a check did not run, as a fixed word to decide on instead of the wording of `reason` (ADR 0041). Every `skipped` check has one, and a `failed` check that never started can have one:
+    - `missing-dependency`: the container engine, an image, a file or data is not installed (`--no-install`, or no terminal to ask in), or could not be installed. Ask the person whether to install it.
+    - `declined`: the person said no to installing it.
+    - `no-files`: the target has nothing the check reads, such as gosec on a repository without Go code, or no git history for `gitleaks-history`. Nothing to do.
+    - `deployed-or-local-only`: the check does not run in this mode, such as `zap-active` on a `--deployed` target.
+    - `profile`: `--profile quick` leaves it out.
+    - `no-input`: it needs something that was not given or not found: a login, a URL, a HAR file, a backend URL or an OpenAPI spec. `reason` names the flag.
+    - `not-confirmed`: it needs a person's confirmation, which was not given. Never confirm it yourself; ask the person to run the command in their terminal.
+    - `platform`: it does not run on this operating system or architecture.
+    - `unsupported`: the check's kind does not fit this target; a SiegeKit bug, please report it.
+  `--require-all` counts only `missing-dependency` and `declined`. A skipped check with no valid cause is reported as `failed` (a SiegeKit bug).
 
   URL scans add these, also left out when zero or empty:
   - `requests`: how many requests the target answered through the egress proxy. A check with none is reported as `failed`, because it tested nothing.
