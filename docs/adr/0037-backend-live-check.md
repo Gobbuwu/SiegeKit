@@ -3,6 +3,7 @@
 - Status: Accepted
 - Date: 2026-11-20
 - Amends: [0011](0011-app-logic-and-ai-checks.md) item 3 (live part: which targets, how the backend is confirmed, what is read)
+- Amended by: [0044](0044-typed-confirmations-limit.md) (what the typed confirmation can stop)
 
 ## Context
 
@@ -21,7 +22,7 @@ The backend is a different host from the target. Its owner may not be the person
    At most 200 names are read. The result counts any names left out. `--source` is read locally, and nothing in it is sent.
 3. **The backend must be the app's, and a person confirms it** (owner answer 2a).
    - A backend that is not on this machine must appear in the scripts the app serves; otherwise the check fails before any request to it.
-   - A person must also type its host name in a terminal. No flag skips this, not `--yes` and not `--authorized-host`, so an AI assistant cannot confirm it for the person (as for deployed targets, [agents.md](../agents.md)).
+   - A person must also type its host name in a terminal. No flag skips this, not `--yes` and not `--authorized-host`, so an AI assistant that follows the guide cannot confirm it for the person (as for deployed targets, [agents.md](../agents.md)). A program that gives SiegeKit a pseudo-terminal and types the answer can (ADR 0044).
    - A backend on this machine (loopback) follows the local target rules and needs no prompt.
    - A blocked address (cloud metadata, for example) is refused. A backend whose addresses mix public and private is refused. A private backend on a deployed run is refused.
    - The backend gets its own audit entry, with "typed backend host" or "loopback".

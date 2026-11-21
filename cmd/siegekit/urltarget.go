@@ -687,6 +687,32 @@ func runURL(ctx context.Context, u *target.URL, addrs []netip.Addr, mode target.
 			fmt.Fprintf(stdout, "  %-20s not run - %s\n", backend.ID, reason)
 		}
 	}
+	// The access-control check replays account A's session and uses account
+	// B's, so a person types that they are test accounts (owner Q5,
+	// 2026-11-21, ADR 0035). No flag or environment variable skips this: an
+	// AI assistant cannot confirm it for the person.
+	if slices.Contains(planned, authz.ID) {
+		accounts := "account A (the HAR file's session)"
+		if o.sessionB != nil {
+			accounts = "accounts A (the HAR file's session) and B (" + authz.SessionEnv + ")"
+		}
+		reason := ""
+		switch {
+		case stdinIsTerminal():
+			fmt.Fprintf(stdout, "%s replays requests with the sessions of %s. Type %q to confirm they are test accounts you own, not a real person's: ", authz.ID, accounts, testAccounts)
+			line, _ := o.in.ReadString('\n')
+			if strings.TrimSpace(line) != testAccounts {
+				reason = fmt.Sprintf("not confirmed: %q was not typed", testAccounts)
+			}
+		default:
+			reason = "it replays account sessions, so a person must type in a terminal that they are test accounts; run this command yourself (an AI assistant should ask you to). No flag skips this"
+		}
+		if reason != "" {
+			unavailable[authz.ID] = runner.Skip(report.CauseNotConfirmed, reason)
+			planned = slices.DeleteFunc(planned, func(p string) bool { return p == authz.ID })
+			fmt.Fprintf(stdout, "  %-20s not run - %s\n", authz.ID, reason)
+		}
+	}
 	if len(planned) > 0 {
 		if err := audit.Append(filepath.Join(dir, "audit.log"), audit.Entry{
 			Time: time.Now().UTC(), Version: version, Target: u.String(), Addresses: addrStrings(addrs),
@@ -931,6 +957,10 @@ func runServed(ctx context.Context, ex runner.Executor, gl *manifest.Manifest, s
 	pr.Findings = len(fs)
 	return pr, fs
 }
+
+// testAccounts is what a person types to confirm that the access-control
+// check's accounts are test accounts.
+const testAccounts = "test accounts"
 
 // authzCheck replays the HAR's requests; tests replace it.
 var authzCheck = authz.Check
