@@ -531,7 +531,7 @@ func runURL(ctx context.Context, u *target.URL, addrs []netip.Addr, mode target.
 		case o.harRequests == nil:
 			unavailable[authz.ID] = runner.Skip(report.CauseNoInput, "no HAR file was given: pass --har (a browser recording made as test account A) and set "+authz.SessionEnv+" to account B's session headers to test access between accounts")
 		case len(o.harRequests.Requests) == 0:
-			unavailable[authz.ID] = runner.Skip(report.CauseNoInput, fmt.Sprintf("%s has no GET or HEAD request to replay; its %d other request(s) go to zap-active (ADR 0047)", filepath.Base(o.har), len(o.harRequests.Recorded)))
+			unavailable[authz.ID] = runner.Skip(report.CauseNoInput, fmt.Sprintf("%s has no GET or HEAD request to replay (%d naming an action left out, ADR 0048); its %d request(s) go to zap-active (ADR 0047)", filepath.Base(o.har), o.harRequests.Action, len(o.harRequests.Recorded)))
 		case hostOS != "linux":
 			unavailable[authz.ID] = runner.Fail(report.CausePlatform, "active tests run only on Linux for now (ADR 0018)")
 		}
@@ -628,7 +628,7 @@ func runURL(ctx context.Context, u *target.URL, addrs []netip.Addr, mode target.
 	fmt.Fprintf(stdout, "Limits: at most %.0f requests per second, stop after %d server errors in a row; only %s is reachable, and every request is labeled \"SiegeKit/%s\".\n",
 		limits.Rate, limits.MaxServerErrors, reach, version)
 	if mode == "deployed" {
-		fmt.Fprintln(stdout, "Only GET and HEAD requests are allowed: no check may change data on a deployed target.")
+		fmt.Fprintln(stdout, "Only GET and HEAD requests are allowed. Some apps change data on a GET, so prefer a staging copy (ADR 0048).")
 	}
 	// ADR 0005: destructive checks run only after a person confirmed the
 	// run. Private and deployed targets were confirmed above; a loopback

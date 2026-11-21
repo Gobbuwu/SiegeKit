@@ -294,7 +294,7 @@ func TestScanURLRecordedRequests(t *testing.T) {
 		for _, p := range r.Plugins {
 			switch p.ID {
 			case authz.ID:
-				if p.Status != report.Skipped || p.Cause != report.CauseNoInput || !strings.Contains(p.Reason, "x.har has no GET or HEAD request to replay; its 1 other request(s) go to zap-active") {
+				if p.Status != report.Skipped || p.Cause != report.CauseNoInput || !strings.Contains(p.Reason, "x.har has no GET or HEAD request to replay (0 naming an action left out, ADR 0048); its 1 request(s) go to zap-active") {
 					t.Errorf("%q: %+v", c.input, p)
 				}
 			case "zap-active":
