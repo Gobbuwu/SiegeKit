@@ -82,8 +82,10 @@ type fake struct {
 }
 
 func (f *fake) install(t *testing.T, answer func(i int) (*egress.Answer, error)) {
-	oldSend, oldSleep := send, sleep
-	t.Cleanup(func() { send, sleep = oldSend, oldSleep })
+	oldSend, oldSleep, oldNow := send, sleep, now
+	t.Cleanup(func() { send, sleep, now = oldSend, oldSleep, oldNow })
+	start := time.Now()
+	now = func() time.Time { return start }
 	send = func(ctx context.Context, cfg egress.Config, method, path, ct string, body []byte, max int64) (*egress.Answer, error) {
 		f.mu.Lock()
 		defer f.mu.Unlock()
@@ -138,8 +140,8 @@ func TestCheckNoLimit(t *testing.T) {
 		seen[v["password"]] = true
 	}
 	for _, w := range f.waits {
-		if w < 900*time.Millisecond || w > Interval {
-			t.Errorf("waited %s before a login, want about %s", w, Interval)
+		if w != Interval {
+			t.Errorf("waited %s before a login, want %s", w, Interval)
 		}
 	}
 	fs := Findings(l, r, DefaultAttempts)

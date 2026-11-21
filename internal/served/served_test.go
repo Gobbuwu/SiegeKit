@@ -226,6 +226,11 @@ func TestCollectRate(t *testing.T) {
 		waits = append(waits, d)
 		return nil
 	}
+	// A fixed clock: the wait is the whole interval however long the
+	// fake requests take (they took 13 ms on a macOS runner).
+	oldNow, start := now, time.Now()
+	now = func() time.Time { return start }
+	t.Cleanup(func() { now = oldNow })
 	if _, err := Collect(context.Background(), cfgFor(t, "http://app.test/"), 10, t.TempDir()); err != nil {
 		t.Fatal(err)
 	}
@@ -233,8 +238,8 @@ func TestCollectRate(t *testing.T) {
 		t.Fatalf("waits %v", waits)
 	}
 	for _, w := range waits {
-		if w > 100*time.Millisecond || w < 90*time.Millisecond {
-			t.Errorf("wait %s, want about 100ms at 10 per second", w)
+		if w != 100*time.Millisecond {
+			t.Errorf("wait %s, want 100ms at 10 per second", w)
 		}
 	}
 }
