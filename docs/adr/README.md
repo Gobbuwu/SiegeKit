@@ -47,6 +47,7 @@ Each significant design decision is recorded as a short ADR before code is writt
 | [0041](0041-typed-skip-causes.md) | Every skipped check has a typed cause (amends 0016, 0039) | Accepted |
 | [0042](0042-one-origin-check.md) | One origin check for every URL flag (amends 0005) | Accepted |
 | [0043](0043-zap-reports-every-alert.md) | ZAP reports every alert instance (amends 0023, 0040) | Accepted |
+| [0045](0045-gosec-one-package-at-a-time.md) | gosec checks one package at a time (amends 0040) | Accepted |
 
 ADRs 0002 to 0011 were accepted at the M0 design sign-off on 2026-11-18.
 

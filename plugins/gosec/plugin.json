@@ -37,6 +37,8 @@
   "network": "none",
   "run": {
     "args": [
+      "-concurrency",
+      "1",
       "-fmt",
       "sarif",
       "-out",

@@ -45,13 +45,7 @@
     "gosec": {
       "status": "failed",
       "reason": "gosec could not load",
-      "unstable": [
-        "G705 _examples/pathvalue/main.go:24",
-        "G710 middleware/profiler.go:27",
-        "G710 middleware/profiler.go:30",
-        "G710 middleware/strip.go:62"
-      ],
-      "why": "Scans have no network, so gosec cannot load the packages that import modules not in this repository; it names them and reports the rest (ADR 0040). Findings measured 2026-11-21 with native gosec 2.30.0 (Go 1.27.4) run as the sandbox runs it: non-root, no network, writable module cache, nothing downloaded. Findings gosec makes only with the modules present (native run with them downloaded) are under notMetYet. Gap measured in gosec-offline-gap-measurement-2026-11-21.md (project files). Unstable: gosec 2.30.0's taint rules (G7xx) reported 4, 4, 3 and 1 of these on four identical CI runs; 20 local runs of the same version on the same commit, also without module downloads, gave all 4 every time. Cause not found yet: an M2 known gap",
+      "why": "Scans have no network, so gosec cannot load the packages that import modules not in this repository; it names them and reports the rest (ADR 0040). Findings measured 2026-11-21 with native gosec 2.30.0 (Go 1.27.4) run as the sandbox runs it: non-root, no network, writable module cache, nothing downloaded. Findings gosec makes only with the modules present (native run with them downloaded) are under notMetYet. Gap measured in gosec-offline-gap-measurement-2026-11-21.md (project files). The 4 taint-rule (G7xx) findings were unstable until gosec ran with -concurrency 1 (ADR 0045): at gosec's default they were all found in 70 of 80 CI runs, one at a time in 40 of 40",
       "match": "exact",
       "findings": [
         "G104 _examples/custom-handler/main.go:16",
