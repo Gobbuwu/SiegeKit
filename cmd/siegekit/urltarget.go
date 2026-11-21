@@ -530,6 +530,8 @@ func runURL(ctx context.Context, u *target.URL, addrs []netip.Addr, mode target.
 		switch {
 		case o.harRequests == nil:
 			unavailable[authz.ID] = runner.Skip(report.CauseNoInput, "no HAR file was given: pass --har (a browser recording made as test account A) and set "+authz.SessionEnv+" to account B's session headers to test access between accounts")
+		case len(o.harRequests.Requests) == 0:
+			unavailable[authz.ID] = runner.Skip(report.CauseNoInput, fmt.Sprintf("%s has no GET or HEAD request to replay; its %d other request(s) go to zap-active (ADR 0047)", filepath.Base(o.har), len(o.harRequests.Recorded)))
 		case hostOS != "linux":
 			unavailable[authz.ID] = runner.Fail(report.CausePlatform, "active tests run only on Linux for now (ADR 0018)")
 		}
@@ -701,18 +703,29 @@ func runURL(ctx context.Context, u *target.URL, addrs []netip.Addr, mode target.
 		}
 	}
 	// The access-control check replays account A's session and uses account
-	// B's, so a person types that they are test accounts (owner Q5,
-	// 2026-11-21, ADR 0035). No flag or environment variable skips this: an
-	// AI assistant cannot confirm it for the person.
-	if slices.Contains(planned, authz.ID) {
+	// B's, and zap-active attacks the HAR file's requests with A's
+	// session (ADR 0047), so a person types that they are test accounts
+	// (owner Q5, 2026-11-21, ADR 0035). No flag or environment variable
+	// skips this: an AI assistant cannot confirm it for the person.
+	authzPlanned := slices.Contains(planned, authz.ID)
+	recordedPlanned := slices.Contains(planned, zapActive) && o.harRequests != nil && len(o.harRequests.Recorded) > 0
+	var recordedRequests []authz.RecordedRequest
+	if authzPlanned || recordedPlanned {
 		accounts := "account A (the HAR file's session)"
-		if o.sessionB != nil {
+		if authzPlanned && o.sessionB != nil {
 			accounts = "accounts A (the HAR file's session) and B (" + authz.SessionEnv + ")"
+		}
+		var who []string
+		if authzPlanned {
+			who = append(who, authz.ID+" replays requests")
+		}
+		if recordedPlanned {
+			who = append(who, fmt.Sprintf("%s attacks %d recorded request(s)", zapActive, len(o.harRequests.Recorded)))
 		}
 		reason := ""
 		switch {
 		case stdinIsTerminal():
-			fmt.Fprintf(stdout, "%s replays requests with the sessions of %s. Type %q to confirm they are test accounts you own, not a real person's: ", authz.ID, accounts, testAccounts)
+			fmt.Fprintf(stdout, "%s with the sessions of %s. Type %q to confirm they are test accounts you own, not a real person's: ", strings.Join(who, ", and "), accounts, testAccounts)
 			line, _ := o.in.ReadString('\n')
 			if strings.TrimSpace(line) != testAccounts {
 				reason = fmt.Sprintf("not confirmed: %q was not typed", testAccounts)
@@ -720,7 +733,13 @@ func runURL(ctx context.Context, u *target.URL, addrs []netip.Addr, mode target.
 		default:
 			reason = "it replays account sessions, so a person must type in a terminal that they are test accounts; run this command yourself (an AI assistant should ask you to). No flag skips this"
 		}
-		if reason != "" {
+		switch {
+		case reason == "" && recordedPlanned:
+			recordedRequests = o.harRequests.Recorded
+		case reason != "" && recordedPlanned:
+			fmt.Fprintf(stdout, "  %-20s runs without the recorded requests - %s\n", zapActive, reason)
+		}
+		if reason != "" && authzPlanned {
 			unavailable[authz.ID] = runner.Skip(report.CauseNotConfirmed, reason)
 			planned = slices.DeleteFunc(planned, func(p string) bool { return p == authz.ID })
 			fmt.Fprintf(stdout, "  %-20s not run - %s\n", authz.ID, reason)
@@ -966,6 +985,7 @@ func runURL(ctx context.Context, u *target.URL, addrs []netip.Addr, mode target.
 	run, err := runner.RunURL(ctx, active, selected, runner.URLOptions{
 		Version: version, Target: u, Addrs: addrs, Deployed: o.deployed, Limits: limits, Unavailable: unavailable,
 		FilesRoot: rootsIn(dir).Files, OpenAPI: spec, NoOpenAPI: noSpec, Environment: env,
+		Recorded: recordedRequests, RecordedFrom: filepath.Base(o.har),
 	})
 	if errors.Is(err, context.Canceled) {
 		return fail(errors.New("interrupted; no report written"))
@@ -988,6 +1008,9 @@ func runURL(ctx context.Context, u *target.URL, addrs []netip.Addr, mode target.
 	}
 	return finish(run, o.reportDir, o.noSave, u.Host, o.threshold, o.requireAll, stdout, stderr)
 }
+
+// zapActive is the plugin that attacks the HAR file's requests (ADR 0047).
+const zapActive = "zap-active"
 
 // servedTool is the plugin that reads the served files (ADR 0032).
 const servedTool = "gitleaks"

@@ -103,7 +103,8 @@
           }
         }
       ]
-    }
+    },
+    "recordedRequests": true
   },
   "output": {
     "format": "sarif",

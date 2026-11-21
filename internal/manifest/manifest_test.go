@@ -293,3 +293,41 @@ func TestAcceptsDataSection(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// TestRecordedRequestsRules checks where run.recordedRequests is allowed (ADR 0047).
+func TestRecordedRequestsRules(t *testing.T) {
+	for _, c := range []struct {
+		name   string
+		mutate func(m map[string]any)
+		want   string
+	}{
+		{"not ZAP", func(m map[string]any) { m["run"].(map[string]any)["recordedRequests"] = true }, "only for ZAP plugins"},
+		{"not local-only", func(m map[string]any) {
+			m["tool"].(map[string]any)["name"] = "zap"
+			m["run"].(map[string]any)["recordedRequests"] = true
+		}, "only for destructive plugins that run on local targets only"},
+	} {
+		m := validJSON(t)
+		c.mutate(m)
+		if _, err := Parse(mustMarshal(t, m)); err == nil || !strings.Contains(err.Error(), c.want) {
+			t.Errorf("%s: %v, want %q", c.name, err, c.want)
+		}
+	}
+	// The ZAP attack scan's manifest without its spider job.
+	b, err := os.ReadFile("../../plugins/zap-active/plugin.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var m map[string]any
+	if err := json.Unmarshal(b, &m); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Parse(mustMarshal(t, m)); err != nil {
+		t.Fatalf("zap-active: %v", err)
+	}
+	c := m["run"].(map[string]any)["config"].(map[string]any)
+	c["jobs"] = slices.DeleteFunc(c["jobs"].([]any), func(j any) bool { return j.(map[string]any)["type"] == "spider" })
+	if _, err := Parse(mustMarshal(t, m)); err == nil || !strings.Contains(err.Error(), "needs a spider job") {
+		t.Errorf("no spider: %v", err)
+	}
+}

@@ -18,6 +18,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Gobbuwu/SiegeKit/internal/authz"
 	"github.com/Gobbuwu/SiegeKit/internal/egress"
 	"github.com/Gobbuwu/SiegeKit/internal/files"
 	"github.com/Gobbuwu/SiegeKit/internal/manifest"
@@ -337,6 +338,16 @@ func findsPlanted(t *testing.T, filesRoot string, ids ...string) {
 			t.Fatal(err)
 		}
 		opt.OpenAPI = &openapi.Spec{Data: b, Format: format, Source: tu.Origin() + "/openapi.json"}
+	}
+	if slices.ContainsFunc(ms, func(m *manifest.Manifest) bool { return m.Run.Recorded }) {
+		// As the CLI does with --har: the recording's requests (ADR 0047).
+		har := fmt.Sprintf(`{"log":{"entries":[{"request":{"method":"GET","url":%q}},{"request":{"method":"POST","url":%q,"headers":[{"name":"Content-Type","value":"application/xml"}],"postData":{"mimeType":"application/xml","text":%q}}}]}}`,
+			tu.Origin()+"/", tu.Origin()+"/api/import", vulnAppRecordedRequest)
+		h, err := authz.ParseHAR([]byte(har), tu)
+		if err != nil || len(h.Recorded) != 2 {
+			t.Fatalf("HAR: %+v %v", h, err)
+		}
+		opt.Recorded, opt.RecordedFrom = h.Recorded, "test.har"
 	}
 	r, err := RunURL(context.Background(), run, ms, opt)
 	if err != nil {

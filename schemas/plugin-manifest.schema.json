@@ -316,6 +316,10 @@
           },
           "description": "Exit codes other than 0 with which the tool says it ran and found issues (ADR 0028). The report is still read and checked."
         },
+        "recordedRequests": {
+          "type": "boolean",
+          "description": "SiegeKit adds a ZAP import job, before the first spider job, for the requests of the person's HAR file, mounted read-only at /siegekit/files/recorded (ADR 0047). Only for destructive, local-only ZAP plugins."
+        },
         "wordlist": {
           "type": "object",
           "additionalProperties": false,

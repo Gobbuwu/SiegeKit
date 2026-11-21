@@ -169,7 +169,16 @@ type Run struct {
 	// says it ran and found issues, such as Schemathesis's 1 (ADR 0028).
 	// The report is still read and checked.
 	FindingsExitCodes []int `json:"findingsExitCodes,omitempty"`
+	// Recorded makes SiegeKit add a ZAP "import" job, before the first
+	// spider job, for the requests of the person's HAR file, mounted
+	// read-only at RecordedMount (ADR 0047). Only for destructive,
+	// local-only ZAP plugins.
+	Recorded bool `json:"recordedRequests,omitempty"`
 }
+
+// RecordedMount is where SiegeKit mounts the recorded requests for
+// run.recordedRequests; no artifact may use it.
+const RecordedMount = "/siegekit/files/recorded"
 
 // WordlistMount is where SiegeKit mounts a plugin's run.wordlist; no
 // artifact may use it.
@@ -359,6 +368,18 @@ func (m *Manifest) Validate() error {
 		if m.Output != nil && m.Output.Parser == "schemathesis-json" && !usesSpec {
 			add("output.parser \"schemathesis-json\" needs {openapi} in run.args")
 		}
+		if m.Run.Recorded {
+			jobs, _ := m.Run.Config["jobs"].([]any)
+			spider := slices.ContainsFunc(jobs, func(j any) bool { o, _ := j.(map[string]any); return o["type"] == "spider" })
+			switch {
+			case m.Tool.Name != "zap":
+				add("run.recordedRequests is only for ZAP plugins")
+			case !m.LocalOnly || m.Destructive == nil || !*m.Destructive:
+				add("run.recordedRequests is only for destructive plugins that run on local targets only")
+			case !spider:
+				add("run.recordedRequests needs a spider job in run.config.jobs")
+			}
+		}
 		if len(m.Run.FindingsExitCodes) > 4 {
 			add("run.findingsExitCodes has more than 4 entries")
 		}
@@ -503,6 +524,9 @@ func (m *Manifest) validateTool(p *[]string) {
 			mounts[a.Platform+" "+a.Mount] = f
 			if a.Mount == WordlistMount {
 				*p = append(*p, fmt.Sprintf("%s.mount %s is reserved for run.wordlist", f, a.Mount))
+			}
+			if a.Mount == RecordedMount {
+				*p = append(*p, fmt.Sprintf("%s.mount %s is reserved for recorded requests", f, a.Mount))
 			}
 			if a.Mount == OpenAPIMount {
 				*p = append(*p, fmt.Sprintf("%s.mount %s is reserved for the OpenAPI spec", f, a.Mount))
