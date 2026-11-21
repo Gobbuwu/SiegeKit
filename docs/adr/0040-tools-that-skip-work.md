@@ -3,7 +3,7 @@
 - Status: Accepted
 - Date: 2026-11-21
 - Amends: [0009](0009-honest-results.md) (a check that did part of its work is incomplete), [0039](0039-known-answers-and-engine-parity.md) (a known answer can be "failed")
-- Amended by: [0043](0043-zap-reports-every-alert.md) (a tool can also drop results it found: ZAP's systemic alert limit)
+- Amended by: [0043](0043-zap-reports-every-alert.md) (a tool can also drop results it found: ZAP's systemic alert limit), [0045](0045-gosec-one-package-at-a-time.md) (gosec skips taint rules when checking packages at the same time)
 
 ## Context
 

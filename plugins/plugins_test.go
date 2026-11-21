@@ -37,6 +37,15 @@ func TestBuiltin(t *testing.T) {
 			if *m.Destructive || m.Network != "none" || !slices.Equal(m.Targets, []string{"repo"}) {
 				t.Errorf("%s: passive built-ins must be non-destructive, offline and scan directories", m.ID)
 			}
+			// gosec 2.30.0 checks packages at the same time by default and
+			// then, now and then, sees type errors that are not there and
+			// skips those packages' taint rules with no error in its
+			// report; one at a time it did not (measured on CI, ADR 0045).
+			if m.Tool.Name == "gosec" {
+				if i := slices.Index(m.Run.Args, "-concurrency"); i < 0 || i+1 >= len(m.Run.Args) || m.Run.Args[i+1] != "1" {
+					t.Errorf("%s: gosec must run with -concurrency 1", m.ID)
+				}
+			}
 		case "active":
 			// Attack scans never run on deployed targets (ADR 0023, 0025).
 			if m.Network != "target-only" || !slices.Equal(m.Targets, []string{"url"}) || *m.Destructive != m.LocalOnly {

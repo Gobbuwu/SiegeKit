@@ -242,9 +242,10 @@ func app(t *testing.T) (*httptest.Server, *[]string) {
 
 func noSleep(t *testing.T) *[]time.Duration {
 	var waits []time.Duration
-	old := sleep
+	old, oldNow, start := sleep, now, time.Now()
 	sleep = func(_ context.Context, d time.Duration) error { waits = append(waits, d); return nil }
-	t.Cleanup(func() { sleep = old })
+	now = func() time.Time { return start }
+	t.Cleanup(func() { sleep, now = old, oldNow })
 	return &waits
 }
 
@@ -270,7 +271,7 @@ func TestCheck(t *testing.T) {
 	if res.ATried != 11 || res.AFailed != 1 || res.Requests != 31 || len(*seen) != 31 || res.BRefused != 0 || !res.BTested {
 		t.Errorf("%+v", res)
 	}
-	if len(*waits) != 30 || (*waits)[0] > 100*time.Millisecond {
+	if len(*waits) != 30 || (*waits)[0] != 100*time.Millisecond {
 		t.Errorf("waits %v", *waits)
 	}
 	// A's own headers stay for B and no login; only the session changes.

@@ -122,6 +122,9 @@ var (
 			return nil
 		}
 	}
+	// now is the clock the request pacing reads; tests fix it, so the
+	// waits they check do not depend on how fast the machine is.
+	now = time.Now
 )
 
 // Check sends n requests, at most one per Interval, and stops at the first
@@ -141,11 +144,11 @@ func Check(ctx context.Context, cfg egress.Config, e *Endpoint, n int) (Result, 
 	var last time.Time
 	for i := range n {
 		if i > 0 {
-			if err := sleep(ctx, Interval-time.Since(last)); err != nil {
+			if err := sleep(ctx, Interval-now().Sub(last)); err != nil {
 				return r, err
 			}
 		}
-		last = time.Now()
+		last = now()
 		a, err := send(ctx, cfg, e.Method, e.Path, e.ContentType(), e.body, MaxAnswer)
 		if a == nil || err != nil && !errors.Is(err, egress.ErrTooLarge) {
 			if ctx.Err() != nil {

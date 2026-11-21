@@ -148,6 +148,9 @@ var (
 			return nil
 		}
 	}
+	// now is the clock the request pacing reads; tests fix it, so the
+	// waits they check do not depend on how fast the machine is.
+	now = time.Now
 )
 
 // Check sends attempts logins, at most one per Interval, and stops at the
@@ -170,11 +173,11 @@ func Check(ctx context.Context, cfg egress.Config, l *Login, attempts int) (Resu
 	var last time.Time
 	for i := range attempts {
 		if i > 0 {
-			if err := sleep(ctx, Interval-time.Since(last)); err != nil {
+			if err := sleep(ctx, Interval-now().Sub(last)); err != nil {
 				return r, err
 			}
 		}
-		last = time.Now()
+		last = now()
 		a, err := send(ctx, cfg, http.MethodPost, l.Path, l.ContentType(), l.render(wrongPassword()), MaxAnswer)
 		if err != nil {
 			if i == 0 {

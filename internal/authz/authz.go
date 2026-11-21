@@ -304,6 +304,9 @@ var (
 			return nil
 		}
 	}
+	// now is the clock the request pacing reads; tests fix it, so the
+	// waits they check do not depend on how fast the machine is.
+	now = time.Now
 )
 
 // Check replays the requests one at a time, at most rate per second. b is
@@ -321,11 +324,11 @@ func Check(ctx context.Context, cfg egress.Config, reqs []Request, b http.Header
 	var last time.Time
 	do := func(r Request, h http.Header) (Answer, error) {
 		if !last.IsZero() {
-			if err := sleep(ctx, interval-time.Since(last)); err != nil {
+			if err := sleep(ctx, interval-now().Sub(last)); err != nil {
 				return Answer{}, err
 			}
 		}
-		last = time.Now()
+		last = now()
 		a, err := send(ctx, cfg, r.Method, r.Path, h, nil, MaxAnswer)
 		if ctx.Err() != nil {
 			return Answer{}, ctx.Err()

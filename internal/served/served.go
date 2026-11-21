@@ -121,6 +121,9 @@ var (
 			return nil
 		}
 	}
+	// now is the clock the request pacing reads; tests fix it, so the
+	// waits they check do not depend on how fast the machine is.
+	now = time.Now
 )
 
 type collector struct {
@@ -265,11 +268,11 @@ func (c *collector) get(u *url.URL) (*egress.Answer, *url.URL, error) {
 			return nil, u, errLimit
 		}
 		if !c.last.IsZero() {
-			if err := sleep(c.ctx, c.interval-time.Since(c.last)); err != nil {
+			if err := sleep(c.ctx, c.interval-now().Sub(c.last)); err != nil {
 				return nil, u, err
 			}
 		}
-		c.last = time.Now()
+		c.last = now()
 		c.sent++
 		a, err := send(c.ctx, c.cfg, http.MethodGet, requestPath(u), "", nil, MaxFileSize)
 		if a != nil {
