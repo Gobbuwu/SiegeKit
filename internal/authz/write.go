@@ -254,9 +254,19 @@ func ParseWrites(data []byte, t *target.URL) (*Writes, error) {
 			hd.Del("Content-Type")
 		}
 		wr := Write{Method: method, Path: p, Header: hd, Body: body, CSRF: carriesCSRF(hd, body), RecordedStatus: e.Response.Status}
-		if kind, name, ok := graphQLOp(body); ok {
+		if kind, name, fields, ok := graphQLOp(body); ok {
 			if kind != "mutation" {
 				w.GraphQLReads++
+				continue
+			}
+			// A GraphQL login names itself in its fields, not its path
+			// (Wiki.js: authentication.login, measured 2026-11-21).
+			if why := lockoutReason(method, pathOf(p)+"/"+strings.Join(fields, "/")+"/"+name); why != "" {
+				w.Lockout++
+				label := method + " " + pathOf(p) + " (GraphQL " + name + ")"
+				if !containsString(w.LockoutPaths, label) {
+					w.LockoutPaths = append(w.LockoutPaths, label)
+				}
 				continue
 			}
 			wr.GraphQL = name
@@ -264,8 +274,13 @@ func ParseWrites(data []byte, t *target.URL) (*Writes, error) {
 		if method == http.MethodPost {
 			depth := 3
 			if wr.GraphQL != "" {
-				// GraphQL nests one level more: data, the mutation, its payload.
+				// GraphQL nests one level more: data, the mutation, its
+				// payload; and one more again under a namespace (Wiki.js 2:
+				// data.pages.create.page.id, measured 2026-11-21).
 				depth = 4
+				if _, _, fields, _ := graphQLOp(body); len(fields) >= 2 {
+					depth = 5
+				}
 			}
 			if ids := answerIDs(e.Response.Status, e.Response.Content.Text, e.Response.Content.Encoding, depth); len(ids) > 0 {
 				creates = append(creates, recordedCreate{index: i, c: Create{Path: p, Header: hd.Clone(), Body: body}, ids: ids})
@@ -338,6 +353,7 @@ func answerIDs(status int, text, encoding string, maxDepth int) []idField {
 	if json.Unmarshal(bytes.TrimSpace(b), &v) != nil {
 		return nil
 	}
+	v = unbatch(v)
 	var out []idField
 	level := []struct {
 		obj  map[string]any
@@ -935,6 +951,18 @@ func WriteCheck(ctx context.Context, cfg egress.Config, ws []Write, b http.Heade
 	return res, nil
 }
 
+// unbatch returns the one answer of a batch of one (a GraphQL client that
+// batches, such as Wiki.js 2's Apollo client, answers a single operation
+// as a list of one, measured 2026-11-21), or v itself.
+func unbatch(v any) any {
+	if l, ok := v.([]any); ok && len(l) == 1 {
+		if _, isObj := l[0].(map[string]any); isObj {
+			return l[0]
+		}
+	}
+	return v
+}
+
 // newID reads the re-created object's ID from A's create answer.
 func newID(a Answer, field []string) (string, bool) {
 	if !ok2xx(a) || len(field) == 0 {
@@ -944,6 +972,7 @@ func newID(a Answer, field []string) (string, bool) {
 	if json.Unmarshal(bytes.TrimSpace(a.Body), &v) != nil {
 		return "", false
 	}
+	v = unbatch(v)
 	for _, k := range field {
 		m, ok := v.(map[string]any)
 		if !ok {
@@ -1302,70 +1331,143 @@ func mergeCookies(header string, set []*http.Cookie) string {
 // graphQLOp reads a GraphQL-over-HTTP request body: a JSON object, or a
 // batch of them, with a "query" string. kind is "mutation" when the
 // operation it runs (operationName, else the first one) is a mutation,
-// else "query" or "subscription"; name is the mutation's name. A body
-// without query text, such as a persisted query sent by its hash, is not
-// recognised (ok false) and stays a write.
-func graphQLOp(body []byte) (kind, name string, ok bool) {
+// else "query" or "subscription"; name is the mutation's name, or its
+// first fields when it has none (Wiki.js sends anonymous mutations such as
+// "pages.update"); fields are every operation's first fields, for the
+// never-replayed list. A body without query text, such as a persisted
+// query sent by its hash, is not recognised (ok false) and stays a write.
+func graphQLOp(body []byte) (kind, name string, fields []string, ok bool) {
 	var one map[string]any
 	if json.Unmarshal(body, &one) == nil {
 		return graphQLDoc(one)
 	}
 	var batch []map[string]any
 	if json.Unmarshal(body, &batch) != nil || len(batch) == 0 {
-		return "", "", false
+		return "", "", nil, false
 	}
 	kind = "query"
 	for _, b := range batch {
-		k, n, isGQL := graphQLDoc(b)
+		k, n, f, isGQL := graphQLDoc(b)
 		if !isGQL {
-			return "", "", false
+			return "", "", nil, false
 		}
+		fields = append(fields, f...)
 		if k == "mutation" && kind != "mutation" {
 			kind, name = k, n
 		}
 	}
-	return kind, name, true
+	return kind, name, fields, true
 }
 
 var (
 	reGraphQLComment = regexp.MustCompile(`#[^\n]*`)
 	reGraphQLOp      = regexp.MustCompile(`(?:^|[\s}])(query|mutation|subscription)\b\s*([_A-Za-z][_0-9A-Za-z]*)?`)
+	reGraphQLName    = regexp.MustCompile(`^\s*([_A-Za-z][_0-9A-Za-z]*)(?:\s*:\s*([_A-Za-z][_0-9A-Za-z]*))?`)
 )
 
-func graphQLDoc(m map[string]any) (kind, name string, ok bool) {
+func graphQLDoc(m map[string]any) (kind, name string, fields []string, ok bool) {
 	q, isString := m["query"].(string)
 	if !isString || strings.TrimSpace(q) == "" {
-		return "", "", false
+		return "", "", nil, false
 	}
 	q = reGraphQLComment.ReplaceAllString(q, "")
 	want, _ := m["operationName"].(string)
-	ops := reGraphQLOp.FindAllStringSubmatch(q, -1)
+	ops := reGraphQLOp.FindAllStringSubmatchIndex(q, -1)
 	if len(ops) == 0 {
 		// The shorthand "{ field }" is a query.
 		if strings.HasPrefix(strings.TrimSpace(q), "{") {
-			return "query", "", true
+			return "query", "", firstFields(q), true
 		}
-		return "", "", false
+		return "", "", nil, false
 	}
 	op := ops[0]
 	for _, o := range ops {
-		if want != "" && o[2] == want {
+		if want != "" && o[4] >= 0 && q[o[4]:o[5]] == want {
 			op = o
 			break
 		}
 	}
-	if op[1] != "mutation" {
-		return op[1], "", true
+	kind = q[op[2]:op[3]]
+	fields = firstFields(q[op[1]:])
+	if kind != "mutation" {
+		return kind, "", fields, true
 	}
-	if op[2] == "" {
-		return "mutation", "mutation", true
+	switch {
+	case op[4] >= 0:
+		name = q[op[4]:op[5]]
+	case len(fields) > 0:
+		name = strings.Join(fields, ".")
+	default:
+		name = "mutation"
 	}
-	return "mutation", op[2], true
+	return kind, name, fields, true
+}
+
+// firstFields reads an operation's selection set from its start (after
+// the operation's name): the first field, and, when that field takes no
+// arguments and has a selection set of its own, the first field inside it
+// (a namespace such as Wiki.js's "pages" { "update" }). A first field with
+// arguments is the operation itself, and what it selects is its answer
+// ("deletePaste(id: 1) { result }" gives "deletePaste"). Aliases give the
+// field's own name.
+func firstFields(q string) []string {
+	i := 0
+	skipParens := func() bool {
+		for i < len(q) && (q[i] == ' ' || q[i] == '\n' || q[i] == '\t' || q[i] == '\r' || q[i] == ',') {
+			i++
+		}
+		if i >= len(q) || q[i] != '(' {
+			return false
+		}
+		{
+			depth := 0
+			for ; i < len(q); i++ {
+				if q[i] == '(' {
+					depth++
+				} else if q[i] == ')' {
+					depth--
+					if depth == 0 {
+						i++
+						break
+					}
+				}
+			}
+		}
+		return true
+	}
+	skipParens() // variable definitions
+	var out []string
+	for len(out) < 2 {
+		j := strings.IndexByte(q[i:], '{')
+		if j < 0 || strings.TrimSpace(q[i:i+j]) != "" && len(out) > 0 {
+			break
+		}
+		i += j + 1
+		mm := reGraphQLName.FindStringSubmatch(q[i:])
+		if mm == nil {
+			break
+		}
+		f := mm[1]
+		if mm[2] != "" {
+			f = mm[2]
+		}
+		out = append(out, f)
+		i += len(mm[0])
+		if skipParens() {
+			break
+		}
+	}
+	return out
 }
 
 // graphQLRefused reports whether a 2xx GraphQL answer refused the
-// operation: an "errors" list and no data (absent, null, or only null
-// fields). GraphQL over HTTP answers such errors with 200.
+// operation. GraphQL over HTTP answers errors with 200, and apps report
+// refusals in two ways: an "errors" list with no data (no value other than
+// null and __typename anywhere in "data"), or a result in the data
+// itself: a "succeeded" or "success" field that is false (Wiki.js 2:
+// "responseResult": {"succeeded": false}, measured 2026-11-21) or a
+// non-empty "userErrors" or "errors" list (Shopify's and Saleor's
+// documented style; not measured).
 func graphQLRefused(body []byte) bool {
 	var batch []json.RawMessage
 	if json.Unmarshal(body, &batch) == nil && len(batch) > 0 {
@@ -1377,18 +1479,76 @@ func graphQLRefused(body []byte) bool {
 		return true
 	}
 	var a struct {
-		Data   map[string]any    `json:"data"`
+		Data   any               `json:"data"`
 		Errors []json.RawMessage `json:"errors"`
 	}
-	if json.Unmarshal(body, &a) != nil || len(a.Errors) == 0 {
+	if json.Unmarshal(body, &a) != nil {
 		return false
 	}
-	for _, v := range a.Data {
-		if v != nil {
-			return false
+	if len(a.Errors) > 0 && !hasValue(a.Data, 0) {
+		return true
+	}
+	return payloadRefused(a.Data, 0)
+}
+
+// hasValue reports whether v holds a value other than null and
+// __typename.
+func hasValue(v any, depth int) bool {
+	if depth > 16 {
+		return true
+	}
+	switch x := v.(type) {
+	case nil:
+		return false
+	case map[string]any:
+		for k, e := range x {
+			if k != "__typename" && hasValue(e, depth+1) {
+				return true
+			}
+		}
+		return false
+	case []any:
+		for _, e := range x {
+			if hasValue(e, depth+1) {
+				return true
+			}
+		}
+		return false
+	default:
+		return true
+	}
+}
+
+// payloadRefused finds a refusal reported inside the data.
+func payloadRefused(v any, depth int) bool {
+	if depth > 16 {
+		return false
+	}
+	switch x := v.(type) {
+	case map[string]any:
+		for k, e := range x {
+			switch strings.ToLower(k) {
+			case "succeeded", "success":
+				if b, isBool := e.(bool); isBool && !b {
+					return true
+				}
+			case "usererrors", "errors":
+				if l, isList := e.([]any); isList && len(l) > 0 {
+					return true
+				}
+			}
+			if payloadRefused(e, depth+1) {
+				return true
+			}
+		}
+	case []any:
+		for _, e := range x {
+			if payloadRefused(e, depth+1) {
+				return true
+			}
 		}
 	}
-	return true
+	return false
 }
 
 func gqlPath(path, op string) string {

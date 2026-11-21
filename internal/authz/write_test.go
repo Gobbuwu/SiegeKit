@@ -606,7 +606,12 @@ func TestGraphQLOp(t *testing.T) {
 		ok               bool
 	}{
 		{`{"query":"mutation EditPaste($id: Int!) { editPaste(id: $id) { paste { id } } }","variables":{"id":1}}`, "mutation", "EditPaste", true},
-		{`{"query":"mutation { deletePaste(id: 1) { result } }"}`, "mutation", "mutation", true},
+		// An unnamed mutation is named by its field; a namespace field
+		// with no arguments adds the field inside it (Wiki.js 2).
+		{`{"query":"mutation { deletePaste(id: 1) { result } }"}`, "mutation", "deletePaste", true},
+		{`[{"operationName":null,"query":"mutation ($id: Int!) {\n  pages {\n    update(id: $id) {\n      responseResult { succeeded }\n    }\n  }\n}"}]`, "mutation", "pages.update", true},
+		{`{"query":"mutation { x: deletePaste(id: 1) { result } }"}`, "mutation", "deletePaste", true},
+		{`{"query":"mutation { }"}`, "mutation", "mutation", true},
 		{`{"query":"query getPastes { pastes { id } }"}`, "query", "", true},
 		{`{"query":"{ pastes { id } }"}`, "query", "", true},
 		{`{"query":"subscription s { paste { id } }"}`, "subscription", "", true},
@@ -623,10 +628,13 @@ func TestGraphQLOp(t *testing.T) {
 		{`query=x`, "", "", false},
 		{`[]`, "", "", false},
 	} {
-		kind, name, ok := graphQLOp([]byte(c.body))
+		kind, name, _, ok := graphQLOp([]byte(c.body))
 		if kind != c.kind || name != c.name || ok != c.ok {
 			t.Errorf("%s: %q %q %v", c.body, kind, name, ok)
 		}
+	}
+	if _, _, f, _ := graphQLOp([]byte(`{"query":"mutation ($u: String!) { authentication { login(username: $u) { jwt } } }"}`)); strings.Join(f, ".") != "authentication.login" {
+		t.Errorf("fields %q", f)
 	}
 }
 
@@ -640,6 +648,13 @@ func TestGraphQLRefused(t *testing.T) {
 		`[{"errors":[{"message":"x"}]},{"errors":[{"message":"y"}]}]`:      true,
 		`[{"errors":[{"message":"x"}]},{"data":{"m":1}}]`:                  false,
 		`not json`: false,
+		// Refused in the payload (Wiki.js 2), and a batch whose data
+		// holds only nulls and __typename.
+		`[{"data":{"pages":{"update":{"responseResult":{"succeeded":false,"message":"Forbidden"},"__typename":"PageResponse"}}}}]`: true,
+		`[{"data":{"pages":{"update":{"responseResult":{"succeeded":true}}}}}]`:                                                    false,
+		`[{"errors":[{"message":"Forbidden"}],"data":{"pages":{"create":null,"__typename":"PageMutation"}}}]`:                      true,
+		`{"data":{"productUpdate":{"userErrors":[{"message":"no"}],"product":null}}}`:                                              true,
+		`{"data":{"productUpdate":{"userErrors":[],"product":{"id":1}}}}`:                                                          false,
 	} {
 		if got := graphQLRefused([]byte(body)); got != want {
 			t.Errorf("%s: %v", body, got)
@@ -832,4 +847,40 @@ func TestWriteCheckTriesAndSteps(t *testing.T) {
 func sscan(s, format string, id *int) bool {
 	n, err := fmt.Sscanf(s, format, id)
 	return err == nil && n == 1
+}
+
+// TestParseWritesGraphQLBatch: Wiki.js 2 sends each operation as a batch
+// of one with no operation name (recorded 2026-11-21). The login mutation
+// is never replayed, and a page update finds the create that made its
+// page through the ID five levels down in the batch's one answer.
+func TestParseWritesGraphQLBatch(t *testing.T) {
+	a := map[string]string{"Authorization": "Bearer A"}
+	u := "http://127.0.0.1:3002/graphql"
+	har := writeHAR(t, []writeEntry{
+		{method: "POST", url: u, headers: a, mime: "application/json", status: 200,
+			body:   `[{"operationName":null,"variables":{"username":"a","password":"p"},"query":"mutation ($username: String!, $password: String!) {\n  authentication {\n    login(username: $username, password: $password) {\n      jwt\n    }\n  }\n}"}]`,
+			answer: `[{"data":{"authentication":{"login":{"responseResult":{"succeeded":true},"jwt":"x"}}}}]`},
+		{method: "POST", url: u, headers: a, mime: "application/json", status: 200,
+			body:   `[{"operationName":null,"variables":{"path":"alice/notes","content":"x"},"query":"mutation ($path: String!, $content: String!) {\n  pages {\n    create(path: $path, content: $content) {\n      page { id }\n    }\n  }\n}"}]`,
+			answer: `[{"data":{"pages":{"create":{"responseResult":{"succeeded":true},"page":{"id":1,"__typename":"Page"}}}}}]`},
+		{method: "POST", url: u, headers: a, mime: "application/json", status: 200,
+			body:   `[{"operationName":null,"variables":{"id":1,"content":"y"},"query":"mutation ($id: Int!, $content: String!) {\n  pages {\n    update(id: $id, content: $content) {\n      responseResult { succeeded }\n    }\n  }\n}"}]`,
+			answer: `[{"data":{"pages":{"update":{"responseResult":{"succeeded":true}}}}}]`},
+	})
+	ws, err := ParseWrites(har, mustTarget(t, "http://127.0.0.1:3002/"))
+	if err != nil || ws.Lockout != 1 || len(ws.LockoutPaths) != 1 || ws.LockoutPaths[0] != "POST /graphql (GraphQL authentication.login)" {
+		t.Fatalf("%v %+v", err, ws)
+	}
+	var upd *Write
+	for i := range ws.Writes {
+		if ws.Writes[i].GraphQL == "pages.update" {
+			upd = &ws.Writes[i]
+		}
+	}
+	if upd == nil || upd.Create == nil || strings.Join(upd.Create.Field, ".") != "data.pages.create.page.id" || upd.Create.OldID != "1" {
+		t.Fatalf("%+v", ws.Writes)
+	}
+	if id, ok := newID(Answer{Status: 200, Body: []byte(`[{"data":{"pages":{"create":{"page":{"id":9}}}}}]`)}, upd.Create.Field); !ok || id != "9" {
+		t.Errorf("newID %q %v", id, ok)
+	}
 }

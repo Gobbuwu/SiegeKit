@@ -124,7 +124,7 @@ func triesFor(ws []Write, reads []recordedRead, creates []recordedCreate) ([]Wri
 		objs = append(objs, o)
 	}
 	for _, c := range creates {
-		if _, _, gql := graphQLOp(c.c.Body); gql || len(c.ids) == 0 || len(c.ids[0].field) == 0 {
+		if _, _, _, gql := graphQLOp(c.c.Body); gql || len(c.ids) == 0 || len(c.ids[0].field) == 0 {
 			continue
 		}
 		cc := c.c
