@@ -21,11 +21,13 @@ Several records repeated the assumption as fact: the M1 record, ADR 0019, the th
 
 ## Decision
 
-1. **Every run names its environment.** These record the OS, the architecture and the container engine (name, version, rootless or rootful, cgroup v1 or v2):
+1. **Every run names its environment.** These record the OS, the architecture, the Go release SiegeKit was built with, and the container engine (name, version, rootless or rootful, cgroup v1 or v2):
    - `report.json` (`environment`);
    - the HTML report header;
    - the terminal ("Environment: ...");
    - the audit log (`environment`).
+
+   The Go release was added on 2026-11-21 (#53, full project check F11): local runs used Go 1.26.0 and CI 1.27.4, and the built-in checks and the relay are Go code, so a result holds only for the Go release it was measured with. Tools in images bring their own runtime; their versions are pinned in the manifests.
 
    SiegeKit asks the engine itself with `info --format`. It tries Podman's format first, so a `docker` command that is Podman is named as Podman. When the engine does not answer, the engine part is left out.
 2. **CI asserts its engine.** `TestDescribe` fails when CI's engine is not rootless Podman (`SIEGEKIT_EXPECT_ENGINE`). Both gates fail when `report.json` names another engine. A change to GitHub's runners then shows up as a failure, not as a silent change of environment.

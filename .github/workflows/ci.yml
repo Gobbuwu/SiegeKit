@@ -16,6 +16,10 @@ concurrency:
 env:
   GO_VERSION: "1.27.4"
   GOVULNCHECK_VERSION: "v1.9.0"
+  # staticcheck 2026.2.2 and deadcode from golang.org/x/tools v0.52.0,
+  # pinned by module version (checked against sum.golang.org by go run).
+  STATICCHECK_VERSION: "v0.8.2"
+  DEADCODE_VERSION: "v0.52.0"
 
 jobs:
   test:
@@ -31,7 +35,11 @@ jobs:
           - { os: ubuntu-latest, engine: docker, expect: docker rootful }
           - { os: macos-latest }
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 25
+    # Above the worst case of the steps' own limits (go test -timeout 30m,
+    # 11.5 minutes of fuzzing, the self-scan), so a hung test is ended by
+    # Go with its goroutine dump, not by GitHub without one (full project
+    # check F13).
+    timeout-minutes: 60
     env:
       # Every step that runs containers uses this engine (ADR 0039).
       SIEGEKIT_ENGINE: ${{ matrix.engine }}
@@ -75,6 +83,7 @@ jobs:
           jq '.findings[] | {ruleId, severity, uri: .location.uri, line: .location.startLine}' "$RUNNER_TEMP/self-report/report.json"
           if [ "$code" -ne 0 ]; then exit 1; fi
           jq -e --arg e "$SIEGEKIT_ENGINE" '.environment.engine.name == $e' "$RUNNER_TEMP/self-report/report.json"
+          jq -e --arg g "go$GO_VERSION" '.environment.go == $g' "$RUNNER_TEMP/self-report/report.json"
           jq -e '[.plugins[] | select(.status != "ran" and (.status != "skipped" or .cause != "no-files"))] | length == 0' "$RUNNER_TEMP/self-report/report.json"
       - name: Fuzz parsers
         if: matrix.engine == 'podman'
@@ -99,6 +108,15 @@ jobs:
           go test -run='^$' -fuzz=FuzzParse -fuzztime=30s ./internal/ratelimit
           go test -run='^$' -fuzz=FuzzParse -fuzztime=30s ./internal/backend
           go test -run='^$' -fuzz=FuzzReadScripts -fuzztime=30s ./internal/backend
+      - name: Staticcheck
+        if: matrix.engine == 'podman'
+        run: go run honnef.co/go/tools/cmd/staticcheck@${STATICCHECK_VERSION} ./...
+      - name: Dead code
+        if: matrix.engine == 'podman'
+        # deadcode lists functions no main package reaches; any is a failure.
+        run: |
+          out="$(go run golang.org/x/tools/cmd/deadcode@${DEADCODE_VERSION} ./...)"
+          if [ -n "$out" ]; then echo "$out"; exit 1; fi
       - name: Vulnerability check
         if: matrix.engine == 'podman'
         run: go run golang.org/x/vuln/cmd/govulncheck@${GOVULNCHECK_VERSION} ./...

@@ -84,14 +84,6 @@ func Read(r io.Reader, mount string) (Result, error) {
 	return res, nil
 }
 
-// Uncovered returns the package directories, relative to mount and sorted,
-// that gosec reported load or type errors for. An empty list means gosec
-// reported no such error; Check also compares the file count.
-func Uncovered(r io.Reader, mount string) ([]string, error) {
-	res, err := Read(r, mount)
-	return res.Uncovered, err
-}
-
 // gosec 2.30.0 leaves out the directories its default -exclude-dir values
 // match ("vendor" and "\.git/"), tested against the container path of the
 // directory that holds each .go file (cmd/gosec/main.go, ExcludedDirsRegExp).

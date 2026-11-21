@@ -9,6 +9,11 @@ import (
 	"testing"
 )
 
+// String names a class in test messages; SiegeKit itself never prints one.
+func (c Class) String() string {
+	return [...]string{"public", "loopback", "private", "always blocked"}[c]
+}
+
 func TestClassify(t *testing.T) {
 	cases := map[string]Class{
 		"127.0.0.1": Loopback, "127.255.255.254": Loopback, "::1": Loopback, "::ffff:127.0.0.1": Loopback,

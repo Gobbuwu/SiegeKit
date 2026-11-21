@@ -25,10 +25,10 @@ func (d describedExec) Describe(context.Context) (sandbox.Info, error) { return 
 
 func TestEnvironment(t *testing.T) {
 	env := Environment(context.Background(), describedExec{info: sandbox.Info{Engine: "podman", Version: "5.7.0", Rootless: true, Cgroup: "v2"}})
-	if env.OS != runtime.GOOS || env.Arch != runtime.GOARCH || env.Engine == nil || *env.Engine != (report.Engine{Name: "podman", Version: "5.7.0", Rootless: true, Cgroup: "v2"}) {
+	if env.OS != runtime.GOOS || env.Arch != runtime.GOARCH || env.Go != runtime.Version() || env.Engine == nil || *env.Engine != (report.Engine{Name: "podman", Version: "5.7.0", Rootless: true, Cgroup: "v2"}) {
 		t.Fatalf("%+v", env)
 	}
-	if s := env.String(); s != runtime.GOOS+"/"+runtime.GOARCH+", podman 5.7.0 rootless, cgroup v2" {
+	if s := env.String(); s != runtime.GOOS+"/"+runtime.GOARCH+", SiegeKit built with "+runtime.Version()+", podman 5.7.0 rootless, cgroup v2" {
 		t.Errorf("String() = %q", s)
 	}
 	for _, ex := range []Executor{nil, describedExec{err: errors.New("down")}} {

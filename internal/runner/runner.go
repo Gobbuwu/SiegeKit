@@ -44,7 +44,7 @@ type describer interface {
 // Environment names the machine and the engine behind ex (ADR 0038). The
 // engine part is left out when ex is nil or does not answer.
 func Environment(ctx context.Context, ex Executor) *report.Environment {
-	env := &report.Environment{OS: runtime.GOOS, Arch: runtime.GOARCH}
+	env := &report.Environment{OS: runtime.GOOS, Arch: runtime.GOARCH, Go: runtime.Version()}
 	if d, ok := ex.(describer); ok && ex != nil {
 		if i, err := d.Describe(ctx); err == nil {
 			env.Engine = &report.Engine{Name: i.Engine, Version: i.Version, Rootless: i.Rootless, Cgroup: i.Cgroup}

@@ -67,7 +67,7 @@ func ToFindings(r io.Reader, opt Options) ([]findings.Finding, error) {
 		return nil, err
 	}
 	if len(data) > MaxSize {
-		return nil, fmt.Errorf("Bandit report larger than %d bytes", MaxSize)
+		return nil, fmt.Errorf("bandit report larger than %d bytes", MaxSize)
 	}
 	var rep report
 	if err := json.Unmarshal(data, &rep); err != nil {
