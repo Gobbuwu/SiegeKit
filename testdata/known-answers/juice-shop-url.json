@@ -1,6 +1,6 @@
 {
   "fixture": "juice-shop v20.4.0 by URL (docker.io/bkimminich/juice-shop@sha256:9bbaecc41791f00b002bc65931cc5ff355fbdb941fa72b06558c18dace43197b)",
-  "measured": "CI gate run 44834908813 on 2026-11-20 (ubuntu-latest): podman 5.7.0 rootless, cgroup v2, and docker 29.4.2 rootful, cgroup v2. Minimum requests are 90% of the lower of the two runs",
+  "measured": "CI gate runs 44834908813 and 44836476025 on 2026-11-20 (ubuntu-latest), each on podman 5.7.0 rootless, cgroup v2, and docker 29.4.2 rootful, cgroup v2: four runs. Minimum requests are 90% of the fewest of the four",
   "checks": {
     "access-control": {
       "status": "ran",
@@ -55,8 +55,12 @@
     },
     "nuclei": {
       "status": "ran",
+      "unstable": [
+        "swagger-api /api-docs/swagger.json",
+        "swagger-api /api-docs/swagger.yaml"
+      ],
       "match": "includes",
-      "why": "the swagger-api template reports /api-docs/swagger.yaml on one run and /api-docs/swagger.json on another (measured), so only the findings seen on both engines are required",
+      "why": "the swagger-api template reports /api-docs/swagger.yaml on some runs and /api-docs/swagger.json on others (measured over four runs)",
       "findings": [
         "addeventlistener-detect /",
         "deprecated-feature-policy /",
@@ -98,34 +102,25 @@
     },
     "zap": {
       "status": "ran",
+      "byRule": true,
       "match": "includes",
-      "why": "ZAP's crawl reaches a slightly different set of pages each run, so a page's finding can come and go (measured: 10038 /ftp/eastere.gg and 10098 on two assets differed between the engines); the findings seen on both engines must stay",
+      "why": "ZAP's crawl reaches a slightly different set of pages each run, so a page's finding comes and goes (measured: 10038 on /ftp/eastere.gg and 10098 on hashed assets varied over four runs), while the rules it reports did not: compared by rule",
       "findings": [
-        "10038 /",
-        "10038 /ftp",
-        "10038 /ftp/coupons_2013.md.bak",
-        "10038 /sitemap.xml",
-        "10098 /",
-        "10098 /robots.txt",
-        "10098 /rolldown-runtime-kqx1xuJ_.js",
-        "10098 /sitemap.xml",
-        "10109 /",
-        "10109 /juice-shop/build/routes/fileServer.js:52:13",
-        "10109 /juice-shop/build/routes/fileServer.js:68:18",
-        "10109 /juice-shop/node_modules/express/lib/router/layer.js:95:5",
-        "10109 /sitemap.xml"
+        "10038",
+        "10098",
+        "10109"
       ],
       "minRequests": 84
     },
     "zap-active": {
       "status": "ran",
       "match": "includes",
-      "why": "as for zap; the minimum is 90% of the 3,443 requests both engines sent, so a cut-short scan (about 944 requests on Podman before ADR 0039) fails",
+      "why": "the findings were the same on all four runs; the minimum is 90% of the fewest requests (3,442), so a cut-short scan (about 944 requests on Podman before ADR 0039) fails",
       "findings": [
         "10104 /assets",
         "10104 /assets/public"
       ],
-      "minRequests": 3098
+      "minRequests": 3097
     }
   },
   "notMetYet": [

@@ -1,6 +1,6 @@
 {
   "fixture": "OWASP/NodeGoat@c5cb68a7084e4ae7dcc60e6a98768720a81841e8",
-  "measured": "CI gate run 44834908813 on 2026-11-20 (ubuntu-latest): podman 5.7.0 rootless, cgroup v2, and docker 29.4.2 rootful, cgroup v2; both engines gave the same answer",
+  "measured": "CI gate runs 44834908813 and 44836476025 on 2026-11-20 (ubuntu-latest), each on podman 5.7.0 rootless, cgroup v2, and docker 29.4.2 rootful, cgroup v2: four runs, the same answer on all four unless a check says otherwise",
   "checks": {
     "backend-rules": {
       "status": "ran"
@@ -16,7 +16,8 @@
         "CKV2_GHA_1 .github/workflows/e2e-test.yml:1",
         "CKV2_GHA_1 .github/workflows/lint.yml:1",
         "CKV_DOCKER_2 Dockerfile:1"
-      ]
+      ],
+      "count": 3
     },
     "dotenv-gitignore": {
       "status": "ran"
@@ -28,7 +29,8 @@
         "generic-api-key config/env/development.js:6",
         "generic-api-key config/env/test.js:6",
         "private-key artifacts/cert/server.key:1"
-      ]
+      ],
+      "count": 3
     },
     "gitleaks-history": {
       "status": "ran",
@@ -37,7 +39,8 @@
         "generic-api-key config/env/development.js:6",
         "generic-api-key config/env/test.js:6",
         "private-key artifacts/cert/server.key:1"
-      ]
+      ],
+      "count": 3
     },
     "gosec": {
       "status": "skipped",
@@ -150,7 +153,8 @@
         "weak-password artifacts/db-reset.js:18",
         "weak-password artifacts/db-reset.js:27",
         "weak-password artifacts/db-reset.js:35"
-      ]
+      ],
+      "count": 3
     }
   }
 }

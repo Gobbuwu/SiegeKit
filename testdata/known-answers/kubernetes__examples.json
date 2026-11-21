@@ -1,6 +1,6 @@
 {
   "fixture": "kubernetes/examples@22934a040acbb0c0aa103023ccbd871507bf17f6",
-  "measured": "CI gate run 44834908813 on 2026-11-20 (ubuntu-latest): podman 5.7.0 rootless, cgroup v2, and docker 29.4.2 rootful, cgroup v2; both engines gave the same answer",
+  "measured": "CI gate runs 44834908813 and 44836476025 on 2026-11-20 (ubuntu-latest), each on podman 5.7.0 rootless, cgroup v2, and docker 29.4.2 rootful, cgroup v2: four runs, the same answer on all four unless a check says otherwise",
   "checks": {
     "backend-rules": {
       "status": "ran"
@@ -11,7 +11,8 @@
       "findings": [
         "B101 _archived/selenium/selenium-test.py:29",
         "B113 _archived/cluster-dns/images/frontend/client.py:36"
-      ]
+      ],
+      "count": 2
     },
     "checkov": {
       "status": "ran",
@@ -2593,14 +2594,16 @@
         "CKV_K8S_9 web/guestbook/legacy/redis-leader-controller.yaml:1",
         "CKV_K8S_9 web/guestbook/redis-follower-deployment.yaml:1",
         "CKV_K8S_9 web/guestbook/redis-leader-deployment.yaml:1"
-      ]
+      ],
+      "count": 2576
     },
     "dotenv-gitignore": {
       "status": "ran",
       "match": "exact",
       "findings": [
         "gitignore-missing-env .gitignore"
-      ]
+      ],
+      "count": 1
     },
     "gitleaks": {
       "status": "ran",
@@ -2624,7 +2627,8 @@
         "kubernetes-secret-yaml _archived/volumes/rbd/secret/ceph-secret.yaml:2",
         "kubernetes-secret-yaml _archived/volumes/scaleio/secret.yaml:2",
         "kubernetes-secret-yaml _archived/volumes/storageos/storageos-secret.yaml:2"
-      ]
+      ],
+      "count": 27
     },
     "gitleaks-history": {
       "status": "ran",
@@ -2648,7 +2652,8 @@
         "kubernetes-secret-yaml _archived/volumes/rbd/secret/ceph-secret.yaml:2",
         "kubernetes-secret-yaml _archived/volumes/scaleio/secret.yaml:2",
         "kubernetes-secret-yaml _archived/volumes/storageos/storageos-secret.yaml:2"
-      ]
+      ],
+      "count": 27
     },
     "gosec": {
       "status": "ran",
@@ -2663,7 +2668,8 @@
         "G114 _archived/explorer/explorer.go:75",
         "G304 _archived/https-nginx/make_secret.go:47",
         "G304 _archived/sharing-clusters/make_secret.go:41"
-      ]
+      ],
+      "count": 9
     },
     "trivy": {
       "status": "ran"
@@ -2679,7 +2685,8 @@
         "weak-password databases/cassandra/image/files/cassandra.yaml:913",
         "weak-password databases/cassandra/image/files/cassandra.yaml:987",
         "weak-password databases/cassandra/image/files/cassandra.yaml:989"
-      ]
+      ],
+      "count": 7
     }
   }
 }

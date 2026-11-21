@@ -1,6 +1,6 @@
 {
   "fixture": "pallets/flask@49943b5a94413a530761350f04e896f76e8d620e",
-  "measured": "CI gate run 44834908813 on 2026-11-20 (ubuntu-latest): podman 5.7.0 rootless, cgroup v2, and docker 29.4.2 rootful, cgroup v2; both engines gave the same answer",
+  "measured": "CI gate runs 44834908813 and 44836476025 on 2026-11-20 (ubuntu-latest), each on podman 5.7.0 rootless, cgroup v2, and docker 29.4.2 rootful, cgroup v2: four runs, the same answer on all four unless a check says otherwise",
   "checks": {
     "backend-rules": {
       "status": "ran"
@@ -1091,7 +1091,8 @@
         "B704 src/flask/json/tag.py:188",
         "B704 tests/test_templating.py:77",
         "B704 tests/test_templating.py:97"
-      ]
+      ],
+      "count": 1082
     },
     "checkov": {
       "status": "ran"
@@ -1101,7 +1102,8 @@
       "match": "exact",
       "findings": [
         "env-file-not-ignored tests/test_apps/.env"
-      ]
+      ],
+      "count": 1
     },
     "gitleaks": {
       "status": "ran",
@@ -1113,7 +1115,8 @@
         "generic-api-key docs/config.rst:578",
         "generic-api-key docs/config.rst:587",
         "generic-api-key docs/tutorial/deploy.rst:73"
-      ]
+      ],
+      "count": 6
     },
     "gitleaks-history": {
       "status": "ran",
@@ -1126,7 +1129,8 @@
         "generic-api-key docs/config.rst:578",
         "generic-api-key docs/config.rst:587",
         "generic-api-key docs/tutorial/deploy.rst:73"
-      ]
+      ],
+      "count": 7
     },
     "gosec": {
       "status": "skipped",

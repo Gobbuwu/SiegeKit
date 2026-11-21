@@ -121,6 +121,30 @@ func TestCompareByEngine(t *testing.T) {
 	}
 }
 
+func TestCompareByRuleAndUnstable(t *testing.T) {
+	a := answers()
+	a.Checks["zap-active"] = Check{Status: "ran", Match: Includes, ByRule: true, Findings: []string{"10104"}, Why: "crawl varies"}
+	a.Checks["gosec"] = Check{Status: "ran", Match: Exact, Findings: []string{"G104 x.go:1"}, Unstable: []string{"G401 main.go:3"}, Why: "taint rules vary"}
+	r := run("podman")
+	r.Findings[2].Location.URI = "http://127.0.0.1:3000/other/page"
+	res := Compare(a, r, "podman")
+	if len(res.Failures) > 0 {
+		t.Errorf("failures: %v", res.Failures)
+	}
+	if len(res.Unstable) != 1 || !strings.Contains(res.Unstable[0], "G401 main.go:3") {
+		t.Errorf("unstable = %v", res.Unstable)
+	}
+	// The unstable finding may also be absent; a stable one may not.
+	r.Findings = r.Findings[1:]
+	if res := Compare(a, r, "podman"); len(res.Failures) > 0 {
+		t.Errorf("unstable finding absent: %v", res.Failures)
+	}
+	r.Findings = nil
+	if res := Compare(a, r, "podman"); !slices.Contains(res.Failures, "gosec: missed G104 x.go:1") || !slices.Contains(res.Failures, "zap-active: missed 10104") {
+		t.Errorf("stable findings dropped: %v", res.Failures)
+	}
+}
+
 func TestLoadRejects(t *testing.T) {
 	for name, body := range map[string]string{
 		"unknown field":   `{"fixture":"f","measured":"m","checks":{"a":{"status":"ran"}},"extra":1}`,
@@ -132,6 +156,9 @@ func TestLoadRejects(t *testing.T) {
 		"engine no why":   `{"fixture":"f","measured":"m","checks":{"a":{"status":"ran","byEngine":{"docker":{"status":"ran"}}}}}`,
 		"unknown engine":  `{"fixture":"f","measured":"m","checks":{"a":{"status":"ran","why":"w","byEngine":{"lxc":{"status":"ran"}}}}}`,
 		"gap no check":    `{"fixture":"f","measured":"m","checks":{"a":{"status":"ran"}},"notMetYet":[{"check":"b","finding":"x","needs":"n","confirmed":"c"}]}`,
+		"unstable no why": `{"fixture":"f","measured":"m","checks":{"a":{"status":"ran","unstable":["x y"]}}}`,
+		"both":            `{"fixture":"f","measured":"m","checks":{"a":{"status":"ran","match":"exact","findings":["x y"],"unstable":["x y"],"why":"w"}}}`,
+		"count unstable":  `{"fixture":"f","measured":"m","checks":{"a":{"status":"ran","match":"exact","findings":["x y"],"count":1,"unstable":["z y"],"why":"w"}}}`,
 		"gap unconfirmed": `{"fixture":"f","measured":"m","checks":{"a":{"status":"ran"}},"notMetYet":[{"check":"a","finding":"x","needs":"n"}]}`,
 	} {
 		p := filepath.Join(t.TempDir(), "a.json")

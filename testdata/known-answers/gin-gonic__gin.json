@@ -1,6 +1,6 @@
 {
   "fixture": "gin-gonic/gin@0f09c3a9b4626d9fe9979cf4d0521d6ae32ab646",
-  "measured": "CI gate run 44834908813 on 2026-11-20 (ubuntu-latest): podman 5.7.0 rootless, cgroup v2, and docker 29.4.2 rootful, cgroup v2; both engines gave the same answer",
+  "measured": "CI gate runs 44834908813 and 44836476025 on 2026-11-20 (ubuntu-latest), each on podman 5.7.0 rootless, cgroup v2, and docker 29.4.2 rootful, cgroup v2: four runs, the same answer on all four unless a check says otherwise",
   "checks": {
     "backend-rules": {
       "status": "ran"
@@ -14,14 +14,16 @@
       "match": "exact",
       "findings": [
         "CKV2_GHA_1 .github/workflows/codeql.yml:22"
-      ]
+      ],
+      "count": 1
     },
     "dotenv-gitignore": {
       "status": "ran",
       "match": "exact",
       "findings": [
         "gitignore-missing-env .gitignore"
-      ]
+      ],
+      "count": 1
     },
     "gitleaks": {
       "status": "ran",
@@ -31,7 +33,8 @@
         "generic-api-key context_test.go:654",
         "generic-api-key context_test.go:662",
         "private-key testdata/certificate/key.pem:1"
-      ]
+      ],
+      "count": 4
     },
     "gitleaks-history": {
       "status": "ran",
@@ -41,7 +44,8 @@
         "generic-api-key context_test.go:654",
         "generic-api-key context_test.go:662",
         "private-key testdata/certificate/key.pem:1"
-      ]
+      ],
+      "count": 4
     },
     "gosec": {
       "status": "ran",
@@ -49,7 +53,8 @@
       "findings": [
         "G103 internal/bytesconv/bytesconv.go:14",
         "G103 internal/bytesconv/bytesconv.go:20"
-      ]
+      ],
+      "count": 4
     },
     "trivy": {
       "status": "ran",

@@ -1,6 +1,6 @@
 {
   "fixture": "pallets/click@08b803cf32ceb2ae6a772c62d5da42757a897d44",
-  "measured": "CI gate run 44834908813 on 2026-11-20 (ubuntu-latest): podman 5.7.0 rootless, cgroup v2, and docker 29.4.2 rootful, cgroup v2; both engines gave the same answer",
+  "measured": "CI gate runs 44834908813 and 44836476025 on 2026-11-20 (ubuntu-latest), each on podman 5.7.0 rootless, cgroup v2, and docker 29.4.2 rootful, cgroup v2: four runs, the same answer on all four unless a check says otherwise",
   "checks": {
     "backend-rules": {
       "status": "ran"
@@ -1569,7 +1569,8 @@
         "B603 tests/test_types/test_Path.py:28",
         "B606 src/click/_termui_impl.py:830",
         "B607 src/click/_termui_impl.py:854"
-      ]
+      ],
+      "count": 1561
     },
     "checkov": {
       "status": "ran"
@@ -1579,7 +1580,8 @@
       "match": "exact",
       "findings": [
         "gitignore-missing-env .gitignore"
-      ]
+      ],
+      "count": 1
     },
     "gitleaks": {
       "status": "ran"

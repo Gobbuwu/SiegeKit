@@ -1,6 +1,6 @@
 {
   "fixture": "juice-shop/juice-shop@266448aba68cd8ba5915f526a128da4fa7bc3f9f",
-  "measured": "CI gate run 44834908813 on 2026-11-20 (ubuntu-latest): podman 5.7.0 rootless, cgroup v2, and docker 29.4.2 rootful, cgroup v2; both engines gave the same answer",
+  "measured": "CI gate runs 44834908813 and 44836476025 on 2026-11-20 (ubuntu-latest), each on podman 5.7.0 rootless, cgroup v2, and docker 29.4.2 rootful, cgroup v2: four runs, the same answer on all four unless a check says otherwise",
   "checks": {
     "backend-rules": {
       "status": "ran"
@@ -143,14 +143,16 @@
         "CKV_DOCKER_7 Dockerfile:22",
         "CKV_DOCKER_7 test/smoke/Dockerfile:1",
         "CKV_OPENAPI_21 swagger.yml:44"
-      ]
+      ],
+      "count": 133
     },
     "dotenv-gitignore": {
       "status": "ran",
       "match": "exact",
       "findings": [
         "gitignore-missing-env .gitignore"
-      ]
+      ],
+      "count": 1
     },
     "gitleaks": {
       "status": "ran",
@@ -230,7 +232,8 @@
         "private-key infrastructure/terraform/networking.tf:171",
         "private-key lib/insecurity.ts:21",
         "private-key terraform/networking.tf:171"
-      ]
+      ],
+      "count": 75
     },
     "gitleaks-history": {
       "status": "ran",
@@ -310,7 +313,8 @@
         "private-key infrastructure/terraform/networking.tf:171",
         "private-key lib/insecurity.ts:21",
         "private-key terraform/networking.tf:171"
-      ]
+      ],
+      "count": 75
     },
     "gosec": {
       "status": "skipped",
@@ -328,7 +332,8 @@
         "weak-password data/static/users.yml:261",
         "weak-password data/static/users.yml:3",
         "weak-password data/static/users.yml:31"
-      ]
+      ],
+      "count": 5
     }
   }
 }

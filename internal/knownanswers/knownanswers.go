@@ -47,6 +47,15 @@ type Check struct {
 	Count       int      `json:"count,omitempty"`       // Exact: the plugin's own finding count (two findings can share a key)
 	MinRequests int      `json:"minRequests,omitempty"` // URL checks: requests a complete run sends at least
 	Why         string   `json:"why,omitempty"`         // how the answer was set, when not obvious
+	// ByRule compares rule IDs instead of keys: Findings lists the rules
+	// that must be reported at least once. For crawlers, whose pages vary
+	// from run to run while the rules they report do not.
+	ByRule bool `json:"byRule,omitempty"`
+	// Unstable lists findings that came and went between identical runs,
+	// with the cause in Why. They are neither required nor new, and each
+	// run prints them: an unexplained difference is a finding to fix
+	// (ADR 0038), not a pass.
+	Unstable []string `json:"unstable,omitempty"`
 	// ByEngine replaces this answer on one engine, for a difference between
 	// engines that is explained in Why. An unexplained one is a finding
 	// (ADR 0038), not an override.
@@ -125,8 +134,16 @@ func (c Check) validate() error {
 	default:
 		return fmt.Errorf("match %q", c.Match)
 	}
-	if c.Count > 0 && c.Match != Exact {
-		return fmt.Errorf("count needs match exact")
+	if c.Count > 0 && (c.Match != Exact || len(c.Unstable) > 0 || c.ByRule) {
+		return fmt.Errorf("count needs match exact, by key, with no unstable findings")
+	}
+	if (c.ByRule || len(c.Unstable) > 0) && c.Why == "" {
+		return fmt.Errorf("byRule and unstable need a why")
+	}
+	for _, k := range c.Unstable {
+		if slices.Contains(c.Findings, k) {
+			return fmt.Errorf("%q is both required and unstable", k)
+		}
 	}
 	if c.Status == string(report.Skipped) && (c.Match != "" || c.MinRequests > 0 || c.Reason == "") {
 		return fmt.Errorf("a skipped check has a reason and no findings or requests")
@@ -187,6 +204,7 @@ func Observe(r *report.Run) map[string]Observed {
 type Result struct {
 	Failures  []string // each fails the run
 	NotMetYet []string // printed every run
+	Unstable  []string // printed every run
 }
 
 // Compare checks the report r, from a run on engine, against a.
@@ -219,6 +237,9 @@ func Compare(a *Answers, r *report.Run, engine string) Result {
 			continue
 		}
 		res.Failures = append(res.Failures, compareCheck(id, want, got)...)
+		if len(want.Unstable) > 0 {
+			res.Unstable = append(res.Unstable, fmt.Sprintf("%s: %d findings vary between identical runs, not compared (%s): %s", id, len(want.Unstable), want.Why, strings.Join(want.Unstable, ", ")))
+		}
 	}
 	for _, g := range a.NotMetYet {
 		if slices.Contains(obs[g.Check].Findings, g.Finding) {
@@ -242,20 +263,24 @@ func compareCheck(id string, want Check, got Observed) []string {
 	if got.Requests < want.MinRequests {
 		fails = append(fails, fmt.Sprintf("%s: sent %d requests, a complete run sends at least %d", id, got.Requests, want.MinRequests))
 	}
+	have := got.Findings
+	if want.ByRule {
+		have = rules(have)
+	}
 	var missing, extra []string
 	for _, k := range want.Findings {
-		if !slices.Contains(got.Findings, k) {
+		if !slices.Contains(have, k) {
 			missing = append(missing, k)
 		}
 	}
 	if want.Match == Exact || want.Match == "" {
-		for _, k := range got.Findings {
-			if !slices.Contains(want.Findings, k) {
+		for _, k := range have {
+			if !slices.Contains(want.Findings, k) && !slices.Contains(want.Unstable, k) {
 				extra = append(extra, k)
 			}
 		}
 	}
-	if want.Match == Exact && want.Count > 0 && got.Count != want.Count {
+	if want.Count > 0 && got.Count != want.Count {
 		fails = append(fails, fmt.Sprintf("%s: %d findings, known answer is %d", id, got.Count, want.Count))
 	}
 	for _, k := range missing {
@@ -265,6 +290,19 @@ func compareCheck(id string, want Check, got Observed) []string {
 		fails = append(fails, fmt.Sprintf("%s: new finding %s, not in the known answer", id, k))
 	}
 	return fails
+}
+
+// rules returns the sorted, unique rule IDs of keys.
+func rules(keys []string) []string {
+	var out []string
+	for _, k := range keys {
+		r, _, _ := strings.Cut(k, " ")
+		if !slices.Contains(out, r) {
+			out = append(out, r)
+		}
+	}
+	sort.Strings(out)
+	return out
 }
 
 // AnswerFrom writes what r shows as an answer file, for a person to review
@@ -284,14 +322,18 @@ func AnswerFrom(fixture, measured string, r *report.Run, old *Answers) *Answers 
 		}
 		if old != nil {
 			if prev, ok := old.Checks[id]; ok {
-				c.Why, c.ByEngine = prev.Why, prev.ByEngine
+				c.Why, c.ByEngine, c.ByRule, c.Unstable = prev.Why, prev.ByEngine, prev.ByRule, prev.Unstable
+				if c.ByRule {
+					c.Findings = rules(c.Findings)
+				}
+				c.Findings = slices.DeleteFunc(c.Findings, func(k string) bool { return slices.Contains(c.Unstable, k) })
 				if prev.Reason != "" && strings.Contains(o.Reason, prev.Reason) {
 					c.Reason = prev.Reason
 				}
 				if prev.Match != "" && len(o.Findings) > 0 {
 					c.Match = prev.Match
 				}
-				if c.Match != Exact {
+				if c.Match != Exact || c.ByRule || len(c.Unstable) > 0 {
 					c.Count = 0
 				}
 				c.MinRequests = prev.MinRequests

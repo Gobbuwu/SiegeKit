@@ -1,6 +1,6 @@
 {
   "fixture": "vercel/nextjs-subscription-payments@bdd0813206e47e6b218d42f15a7976c8a0d3c3eb",
-  "measured": "CI gate run 44834908813 on 2026-11-20 (ubuntu-latest): podman 5.7.0 rootless, cgroup v2, and docker 29.4.2 rootful, cgroup v2; both engines gave the same answer",
+  "measured": "CI gate runs 44834908813 and 44836476025 on 2026-11-20 (ubuntu-latest), each on podman 5.7.0 rootless, cgroup v2, and docker 29.4.2 rootful, cgroup v2: four runs, the same answer on all four unless a check says otherwise",
   "checks": {
     "backend-rules": {
       "status": "ran"
@@ -17,14 +17,16 @@
       "match": "exact",
       "findings": [
         "env-file-not-ignored .env.local.example"
-      ]
+      ],
+      "count": 1
     },
     "gitleaks": {
       "status": "ran",
       "match": "exact",
       "findings": [
         "jwt .env.local.example:4"
-      ]
+      ],
+      "count": 1
     },
     "gitleaks-history": {
       "status": "ran",
@@ -32,7 +34,8 @@
       "findings": [
         "env-file-committed .env.local.example",
         "jwt .env.local.example:4"
-      ]
+      ],
+      "count": 2
     },
     "gosec": {
       "status": "skipped",

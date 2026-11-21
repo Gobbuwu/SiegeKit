@@ -67,6 +67,9 @@ func run(answersPath, reportPath, observedPath string) error {
 	for _, g := range res.NotMetYet {
 		fmt.Println("  not met yet:", g)
 	}
+	for _, u := range res.Unstable {
+		fmt.Println("  unstable:", u)
+	}
 	for _, f := range res.Failures {
 		fmt.Println("  FAIL", f)
 	}
