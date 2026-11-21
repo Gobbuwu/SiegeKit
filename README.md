@@ -6,7 +6,7 @@ SiegeKit is a free, local, open-source tool that runs security tests against sof
 
 ## Try the preview
 
-You need Go 1.26 or later and Docker or Podman.
+You need Go 1.26 or later and Docker or Podman. When both are installed SiegeKit uses Podman; set `SIEGEKIT_ENGINE=docker` (or `podman`) to choose. Both get the same sandbox (ADR 0039).
 
 ```sh
 CGO_ENABLED=0 go build -o siegekit ./cmd/siegekit   # a static binary (needed for active tests)

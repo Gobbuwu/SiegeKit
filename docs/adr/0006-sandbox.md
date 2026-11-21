@@ -2,7 +2,7 @@
 
 - Status: Accepted
 - Date: 2026-11-18
-- Amended by: [0014](0014-offline-tool-data.md) (network for data updates), [0015](0015-built-in-checks.md) (read-only built-in checks in-process), [0016](0016-dependency-consent.md) (images pulled only after consent), [0018](0018-egress-proxy.md) (egress proxy design), [0019](0019-egress-relay.md) (relay with no network instead of an internal network)
+- Amended by: [0014](0014-offline-tool-data.md) (network for data updates), [0015](0015-built-in-checks.md) (read-only built-in checks in-process), [0016](0016-dependency-consent.md) (images pulled only after consent), [0018](0018-egress-proxy.md) (egress proxy design), [0019](0019-egress-relay.md) (relay with no network instead of an internal network), [0038](0038-run-environment.md) (the engine is recorded), [0039](0039-known-answers-and-engine-parity.md) (the same filesystem on both engines, `SIEGEKIT_ENGINE`)
 
 ## Context
 
@@ -12,7 +12,7 @@ SiegeKit runs third-party tools against untrusted input: source code that may co
 
 Every plugin runs in its own short-lived container:
 
-- **Engine:** Docker or Podman, detected at start (Podman first when both are installed). Rootless mode is recommended and shown as a warning when not used; the warning is not built yet (see the M2 plan). Every report names the engine, rootless or not, and the cgroup version ([ADR 0038](0038-run-environment.md)). On macOS the engine's Linux VM is used.
+- **Engine:** Docker or Podman, detected at start (Podman first when both are installed; `SIEGEKIT_ENGINE=docker` or `podman` picks one). Both engines get the same filesystem: `noexec` on `/tmp` and `/dev/shm`, and on Podman `--read-only-tmpfs=false`, so `/run` and `/var/tmp` stay read-only as on Docker ([ADR 0039](0039-known-answers-and-engine-parity.md)). Rootless mode is recommended and shown as a warning when not used; the warning is not built yet (see the M2 plan). Every report names the engine, rootless or not, and the cgroup version ([ADR 0038](0038-run-environment.md)). On macOS the engine's Linux VM is used.
 - **Filesystem:** the target is mounted read-only; only a per-run output directory is writable. No home directory, SSH keys, cloud credentials or container-engine socket are mounted.
 - **Privileges:** runs as a non-root user inside the container, all Linux capabilities dropped, `no-new-privileges` set, read-only root filesystem where the tool allows it.
 - **Resources:** CPU, memory and process-count limits from the manifest; wall-clock timeout enforced by SiegeKit, which kills the container on expiry.
