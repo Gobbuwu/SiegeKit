@@ -430,9 +430,6 @@ func TestWriteCheck(t *testing.T) {
 	if !slices.Equal(got, want) {
 		t.Errorf("findings %v, want %v", got, want)
 	}
-	if c := CountWrites(res); c != (WriteCounts{Cross: 3}) {
-		t.Errorf("count %+v", c)
-	}
 	for _, s := range *seen {
 		if strings.Contains(s, "/logout") || strings.HasPrefix(s, "POST /api/notes") && strings.HasSuffix(s, "bob") {
 			t.Errorf("sent %q", s)

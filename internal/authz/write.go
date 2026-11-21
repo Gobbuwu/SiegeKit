@@ -1114,25 +1114,6 @@ func uniqueWrites(rs []WriteReplay) map[string]bool {
 	return m
 }
 
-// WriteCounts are how many replays each rule reported.
-type WriteCounts struct{ Cross, NoLogin int }
-
-// CountWrites counts the reported replays per rule.
-func CountWrites(res WriteResult) WriteCounts {
-	var c WriteCounts
-	for _, r := range res.Replays {
-		if _, ok := r.Severity(); !ok {
-			continue
-		}
-		if r.Who == AsB {
-			c.Cross++
-		} else {
-			c.NoLogin++
-		}
-	}
-	return c
-}
-
 // csrfValue returns A's recorded CSRF token: a CSRF-named header's value,
 // or a CSRF-named form, multipart or JSON field's value.
 func csrfValue(w Write) string {
