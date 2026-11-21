@@ -5,7 +5,8 @@
 // does, while a request with no login is refused, is reported as data B can
 // likely read. One whose answer comes back to a request with no login,
 // holding A's login name, is reported as data anyone can read. It sends no
-// other method, so it changes nothing.
+// other method. A GET can still change data, so GETs whose URL names an
+// action (change, save, delete...) are not replayed (ADR 0048).
 package authz
 
 import (
@@ -83,6 +84,10 @@ type HAR struct {
 	Duplicate   int
 	OverLimit   int // past MaxRequests
 	FromSpec    int // added from the OpenAPI spec by AddSpecRoutes
+	// Action counts GETs and HEADs not replayed because their URL names an
+	// action (ADR 0048); ActionPaths holds the first few, without query.
+	Action      int
+	ActionPaths []string
 	// Recorded holds the recording's GET, HEAD, POST, PUT, PATCH and
 	// DELETE requests to the target's origin, bodies included and static
 	// files left out, for ZAP's attack scan (ADR 0047). This check
@@ -193,6 +198,10 @@ func ParseHAR(data []byte, t *target.URL) (*HAR, error) {
 			continue
 		}
 		seen[method+" "+p] = true
+		if ActionReason(p) != "" {
+			h.addAction(p)
+			continue
+		}
 		if len(h.Requests) == MaxRequests {
 			h.OverLimit++
 			continue
@@ -203,6 +212,19 @@ func ParseHAR(data []byte, t *target.URL) (*HAR, error) {
 		return nil, fmt.Errorf("the HAR file has no request to %s other than static files", t.Origin())
 	}
 	return h, nil
+}
+
+// maxActionPaths is how many skipped action paths the report names.
+const maxActionPaths = 5
+
+// addAction counts a request not replayed because its URL names an action,
+// keeping its path without the query: a query can hold a password.
+func (h *HAR) addAction(p string) {
+	h.Action++
+	if len(h.ActionPaths) < maxActionPaths {
+		pathOnly, _, _ := strings.Cut(p, "?")
+		h.ActionPaths = append(h.ActionPaths, pathOnly)
+	}
 }
 
 // replayHeaders keeps the recorded headers that a replay may send.
@@ -304,6 +326,10 @@ func (h *HAR) AddSpecRoutes(routes []string, base string) {
 			continue
 		}
 		seen["GET "+p] = true
+		if ActionReason(p) != "" {
+			h.addAction(p)
+			continue
+		}
 		if len(h.Requests) == MaxRequests {
 			h.OverLimit++
 			continue
@@ -387,7 +413,9 @@ var (
 
 // Check replays the requests one at a time, at most rate per second. b is
 // account B's session, nil to test only requests with no login. cfg must
-// be read-only: only GET and HEAD are sent.
+// be read-only: only GET and HEAD are sent. A request whose URL names an
+// action (ActionReason) is refused: ParseHAR and AddSpecRoutes leave them
+// out (ADR 0048).
 func Check(ctx context.Context, cfg egress.Config, reqs []Request, b http.Header, rate float64) (Result, error) {
 	if !cfg.ReadOnly {
 		return Result{}, errors.New("the access-control check sends only GET and HEAD: pass a read-only configuration")
@@ -395,6 +423,12 @@ func Check(ctx context.Context, cfg egress.Config, reqs []Request, b http.Header
 	var interval time.Duration
 	if rate > 0 {
 		interval = time.Duration(float64(time.Second) / rate)
+	}
+	for _, r := range reqs {
+		if why := ActionReason(r.Path); why != "" {
+			pathOnly, _, _ := strings.Cut(r.Path, "?")
+			return Result{}, fmt.Errorf("%s is not replayed: %s, and a GET can change data (ADR 0048)", pathOnly, why)
+		}
 	}
 	res := Result{BTested: b != nil}
 	var last time.Time
@@ -586,6 +620,7 @@ func (r Result) Summary(h *HAR, loginName string, c Counts) string {
 			what string
 		}{
 			{h.Static, "static files"}, {h.OtherMethod, "not GET or HEAD"}, {h.OtherOrigin, "on another origin"}, {h.BadPath, "with a path that does not start with a single /"},
+			{h.Action, "naming an action that can change data, such as change, save or delete (ADR 0048)" + actionList(h)},
 			{h.Duplicate, "duplicates"}, {h.OverLimit, fmt.Sprintf("over the %d-request limit", MaxRequests)},
 		} {
 			if x.n > 0 {
@@ -597,6 +632,18 @@ func (r Result) Summary(h *HAR, loginName string, c Counts) string {
 		s += "; " + strings.Join(notes, "; ")
 	}
 	return s
+}
+
+// actionList names the first skipped action paths, for the summary.
+func actionList(h *HAR) string {
+	if len(h.ActionPaths) == 0 {
+		return ""
+	}
+	s := " (" + strings.Join(h.ActionPaths, ", ")
+	if h.Action > len(h.ActionPaths) {
+		s += fmt.Sprintf(" and %d more", h.Action-len(h.ActionPaths))
+	}
+	return s + ")"
 }
 
 var reID = regexp.MustCompile(`^(?:\d+|[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}|[0-9a-fA-F]{16,})$`)

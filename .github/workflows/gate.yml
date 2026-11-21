@@ -7,17 +7,17 @@ on:
   workflow_dispatch:
   schedule:
     - cron: "17 4 * * 1" # Mondays 04:17 UTC
-  # Also on changes that most affect how real repositories are scanned.
+  # Also on every change to code the gate runs. A list of packages missed
+  # internal/authz, so #58 changed what access-control replays without the
+  # Juice Shop gate running (2026-11-21); all Go code is listed instead.
   pull_request:
     paths:
       - .github/workflows/gate.yml
       - plugins/**
-      - internal/runner/**
-      - internal/sandbox/**
-      - internal/checks/**
-      - internal/egress/**
-      - internal/relay/**
-      - internal/knownanswers/**
+      - cmd/**
+      - internal/**
+      - go.mod
+      - go.sum
       - testdata/known-answers/**
 
 # Read-only (ADR 0008).
