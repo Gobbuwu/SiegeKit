@@ -1,0 +1,128 @@
+{
+  "fixture": "go-chi/chi@c64ed7d6635f33a8b2feaff7dcfa55677023ac7d",
+  "measured": "CI gate runs 44834908813 and 44836476025 on 2026-11-20 (ubuntu-latest), each on podman 5.7.0 rootless, cgroup v2, and docker 29.4.2 rootful, cgroup v2: four runs, the same answer on all four unless a check says otherwise",
+  "checks": {
+    "backend-rules": {
+      "status": "ran"
+    },
+    "bandit": {
+      "status": "skipped",
+      "reason": "no files matching *.py, *.pyw"
+    },
+    "checkov": {
+      "status": "ran",
+      "match": "exact",
+      "findings": [
+        "CKV2_GHA_1 .github/workflows/ci.yml:1"
+      ],
+      "count": 1
+    },
+    "dotenv-gitignore": {
+      "status": "ran",
+      "match": "exact",
+      "findings": [
+        "gitignore-missing-env .gitignore"
+      ],
+      "count": 1
+    },
+    "gitleaks": {
+      "status": "ran",
+      "match": "exact",
+      "findings": [
+        "private-key testdata/key.pem:1"
+      ],
+      "count": 1
+    },
+    "gitleaks-history": {
+      "status": "ran",
+      "match": "exact",
+      "findings": [
+        "private-key testdata/key.pem:1"
+      ],
+      "count": 1
+    },
+    "gosec": {
+      "status": "ran",
+      "match": "exact",
+      "findings": [
+        "G104 _examples/custom-handler/main.go:16",
+        "G104 _examples/custom-handler/main.go:23",
+        "G104 _examples/custom-handler/main.go:33",
+        "G104 _examples/custom-method/main.go:21",
+        "G104 _examples/custom-method/main.go:24",
+        "G104 _examples/custom-method/main.go:27",
+        "G104 _examples/custom-method/main.go:30",
+        "G104 _examples/custom-method/main.go:32",
+        "G104 _examples/fileserver/main.go:34",
+        "G104 _examples/fileserver/main.go:43",
+        "G104 _examples/graceful/main.go:52",
+        "G104 _examples/graceful/main.go:65",
+        "G104 _examples/hello-world/main.go:17",
+        "G104 _examples/hello-world/main.go:20",
+        "G104 _examples/limits/main.go:29",
+        "G104 _examples/limits/main.go:33",
+        "G104 _examples/limits/main.go:59",
+        "G104 _examples/limits/main.go:77",
+        "G104 _examples/limits/main.go:79",
+        "G104 _examples/limits/main.go:87",
+        "G104 _examples/limits/main.go:91",
+        "G104 _examples/pathvalue/main.go:16",
+        "G104 _examples/pathvalue/main.go:24",
+        "G104 _examples/router-walk/main.go:14",
+        "G104 _examples/router-walk/main.go:19",
+        "G104 _examples/router-walk/main.go:22",
+        "G104 _examples/router-walk/main.go:41",
+        "G104 _examples/todos-resource/main.go:23",
+        "G104 _examples/todos-resource/main.go:29",
+        "G104 _examples/todos-resource/todos.go:32",
+        "G104 _examples/todos-resource/todos.go:36",
+        "G104 _examples/todos-resource/todos.go:40",
+        "G104 _examples/todos-resource/todos.go:44",
+        "G104 _examples/todos-resource/todos.go:48",
+        "G104 _examples/todos-resource/todos.go:52",
+        "G104 _examples/todos-resource/users.go:31",
+        "G104 _examples/todos-resource/users.go:35",
+        "G104 _examples/todos-resource/users.go:39",
+        "G104 _examples/todos-resource/users.go:43",
+        "G104 _examples/todos-resource/users.go:47",
+        "G104 middleware/compress.go:364",
+        "G104 middleware/heartbeat.go:18",
+        "G104 middleware/recoverer.go:66",
+        "G104 middleware/recoverer.go:69",
+        "G104 middleware/terminal.go:57",
+        "G104 middleware/terminal.go:61",
+        "G104 mux.go:538",
+        "G112 _examples/graceful/main.go:19",
+        "G114 _examples/custom-handler/main.go:23",
+        "G114 _examples/custom-method/main.go:32",
+        "G114 _examples/fileserver/main.go:43",
+        "G114 _examples/hello-world/main.go:20",
+        "G114 _examples/limits/main.go:91",
+        "G114 _examples/pathvalue/main.go:16",
+        "G114 _examples/todos-resource/main.go:29",
+        "G404 _examples/limits/main.go:49"
+      ],
+      "unstable": [
+        "G705 _examples/pathvalue/main.go:24",
+        "G710 middleware/profiler.go:27",
+        "G710 middleware/profiler.go:30",
+        "G710 middleware/strip.go:62"
+      ],
+      "why": "gosec 2.30.0's taint rules (G7xx) reported 4, 4, 3 and 1 of these on four identical CI runs; 20 local runs of the same version on the same commit, also without module downloads, gave all 4 every time. Cause not found yet: an M2 known gap"
+    },
+    "trivy": {
+      "status": "ran",
+      "match": "includes",
+      "findings": [
+        "CVE-2025-71405 _examples/versions/go.mod:1",
+        "CVE-2026-114437 _examples/rest/go.mod:1",
+        "CVE-2026-114437 _examples/versions/go.mod:1",
+        "GHSA-3fxj-6jh8-hvhx _examples/rest/go.mod:1"
+      ],
+      "why": "trivy's advisory data is downloaded at run time (--update), so new advisories can add findings; the measured ones must stay"
+    },
+    "weak-passwords": {
+      "status": "ran"
+    }
+  }
+}

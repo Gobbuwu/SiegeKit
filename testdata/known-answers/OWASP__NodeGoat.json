@@ -1,0 +1,160 @@
+{
+  "fixture": "OWASP/NodeGoat@c5cb68a7084e4ae7dcc60e6a98768720a81841e8",
+  "measured": "CI gate runs 44834908813 and 44836476025 on 2026-11-20 (ubuntu-latest), each on podman 5.7.0 rootless, cgroup v2, and docker 29.4.2 rootful, cgroup v2: four runs, the same answer on all four unless a check says otherwise",
+  "checks": {
+    "backend-rules": {
+      "status": "ran"
+    },
+    "bandit": {
+      "status": "skipped",
+      "reason": "no files matching *.py, *.pyw"
+    },
+    "checkov": {
+      "status": "ran",
+      "match": "exact",
+      "findings": [
+        "CKV2_GHA_1 .github/workflows/e2e-test.yml:1",
+        "CKV2_GHA_1 .github/workflows/lint.yml:1",
+        "CKV_DOCKER_2 Dockerfile:1"
+      ],
+      "count": 3
+    },
+    "dotenv-gitignore": {
+      "status": "ran"
+    },
+    "gitleaks": {
+      "status": "ran",
+      "match": "exact",
+      "findings": [
+        "generic-api-key config/env/development.js:6",
+        "generic-api-key config/env/test.js:6",
+        "private-key artifacts/cert/server.key:1"
+      ],
+      "count": 3
+    },
+    "gitleaks-history": {
+      "status": "ran",
+      "match": "exact",
+      "findings": [
+        "generic-api-key config/env/development.js:6",
+        "generic-api-key config/env/test.js:6",
+        "private-key artifacts/cert/server.key:1"
+      ],
+      "count": 3
+    },
+    "gosec": {
+      "status": "skipped",
+      "reason": "no files matching *.go"
+    },
+    "trivy": {
+      "status": "ran",
+      "match": "includes",
+      "findings": [
+        "CVE-2015-8858 package-lock.json:14372",
+        "CVE-2016-10531 package-lock.json:6742",
+        "CVE-2017-1000427 package-lock.json:6742",
+        "CVE-2017-16114 package-lock.json:6742",
+        "CVE-2017-16137 package-lock.json:1384",
+        "CVE-2017-16137 package-lock.json:3387",
+        "CVE-2017-20162 package-lock.json:1406",
+        "CVE-2017-20165 package-lock.json:1384",
+        "CVE-2018-25110 package-lock.json:6742",
+        "CVE-2019-10746 package-lock.json:6881",
+        "CVE-2019-10747 package-lock.json:13352",
+        "CVE-2019-10747 package-lock.json:14498",
+        "CVE-2019-20149 package-lock.json:554",
+        "CVE-2019-2391 package-lock.json:897",
+        "CVE-2020-7598 package-lock.json:1524",
+        "CVE-2020-7598 package-lock.json:3553",
+        "CVE-2020-7598 package-lock.json:6876",
+        "CVE-2020-7610 package-lock.json:897",
+        "CVE-2020-7774 package-lock.json:11898",
+        "CVE-2020-7788 package-lock.json:3514",
+        "CVE-2021-23358 package-lock.json:14445",
+        "CVE-2021-23440 package-lock.json:13352",
+        "CVE-2021-23440 package-lock.json:14498",
+        "CVE-2021-32803 package-lock.json:3876",
+        "CVE-2021-32804 package-lock.json:3876",
+        "CVE-2021-37701 package-lock.json:3876",
+        "CVE-2021-37712 package-lock.json:3876",
+        "CVE-2021-37713 package-lock.json:3876",
+        "CVE-2021-3820 package-lock.json:5124",
+        "CVE-2021-44906 package-lock.json:12596",
+        "CVE-2021-44906 package-lock.json:1524",
+        "CVE-2021-44906 package-lock.json:3553",
+        "CVE-2021-44906 package-lock.json:6876",
+        "CVE-2022-21680 package-lock.json:6742",
+        "CVE-2022-21681 package-lock.json:6742",
+        "CVE-2022-21803 package-lock.json:7144",
+        "CVE-2022-21803 package-lock.json:838",
+        "CVE-2022-24999 package-lock.json:12723",
+        "CVE-2022-25883 package-lock.json:13262",
+        "CVE-2022-25883 package-lock.json:3811",
+        "CVE-2022-3517 package-lock.json:3541",
+        "CVE-2022-38900 package-lock.json:2072",
+        "CVE-2023-25345 package-lock.json:14000",
+        "CVE-2023-45311 package-lock.json:3286",
+        "CVE-2024-28863 package-lock.json:3876",
+        "CVE-2024-29041 package-lock.json:2684",
+        "CVE-2024-4067 package-lock.json:6332",
+        "CVE-2024-4068 package-lock.json:774",
+        "CVE-2024-43796 package-lock.json:2684",
+        "CVE-2024-43799 package-lock.json:13282",
+        "CVE-2024-43800 package-lock.json:13338",
+        "CVE-2024-45296 package-lock.json:12485",
+        "CVE-2024-45590 package-lock.json:637",
+        "CVE-2024-47764 package-lock.json:1466",
+        "CVE-2024-52798 package-lock.json:12485",
+        "CVE-2025-15284 package-lock.json:12723",
+        "CVE-2025-5889 package-lock.json:765",
+        "CVE-2025-7339 package-lock.json:12166",
+        "CVE-2026-102276 package-lock.json:765",
+        "CVE-2026-102277 package-lock.json:765",
+        "CVE-2026-102278 package-lock.json:765",
+        "CVE-2026-111181 package-lock.json:637",
+        "CVE-2026-118664 package-lock.json:2072",
+        "CVE-2026-12590 package-lock.json:637",
+        "CVE-2026-13149 package-lock.json:765",
+        "CVE-2026-14257 package-lock.json:765",
+        "CVE-2026-23745 package-lock.json:3876",
+        "CVE-2026-23950 package-lock.json:3876",
+        "CVE-2026-24842 package-lock.json:3876",
+        "CVE-2026-26960 package-lock.json:3876",
+        "CVE-2026-26996 package-lock.json:3541",
+        "CVE-2026-27601 package-lock.json:14445",
+        "CVE-2026-27903 package-lock.json:3541",
+        "CVE-2026-27904 package-lock.json:3541",
+        "CVE-2026-29786 package-lock.json:3876",
+        "CVE-2026-31802 package-lock.json:3876",
+        "CVE-2026-33750 package-lock.json:765",
+        "CVE-2026-45822 package-lock.json:2072",
+        "CVE-2026-4867 package-lock.json:12485",
+        "CVE-2026-53655 package-lock.json:3876",
+        "CVE-2026-59871 package-lock.json:3876",
+        "CVE-2026-59873 package-lock.json:3876",
+        "CVE-2026-59874 package-lock.json:3876",
+        "CVE-2026-59875 package-lock.json:3876",
+        "CVE-2026-69152 package-lock.json:765",
+        "CVE-2026-73566 package-lock.json:3876",
+        "CVE-2026-82417 package-lock.json:12723",
+        "CVE-2026-90711 package-lock.json:12648",
+        "GHSA-c3m8-x3cg-qm2c package-lock.json:4986",
+        "GHSA-mh5c-679w-hh4r package-lock.json:7034",
+        "NSWG-ECO-101 package-lock.json:6742",
+        "NSWG-ECO-445 package-lock.json:14704",
+        "NSWG-ECO-445 package-lock.json:865"
+      ],
+      "why": "trivy's advisory data is downloaded at run time (--update), so new advisories can add findings; the measured ones must stay"
+    },
+    "weak-passwords": {
+      "status": "ran",
+      "match": "exact",
+      "findings": [
+        "weak-password artifacts/db-reset.js:18",
+        "weak-password artifacts/db-reset.js:27",
+        "weak-password artifacts/db-reset.js:35"
+      ],
+      "count": 3
+    }
+  }
+}

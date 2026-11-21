@@ -80,7 +80,7 @@ func TestEngineArgsData(t *testing.T) {
 	u.TmpMiB = 64
 	args, _ = u.EngineArgs("n", 1000, 1000)
 	joined = strings.Join(args, " ")
-	for _, want := range []string{"--cap-drop ALL", "--read-only", "--user 1000:1000", "target=/tmp/tool/db", "/tmp:rw,nosuid,nodev,size=64m"} {
+	for _, want := range []string{"--cap-drop ALL", "--read-only", "--user 1000:1000", "target=/tmp/tool/db", "/tmp:rw,nosuid,nodev,noexec,size=64m"} {
 		if !strings.Contains(joined, want) {
 			t.Errorf("update run missing %q: %s", want, joined)
 		}
@@ -709,5 +709,86 @@ func TestDescribe(t *testing.T) {
 		if got != want {
 			t.Errorf("engine is %q, expected %q", got, want)
 		}
+	}
+}
+
+// TestSameSandboxOnEveryEngine checks what a tool may write and run, and
+// that the answer does not depend on the engine (ADR 0039). Docker adds
+// noexec to --tmpfs and Podman does not; with --read-only, Podman also
+// mounts writable /run and /var/tmp. CI runs this on both engines.
+func TestSameSandboxOnEveryEngine(t *testing.T) {
+	e := engine(t)
+	script := `
+probe() { if (eval "$2") >/dev/null 2>&1; then echo "$1=yes"; else echo "$1=no"; fi; }
+probe write-root 'echo x > /x'
+probe write-etc 'echo x > /etc/x'
+probe write-run 'echo x > /run/x'
+probe write-var-tmp 'echo x > /var/tmp/x'
+probe write-target 'echo x > /target/x'
+probe write-out 'echo x > /out/x'
+probe write-tmp 'echo x > /tmp/x'
+probe exec-tmp 'cp /bin/busybox /tmp/bb && /tmp/bb true'
+probe write-dev-shm 'echo x > /dev/shm/x'
+probe exec-dev-shm 'cp /bin/busybox /dev/shm/bb && /dev/shm/bb true'
+grep -E ' /(tmp|run|var/tmp|dev/shm) ' /proc/mounts | sed 's/^/mount: /'
+`
+	r := run(t, e, spec(t, "sh", "-c", script))
+	if r.Status != Completed || r.ExitCode != 0 {
+		t.Fatalf("status %s exit %d: %s", r.Status, r.ExitCode, r.Stderr)
+	}
+	t.Logf("container output (%s):\n%s", e.Bin, r.Stderr)
+	want := []string{
+		"write-root=no", "write-etc=no", "write-run=no", "write-var-tmp=no", "write-target=no",
+		"write-out=yes", "write-tmp=yes", "exec-tmp=no", "write-dev-shm=yes", "exec-dev-shm=no",
+	}
+	for _, w := range want {
+		if !strings.Contains(r.Stderr, w+"\n") {
+			t.Errorf("want %s; container output:\n%s", w, r.Stderr)
+		}
+	}
+}
+
+func TestSameOnEveryEngineArgs(t *testing.T) {
+	args := []string{"run", "--read-only", "--tmpfs", "/tmp:rw"}
+	if got := (&Engine{}).sameOnEveryEngine(slices.Clone(args)); !slices.Equal(got, args) {
+		t.Errorf("Docker args changed: %v", got)
+	}
+	got := (&Engine{Podman: true}).sameOnEveryEngine(slices.Clone(args))
+	if want := []string{"run", "--read-only", "--read-only-tmpfs=false", "--tmpfs", "/tmp:rw"}; !slices.Equal(got, want) {
+		t.Errorf("Podman args = %v, want %v", got, want)
+	}
+	s := spec(t, "true")
+	a, err := s.EngineArgs("n", 1000, 1000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.ContainsFunc(a, func(x string) bool { return strings.HasPrefix(x, "/tmp:") && strings.Contains(x, ",noexec,") }) {
+		t.Errorf("/tmp is not mounted noexec: %v", a)
+	}
+}
+
+func TestDetectEngineEnv(t *testing.T) {
+	t.Setenv(EngineEnv, "lxc")
+	if _, err := Detect(); err == nil || !strings.Contains(err.Error(), "must be") {
+		t.Errorf("Detect with %s=lxc: %v", EngineEnv, err)
+	}
+	dir := t.TempDir()
+	t.Setenv("PATH", dir)
+	t.Setenv(EngineEnv, "podman")
+	if _, err := Detect(); err == nil || !strings.Contains(err.Error(), "not installed") {
+		t.Errorf("Detect with no podman: %v", err)
+	}
+	if runtime.GOOS == "windows" {
+		return
+	}
+	// A "docker" on PATH that is really Podman is detected as Podman.
+	fake := filepath.Join(dir, "docker")
+	if err := os.WriteFile(fake, []byte("#!/bin/sh\necho 'podman version 5.7.0'\n"), 0o755); err != nil { // #nosec G306 -- a test script that must be executable
+		t.Fatal(err)
+	}
+	t.Setenv(EngineEnv, "docker")
+	e, err := Detect()
+	if err != nil || e.Bin != fake || !e.Podman {
+		t.Errorf("Detect = %+v, %v", e, err)
 	}
 }

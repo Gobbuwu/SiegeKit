@@ -17,6 +17,8 @@ on:
       - internal/checks/**
       - internal/egress/**
       - internal/relay/**
+      - internal/knownanswers/**
+      - testdata/known-answers/**
 
 # Read-only (ADR 0008).
 permissions:
@@ -31,34 +33,42 @@ env:
 
 jobs:
   scan:
-    name: Scan ${{ matrix.repo }}
+    name: Scan ${{ matrix.repo }} (${{ matrix.engine }})
     runs-on: ubuntu-latest
     timeout-minutes: 40
+    env:
+      SIEGEKIT_ENGINE: ${{ matrix.engine }}
+      EXPECT_ENGINE: ${{ matrix.engine == 'podman' && 'podman rootless' || 'docker rootful' }}
     strategy:
       fail-fast: false
-      max-parallel: 5
+      max-parallel: 10
       matrix:
-        include:
-          - { repo: pallets/flask, sha: 49943b5a94413a530761350f04e896f76e8d620e }
-          - { repo: psf/requests, sha: 3c7baaa05ab4aa49cc819ce3a819d260de19c157 }
-          - { repo: encode/httpx, sha: 7cff5f79bc78649bbcd3fd9aa7a74c86e0f63016 }
-          - { repo: gin-gonic/gin, sha: 0f09c3a9b4626d9fe9979cf4d0521d6ae32ab646 }
-          - { repo: spf13/cobra, sha: adbc8813901bba65827259daa8e22ff94ec1f30e }
-          - { repo: go-chi/chi, sha: c64ed7d6635f33a8b2feaff7dcfa55677023ac7d }
-          - { repo: expressjs/express, sha: 43fca52d28a422c8be48fd489cbd4f2d6152bab6 }
-          - { repo: OWASP/NodeGoat, sha: c5cb68a7084e4ae7dcc60e6a98768720a81841e8 }
-          - { repo: juice-shop/juice-shop, sha: 266448aba68cd8ba5915f526a128da4fa7bc3f9f }
-          - { repo: digininja/DVWA, sha: 502ac150ce37c20ca6e04cab7c5ca959f315f2d0 }
-          - { repo: kubernetes/examples, sha: 22934a040acbb0c0aa103023ccbd871507bf17f6 }
-          - { repo: terraform-aws-modules/terraform-aws-vpc, sha: 577ad620abe00da27a3a0f1e5acee041959fb3be }
-          - { repo: docker/awesome-compose, sha: 30f4b7f6a6c3b0c0ecf4d4efb0de203c48d11562 }
-          - { repo: firebase/quickstart-js, sha: 474e779bc3f0af1c620fb9dfa53e933e6aa3edd7 }
-          - { repo: vercel/nextjs-subscription-payments, sha: bdd0813206e47e6b218d42f15a7976c8a0d3c3eb }
-          - { repo: fastapi/full-stack-fastapi-template, sha: 77e550a73bb49dd2967622c5ed11bf7a49603c93 }
-          - { repo: psf/black, sha: c0e143e75443afd3be50c3b63ed2ee2fd108f509 }
-          - { repo: caddyserver/caddy, sha: 16618f454ca6f78f37dfd85a90573d8ffd43c1c8 }
-          - { repo: pallets/click, sha: 08b803cf32ceb2ae6a772c62d5da42757a897d44 }
-          - { repo: bridgecrewio/terragoat, sha: 729f8da62c6a85ce4af5ad3d123de97776d954c4 }
+        # Each repository's pinned commit is in its known-answer file,
+        # testdata/known-answers/OWNER__NAME.json (ADR 0039).
+        repo:
+          - pallets/flask
+          - psf/requests
+          - encode/httpx
+          - gin-gonic/gin
+          - spf13/cobra
+          - go-chi/chi
+          - expressjs/express
+          - OWASP/NodeGoat
+          - juice-shop/juice-shop
+          - digininja/DVWA
+          - kubernetes/examples
+          - terraform-aws-modules/terraform-aws-vpc
+          - docker/awesome-compose
+          - firebase/quickstart-js
+          - vercel/nextjs-subscription-payments
+          - fastapi/full-stack-fastapi-template
+          - psf/black
+          - caddyserver/caddy
+          - pallets/click
+          - bridgecrewio/terragoat
+        # Both engines on the runner (ADR 0039); a result holds only for
+        # the engine it ran on (ADR 0038).
+        engine: [podman, docker]
     steps:
       # Actions are pinned to full commit SHAs (ADR 0008). Tag shown for reference only.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -73,8 +83,11 @@ jobs:
       - name: Fetch target at pinned commit
         env:
           REPO: ${{ matrix.repo }}
-          SHA: ${{ matrix.sha }}
         run: |
+          answers="testdata/known-answers/${REPO//\//__}.json"
+          SHA="$(jq -r '.fixture | split("@")[1]' "$answers")"
+          test "$(jq -r '.fixture | split("@")[0]' "$answers")" = "$REPO"
+          echo "ANSWERS=$answers" >> "$GITHUB_ENV"
           dir="$RUNNER_TEMP/target"
           git init -q "$dir"
           git -C "$dir" fetch -q --depth 1 "https://github.com/$REPO.git" "$SHA"
@@ -91,21 +104,42 @@ jobs:
           set -e
           echo "exit code $code"
           if [ "$code" -ne 0 ] && [ "$code" -ne 3 ]; then exit 1; fi
-          # The gate's results hold for this engine only (ADR 0038): SiegeKit
-          # picks rootless Podman on GitHub's runners. Fail if that changes.
-          jq -e '.environment.engine | .name == "podman" and .rootless' "$RUNNER_TEMP/report/report.json"
+          # The gate's results hold for this engine only (ADR 0038). Fail if
+          # the runner's engine changes.
+          jq -e --arg e "$EXPECT_ENGINE" '.environment.engine | (.name + (if .rootless then " rootless" else " rootful" end)) == $e' "$RUNNER_TEMP/report/report.json"
           # Belt and braces: every plugin ran, or was skipped because the
           # repository has no files of its language.
           jq -e '[.plugins[] | select(.status != "ran" and (.status != "skipped" or (.reason | startswith("no files matching") | not)))] | length == 0' "$RUNNER_TEMP/report/report.json"
+      - name: Known answers
+        if: ${{ !cancelled() }}
+        # Every check must find what it is known to find on this commit, and
+        # nothing new (ADR 0039). The run's own answer is printed, for review
+        # when a pin changes.
+        run: |
+          set +e
+          go run ./internal/knownanswers/check -answers "$ANSWERS" -report "$RUNNER_TEMP/report/report.json" -observed "$RUNNER_TEMP/observed.json"
+          code=$?
+          set -e
+          echo "::group::Answer of this run"
+          cat "$RUNNER_TEMP/observed.json"
+          echo "::endgroup::"
+          exit $code
 
   web:
     # M2.4b (ADR 0023): URL scan of OWASP Juice Shop v20.4.0, a deliberately
     # vulnerable app, running on this runner's loopback (local mode). The
     # image is pinned to the multi-architecture index digest of tag v20.4.0,
     # resolved with `docker buildx imagetools inspect` on 2026-11-19.
-    name: Scan OWASP Juice Shop by URL
+    name: Scan OWASP Juice Shop by URL (${{ matrix.engine }})
     runs-on: ubuntu-latest
     timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        engine: [podman, docker]
+    env:
+      SIEGEKIT_ENGINE: ${{ matrix.engine }}
+      EXPECT_ENGINE: ${{ matrix.engine == 'podman' && 'podman rootless' || 'docker rootful' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -186,7 +220,7 @@ jobs:
           echo "exit code $code"
           if [ "$code" -ne 0 ] && [ "$code" -ne 3 ]; then exit 1; fi
           r="$RUNNER_TEMP/report/report.json"
-          jq -e '.environment.engine | .name == "podman" and .rootless' "$r"
+          jq -e --arg e "$EXPECT_ENGINE" '.environment.engine | (.name + (if .rootless then " rootless" else " rootful" end)) == $e' "$r"
           jq '.plugins[] | {id, status, reason, input, result, requests, refused, refusedTo, findings}' "$r"
           jq -e '[.plugins[] | select(.status == "ran" and .requests > 0) | .id] | sort == ["access-control", "ffuf", "login-throttle", "nuclei", "nuclei-default-login", "nuclei-intrusive", "rate-limit", "served-secrets", "zap", "zap-active"]' "$r"
           jq -e '[.plugins[] | select(.id == "schemathesis" and .status == "skipped" and (.reason | contains("none was found at /openapi.json")))] | length == 1' "$r"
@@ -201,6 +235,19 @@ jobs:
           for rule in 10038 10098; do
             jq -e --arg rule "$rule" '[.findings[] | select(.ruleId == $rule)] | length > 0' "$r" > /dev/null || { echo "ZAP rule $rule not reported"; exit 1; }
           done
+      - name: Known answers
+        if: ${{ !cancelled() }}
+        # As for the repositories (ADR 0039). The checks above stay: they
+        # also hold what the answer format does not (inputs, result text).
+        run: |
+          set +e
+          go run ./internal/knownanswers/check -answers testdata/known-answers/juice-shop-url.json -report "$RUNNER_TEMP/report/report.json" -observed "$RUNNER_TEMP/observed.json"
+          code=$?
+          set -e
+          echo "::group::Answer of this run"
+          cat "$RUNNER_TEMP/observed.json"
+          echo "::endgroup::"
+          exit $code
       - name: Juice Shop log
         if: failure()
         run: docker logs juice-shop 2>&1 | tail -50

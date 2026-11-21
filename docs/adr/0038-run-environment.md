@@ -3,6 +3,7 @@
 - Status: Accepted
 - Date: 2026-11-20
 - Amends: [0006](0006-sandbox.md) (the engine is recorded), the evidence rules in [milestones/README.md](../milestones/README.md)
+- Amended by: [0039](0039-known-answers-and-engine-parity.md) (CI runs on both engines)
 
 ## Context
 

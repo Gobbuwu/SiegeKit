@@ -19,13 +19,22 @@ env:
 
 jobs:
   test:
-    name: Test (${{ matrix.os }})
+    name: Test (${{ matrix.os }}${{ matrix.engine && format(', {0}', matrix.engine) || '' }})
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        # The container tests run on both engines (ADR 0039): the runners
+        # have rootless Podman and rootful Docker, and a result holds only
+        # for the engine it ran on (ADR 0038).
+        include:
+          - { os: ubuntu-latest, engine: podman, expect: podman rootless }
+          - { os: ubuntu-latest, engine: docker, expect: docker rootful }
+          - { os: macos-latest }
     runs-on: ${{ matrix.os }}
     timeout-minutes: 25
+    env:
+      # Every step that runs containers uses this engine (ADR 0039).
+      SIEGEKIT_ENGINE: ${{ matrix.engine }}
     steps:
       # Actions are pinned to full commit SHAs (ADR 0008). Tag shown for reference only.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -42,11 +51,11 @@ jobs:
       - name: Test
         env:
           # Container sandbox tests need a container engine, which GitHub
-          # provides on Linux runners only. The runners have both Podman and
-          # Docker; SiegeKit prefers Podman, which runs rootless there
-          # (measured 2026-11-20, ADR 0038). TestDescribe fails if that changes.
+          # provides on Linux runners only. SIEGEKIT_ENGINE picks it; the
+          # runners' Podman is rootless and their Docker rootful (measured
+          # 2026-11-20, ADR 0038). TestDescribe fails if that changes.
           SIEGEKIT_CONTAINER_TESTS: ${{ runner.os == 'Linux' && '1' || '0' }}
-          SIEGEKIT_EXPECT_ENGINE: ${{ runner.os == 'Linux' && 'podman rootless' || '' }}
+          SIEGEKIT_EXPECT_ENGINE: ${{ matrix.expect }}
         # The container tests run full scans (ZAP, Nuclei): more than the default 10 minutes.
         run: go test -race -count=1 -cover -timeout 30m ./...
       - name: Scan SiegeKit itself
@@ -65,9 +74,10 @@ jobs:
           echo "exit code $code"
           jq '.findings[] | {ruleId, severity, uri: .location.uri, line: .location.startLine}' "$RUNNER_TEMP/self-report/report.json"
           if [ "$code" -ne 0 ]; then exit 1; fi
+          jq -e --arg e "$SIEGEKIT_ENGINE" '.environment.engine.name == $e' "$RUNNER_TEMP/self-report/report.json"
           jq -e '[.plugins[] | select(.status != "ran" and (.status != "skipped" or (.reason | startswith("no files matching") | not)))] | length == 0' "$RUNNER_TEMP/self-report/report.json"
       - name: Fuzz parsers
-        if: runner.os == 'Linux'
+        if: matrix.engine == 'podman'
         run: |
           go test -run='^$' -fuzz=FuzzParse -fuzztime=60s ./internal/manifest
           go test -run='^$' -fuzz=FuzzSARIF -fuzztime=60s ./internal/sarif
@@ -88,5 +98,5 @@ jobs:
           go test -run='^$' -fuzz=FuzzParse -fuzztime=30s ./internal/backend
           go test -run='^$' -fuzz=FuzzReadScripts -fuzztime=30s ./internal/backend
       - name: Vulnerability check
-        if: runner.os == 'Linux'
+        if: matrix.engine == 'podman'
         run: go run golang.org/x/vuln/cmd/govulncheck@${GOVULNCHECK_VERSION} ./...
