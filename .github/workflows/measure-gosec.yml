@@ -25,7 +25,7 @@ jobs:
       fail-fast: false
       matrix:
         engine: [podman, docker]
-        concurrency: [default, "1"]
+        concurrency: [default]
     env:
       SIEGEKIT_ENGINE: ${{ matrix.engine }}
     steps:
@@ -74,6 +74,9 @@ jobs:
             g7=$(jq -r '[.findings[] | select(.ruleId | startswith("G7")) | "\(.ruleId) \(.location.uri):\(.location.startLine)"] | sort | join("; ")' "$RUNNER_TEMP/r$i/report.json")
             total=$(jq '.findings | length' "$RUNNER_TEMP/r$i/report.json")
             echo "run $i exit $code findings $total G7xx: $g7" | tee -a "$RUNNER_TEMP/out/summary.txt"
+            jq -r '.plugins[] | select(.id == "gosec") | "run \(.status) cause=\(.cause) reason: \(.reason)"' "$RUNNER_TEMP/r$i/report.json"
+            f="$(ls -t "$RUNNER_TEMP"/out/gosec-*.stderr | head -1)"
+            grep -v "^\[gosec\].*\(Checking\|Import directory\|Checking file\)" "$f" | grep -i "error" | sed "s/^/  stderr: /" | head -20 || true
           done
           echo "== environment"
           jq -c .environment "$RUNNER_TEMP/r1/report.json"
