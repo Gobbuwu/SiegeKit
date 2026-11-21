@@ -111,6 +111,8 @@ func TestSpecRejections(t *testing.T) {
 		"zero timeout":     func(s *Spec) { s.Timeout = 0 },
 		"tmp above memory": func(s *Spec) { s.TmpMiB = s.MemoryMiB + 1 },
 		"negative tmp":     func(s *Spec) { s.TmpMiB = -1 },
+		"stdout path":      func(s *Spec) { s.StdoutFile = "../x.json" },
+		"stdout dot file":  func(s *Spec) { s.StdoutFile = ".x" },
 		"target not a dir": func(s *Spec) { s.TargetDir = filepath.Join(s.TargetDir, "app.txt") },
 		"egress with target": func(s *Spec) {
 			s.Network, s.DataDir, s.DataMount, s.DataWritable = "egress", s.OutDir, "/tmp/db", true
@@ -294,6 +296,40 @@ func TestContainerOutputLimit(t *testing.T) {
 	s.OutputLimit = 1 << 20
 	r := run(t, e, s)
 	if r.Status != Failed || !strings.Contains(r.Stderr, "output exceeded") {
+		t.Fatalf("status %s: %s", r.Status, r.Stderr)
+	}
+}
+
+func TestCappedWriter(t *testing.T) {
+	var b strings.Builder
+	c := &cappedWriter{w: &b, left: 5}
+	for _, p := range []string{"abc", "defg", "hij"} {
+		if n, err := c.Write([]byte(p)); n != len(p) || err != nil {
+			t.Fatalf("write %q: %d %v", p, n, err)
+		}
+	}
+	if b.String() != "abcde" {
+		t.Fatalf("got %q", b.String())
+	}
+}
+
+// TestContainerStdoutFile: the tool's standard output goes to its own file
+// and not into Stderr, and counts against the output limit (ADR 0040).
+func TestContainerStdoutFile(t *testing.T) {
+	e := engine(t)
+	s := spec(t, "sh", "-c", "echo out-line; echo err-line >&2")
+	s.StdoutFile = "stdout.json"
+	r := run(t, e, s)
+	b, err := os.ReadFile(filepath.Join(s.OutDir, "stdout.json"))
+	if err != nil || string(b) != "out-line\n" || r.Status != Completed {
+		t.Fatalf("status %s, file %q %v", r.Status, b, err)
+	}
+	if strings.Contains(r.Stderr, "out-line") || !strings.Contains(r.Stderr, "err-line") {
+		t.Fatalf("stderr %q", r.Stderr)
+	}
+	s = spec(t, "sh", "-c", "head -c 2000000 /dev/zero")
+	s.StdoutFile, s.OutputLimit = "stdout.json", 1<<20
+	if r = run(t, e, s); r.Status != Failed || !strings.Contains(r.Stderr, "output exceeded") {
 		t.Fatalf("status %s: %s", r.Status, r.Stderr)
 	}
 }

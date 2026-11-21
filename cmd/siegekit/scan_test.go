@@ -96,6 +96,11 @@ var emptySARIF = fakeExec(func(s sandbox.Spec) (*sandbox.Result, error) {
 	if err := os.WriteFile(filepath.Join(s.OutDir, "bandit.json"), []byte(`{"results":[]}`), 0o644); err != nil {
 		return nil, err
 	}
+	if s.StdoutFile != "" { // gosec's JSON on stdout: no package skipped (ADR 0040)
+		if err := os.WriteFile(filepath.Join(s.OutDir, s.StdoutFile), []byte(`{"Golang errors": {}, "Stats": {"files": 1000}}`), 0o644); err != nil {
+			return nil, err
+		}
+	}
 	return &sandbox.Result{Status: sandbox.Completed}, nil
 })
 

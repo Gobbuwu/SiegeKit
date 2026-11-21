@@ -42,6 +42,9 @@ var (
 	// ConfigPlaceholds are the placeholders allowed in run.config strings.
 	ConfigPlaceholds = []string{"target", "target-regex"}
 	Parsers          = []string{"sarif", "sarif-gitleaks", "sarif-checkov", "sarif-zap", "bandit-json", "nuclei-jsonl", "ffuf-json", "schemathesis-json"}
+	// StdoutParsers read a tool's standard output for work it did not do
+	// (ADR 0040).
+	StdoutParsers = []string{"gosec-errors"}
 )
 
 var (
@@ -187,6 +190,16 @@ type Output struct {
 	Format string `json:"format"`
 	Parser string `json:"parser"`
 	File   string `json:"file"` // report file name inside {outdir}
+	// Stdout, if set, saves the tool's standard output to a file inside
+	// {outdir}, read by its parser for work the tool did not do; the run is
+	// then incomplete and its findings are kept (ADR 0040).
+	Stdout *Stdout `json:"stdout,omitempty"`
+}
+
+// Stdout is where a tool's standard output is saved and how it is read.
+type Stdout struct {
+	File   string `json:"file"`
+	Parser string `json:"parser"`
 }
 
 // ValidationError lists every rule a manifest breaks.
@@ -404,6 +417,12 @@ func (m *Manifest) Validate() error {
 		}
 		if m.Output.Parser == "schemathesis-json" && m.Output.Format != "json" {
 			add("output.parser \"schemathesis-json\" needs output.format \"json\"")
+		}
+		if o := m.Output.Stdout; o != nil {
+			checkEnum(&p, "output.stdout.parser", o.Parser, StdoutParsers)
+			if !reOutFile.MatchString(o.File) || o.File == m.Output.File {
+				add("output.stdout.file %q must be a plain file name matching %s, other than output.file", o.File, reOutFile)
+			}
 		}
 	}
 

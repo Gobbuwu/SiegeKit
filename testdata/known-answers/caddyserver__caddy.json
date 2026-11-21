@@ -54,13 +54,87 @@
       "count": 7
     },
     "gosec": {
-      "status": "ran",
+      "status": "failed",
+      "reason": "gosec could not load",
+      "why": "Scans have no network, so gosec cannot load the packages that import modules not in this repository; it names them and reports the rest (ADR 0040). Findings measured 2026-11-21 with native gosec 2.30.0 (Go 1.27.4) run as the sandbox runs it: non-root, no network, writable module cache, nothing downloaded. Findings gosec makes only with the modules present (native run with them downloaded) are under notMetYet. Gap measured in gosec-offline-gap-measurement-2026-11-21.md (project files).",
       "match": "exact",
       "findings": [
+        "G103 modules/caddyhttp/reverseproxy/streaming.go:777",
+        "G103 modules/caddyhttp/reverseproxy/streaming.go:791",
+        "G103 modules/caddyhttp/reverseproxy/streaming.go:796",
+        "G104 caddyconfig/caddyfile/format_imports.go:164",
+        "G104 caddyconfig/httploader.go:143",
+        "G104 caddytest/caddytest.go:283",
+        "G104 caddytest/caddytest.go:315",
+        "G104 cmd/commandfuncs.go:121",
+        "G104 cmd/commandfuncs.go:316",
+        "G104 listeners.go:76",
+        "G104 modules/caddyhttp/reverseproxy/fastcgi/fastcgi.go:223",
+        "G104 modules/caddyhttp/reverseproxy/healthchecks.go:532",
+        "G104 modules/caddyhttp/reverseproxy/reverseproxy.go:1044",
+        "G104 modules/caddyhttp/reverseproxy/reverseproxy.go:1250",
+        "G104 modules/caddyhttp/reverseproxy/reverseproxy.go:1396",
+        "G104 modules/caddyhttp/reverseproxy/reverseproxy.go:1416",
+        "G104 modules/caddyhttp/reverseproxy/reverseproxy.go:1454",
+        "G104 modules/caddyhttp/reverseproxy/reverseproxy.go:1521",
+        "G104 modules/caddyhttp/reverseproxy/reverseproxy.go:1568",
+        "G104 modules/caddyhttp/reverseproxy/reverseproxy.go:1578",
+        "G104 modules/caddyhttp/reverseproxy/reverseproxy.go:1816",
+        "G104 modules/caddyhttp/reverseproxy/reverseproxy.go:773",
+        "G104 modules/caddyhttp/reverseproxy/streaming.go:103",
+        "G104 modules/caddyhttp/reverseproxy/streaming.go:105",
+        "G104 modules/caddyhttp/reverseproxy/streaming.go:391",
+        "G104 modules/caddyhttp/reverseproxy/streaming.go:392",
+        "G104 modules/caddyhttp/reverseproxy/streaming.go:858",
+        "G104 modules/caddyhttp/reverseproxy/streaming.go:886",
+        "G104 modules/caddyhttp/templates/tplcontext.go:445",
+        "G104 modules/caddytls/capools.go:686",
+        "G104 modules/caddytls/ondemand.go:153",
+        "G104 modules/logging/netwriter.go:200",
+        "G104 modules/logging/netwriter.go:205",
+        "G104 modules/logging/netwriter.go:211",
+        "G204 cmd/commandfuncs.go:78",
+        "G301 cmd/commands.go:481",
+        "G301 modules/caddypki/acmeserver/acmeserver.go:285",
+        "G304 caddy.go:923",
+        "G304 caddyconfig/caddyfile/format_imports.go:158",
+        "G304 caddyconfig/caddyfile/parse.go:647",
+        "G304 caddyconfig/httploader.go:200",
+        "G304 cmd/commandfuncs.go:586",
+        "G304 cmd/commandfuncs.go:770",
+        "G304 cmd/main.go:169",
+        "G304 cmd/main.go:352",
+        "G304 cmd/packagesfuncs.go:334",
+        "G304 cmd/storagefuncs.go:104",
+        "G304 cmd/storagefuncs.go:197",
         "G304 internal/filesystems/os.go:18",
-        "G304 internal/filesystems/os.go:22"
+        "G304 internal/filesystems/os.go:22",
+        "G304 modules/caddyhttp/reverseproxy/fastcgi/client.go:433",
+        "G304 modules/caddyhttp/reverseproxy/httptransport.go:855",
+        "G304 modules/caddytls/acmeissuer.go:236",
+        "G304 modules/caddytls/capools.go:151",
+        "G304 modules/caddytls/connpolicy.go:479",
+        "G304 modules/caddytls/connpolicy.go:825",
+        "G304 modules/caddytls/leaffileloader.go:81",
+        "G304 replacer.go:512",
+        "G402 caddytest/caddytest.go:360",
+        "G402 modules/caddyhttp/reverseproxy/httptransport.go:895",
+        "G402 modules/caddytls/capools.go:624",
+        "G404 modules/caddyhttp/caddyauth/basicauth.go:254",
+        "G404 modules/caddyhttp/errors.go:102",
+        "G404 modules/caddyhttp/fileserver/staticfiles.go:659",
+        "G404 modules/caddyhttp/reverseproxy/httptransport.go:271",
+        "G404 modules/caddyhttp/reverseproxy/selectionpolicies.go:240",
+        "G404 modules/caddyhttp/reverseproxy/selectionpolicies.go:289",
+        "G404 modules/caddyhttp/reverseproxy/selectionpolicies.go:805",
+        "G404 modules/caddyhttp/reverseproxy/selectionpolicies.go:844",
+        "G404 modules/caddyhttp/reverseproxy/streaming.go:811",
+        "G404 modules/caddyhttp/reverseproxy/upstreams.go:117",
+        "G404 modules/caddyhttp/reverseproxy/upstreams.go:280",
+        "G404 modules/caddypki/acmeserver/acmeserver.go:346",
+        "G404 modules/caddytls/ech.go:1162"
       ],
-      "count": 2
+      "count": 80
     },
     "trivy": {
       "status": "ran",
@@ -74,5 +148,235 @@
     "weak-passwords": {
       "status": "ran"
     }
-  }
+  },
+  "notMetYet": [
+    {
+      "check": "gosec",
+      "finding": "G104 internal/logmarshalers.go:31",
+      "needs": "Go modules in the scan: vendored, or the consented module download step (ADR 0040; designed after fix PRs B to F, owner 2026-11-21)",
+      "confirmed": "gosec 2.30.0 run natively with the modules downloaded, 2026-11-21"
+    },
+    {
+      "check": "gosec",
+      "finding": "G104 modules/caddyhttp/app.go:535",
+      "needs": "Go modules in the scan: vendored, or the consented module download step (ADR 0040; designed after fix PRs B to F, owner 2026-11-21)",
+      "confirmed": "gosec 2.30.0 run natively with the modules downloaded, 2026-11-21"
+    },
+    {
+      "check": "gosec",
+      "finding": "G104 modules/caddyhttp/marshalers.go:51-54",
+      "needs": "Go modules in the scan: vendored, or the consented module download step (ADR 0040; designed after fix PRs B to F, owner 2026-11-21)",
+      "confirmed": "gosec 2.30.0 run natively with the modules downloaded, 2026-11-21"
+    },
+    {
+      "check": "gosec",
+      "finding": "G104 modules/caddyhttp/marshalers.go:56",
+      "needs": "Go modules in the scan: vendored, or the consented module download step (ADR 0040; designed after fix PRs B to F, owner 2026-11-21)",
+      "confirmed": "gosec 2.30.0 run natively with the modules downloaded, 2026-11-21"
+    },
+    {
+      "check": "gosec",
+      "finding": "G104 modules/caddyhttp/marshalers.go:59",
+      "needs": "Go modules in the scan: vendored, or the consented module download step (ADR 0040; designed after fix PRs B to F, owner 2026-11-21)",
+      "confirmed": "gosec 2.30.0 run natively with the modules downloaded, 2026-11-21"
+    },
+    {
+      "check": "gosec",
+      "finding": "G115 caddyconfig/httpcaddyfile/serveroptions.go:212",
+      "needs": "Go modules in the scan: vendored, or the consented module download step (ADR 0040; designed after fix PRs B to F, owner 2026-11-21)",
+      "confirmed": "gosec 2.30.0 run natively with the modules downloaded, 2026-11-21"
+    },
+    {
+      "check": "gosec",
+      "finding": "G115 caddyconfig/httpcaddyfile/serveroptions.go:268",
+      "needs": "Go modules in the scan: vendored, or the consented module download step (ADR 0040; designed after fix PRs B to F, owner 2026-11-21)",
+      "confirmed": "gosec 2.30.0 run natively with the modules downloaded, 2026-11-21"
+    },
+    {
+      "check": "gosec",
+      "finding": "G115 modules/caddyhttp/caddyauth/argon2id.go:165",
+      "needs": "Go modules in the scan: vendored, or the consented module download step (ADR 0040; designed after fix PRs B to F, owner 2026-11-21)",
+      "confirmed": "gosec 2.30.0 run natively with the modules downloaded, 2026-11-21"
+    },
+    {
+      "check": "gosec",
+      "finding": "G115 modules/caddyhttp/fileserver/browsetplcontext.go:321",
+      "needs": "Go modules in the scan: vendored, or the consented module download step (ADR 0040; designed after fix PRs B to F, owner 2026-11-21)",
+      "confirmed": "gosec 2.30.0 run natively with the modules downloaded, 2026-11-21"
+    },
+    {
+      "check": "gosec",
+      "finding": "G115 modules/caddyhttp/fileserver/browsetplcontext.go:328",
+      "needs": "Go modules in the scan: vendored, or the consented module download step (ADR 0040; designed after fix PRs B to F, owner 2026-11-21)",
+      "confirmed": "gosec 2.30.0 run natively with the modules downloaded, 2026-11-21"
+    },
+    {
+      "check": "gosec",
+      "finding": "G115 modules/caddyhttp/fileserver/browsetplcontext.go:334",
+      "needs": "Go modules in the scan: vendored, or the consented module download step (ADR 0040; designed after fix PRs B to F, owner 2026-11-21)",
+      "confirmed": "gosec 2.30.0 run natively with the modules downloaded, 2026-11-21"
+    },
+    {
+      "check": "gosec",
+      "finding": "G115 modules/caddyhttp/idletimeout.go:93",
+      "needs": "Go modules in the scan: vendored, or the consented module download step (ADR 0040; designed after fix PRs B to F, owner 2026-11-21)",
+      "confirmed": "gosec 2.30.0 run natively with the modules downloaded, 2026-11-21"
+    },
+    {
+      "check": "gosec",
+      "finding": "G115 modules/caddyhttp/idletimeout.go:96",
+      "needs": "Go modules in the scan: vendored, or the consented module download step (ADR 0040; designed after fix PRs B to F, owner 2026-11-21)",
+      "confirmed": "gosec 2.30.0 run natively with the modules downloaded, 2026-11-21"
+    },
+    {
+      "check": "gosec",
+      "finding": "G115 modules/caddyhttp/requestbody/caddyfile.go:45",
+      "needs": "Go modules in the scan: vendored, or the consented module download step (ADR 0040; designed after fix PRs B to F, owner 2026-11-21)",
+      "confirmed": "gosec 2.30.0 run natively with the modules downloaded, 2026-11-21"
+    },
+    {
+      "check": "gosec",
+      "finding": "G115 modules/caddyhttp/reverseproxy/caddyfile.go:1091",
+      "needs": "Go modules in the scan: vendored, or the consented module download step (ADR 0040; designed after fix PRs B to F, owner 2026-11-21)",
+      "confirmed": "gosec 2.30.0 run natively with the modules downloaded, 2026-11-21"
+    },
+    {
+      "check": "gosec",
+      "finding": "G115 modules/caddyhttp/reverseproxy/caddyfile.go:1101",
+      "needs": "Go modules in the scan: vendored, or the consented module download step (ADR 0040; designed after fix PRs B to F, owner 2026-11-21)",
+      "confirmed": "gosec 2.30.0 run natively with the modules downloaded, 2026-11-21"
+    },
+    {
+      "check": "gosec",
+      "finding": "G115 modules/caddyhttp/reverseproxy/caddyfile.go:1131",
+      "needs": "Go modules in the scan: vendored, or the consented module download step (ADR 0040; designed after fix PRs B to F, owner 2026-11-21)",
+      "confirmed": "gosec 2.30.0 run natively with the modules downloaded, 2026-11-21"
+    },
+    {
+      "check": "gosec",
+      "finding": "G115 modules/caddyhttp/reverseproxy/caddyfile.go:673",
+      "needs": "Go modules in the scan: vendored, or the consented module download step (ADR 0040; designed after fix PRs B to F, owner 2026-11-21)",
+      "confirmed": "gosec 2.30.0 run natively with the modules downloaded, 2026-11-21"
+    },
+    {
+      "check": "gosec",
+      "finding": "G115 modules/caddyhttp/reverseproxy/fastcgi/header.go:30",
+      "needs": "Go modules in the scan: vendored, or the consented module download step (ADR 0040; designed after fix PRs B to F, owner 2026-11-21)",
+      "confirmed": "gosec 2.30.0 run natively with the modules downloaded, 2026-11-21"
+    },
+    {
+      "check": "gosec",
+      "finding": "G115 modules/caddyhttp/reverseproxy/fastcgi/writer.go:42",
+      "needs": "Go modules in the scan: vendored, or the consented module download step (ADR 0040; designed after fix PRs B to F, owner 2026-11-21)",
+      "confirmed": "gosec 2.30.0 run natively with the modules downloaded, 2026-11-21"
+    },
+    {
+      "check": "gosec",
+      "finding": "G115 modules/caddyhttp/reverseproxy/fastcgi/writer.go:90",
+      "needs": "Go modules in the scan: vendored, or the consented module download step (ADR 0040; designed after fix PRs B to F, owner 2026-11-21)",
+      "confirmed": "gosec 2.30.0 run natively with the modules downloaded, 2026-11-21"
+    },
+    {
+      "check": "gosec",
+      "finding": "G115 modules/caddyhttp/reverseproxy/fastcgi/writer.go:91",
+      "needs": "Go modules in the scan: vendored, or the consented module download step (ADR 0040; designed after fix PRs B to F, owner 2026-11-21)",
+      "confirmed": "gosec 2.30.0 run natively with the modules downloaded, 2026-11-21"
+    },
+    {
+      "check": "gosec",
+      "finding": "G115 modules/caddyhttp/reverseproxy/selectionpolicies.go:164",
+      "needs": "Go modules in the scan: vendored, or the consented module download step (ADR 0040; designed after fix PRs B to F, owner 2026-11-21)",
+      "confirmed": "gosec 2.30.0 run natively with the modules downloaded, 2026-11-21"
+    },
+    {
+      "check": "gosec",
+      "finding": "G115 modules/caddyhttp/reverseproxy/selectionpolicies.go:167",
+      "needs": "Go modules in the scan: vendored, or the consented module download step (ADR 0040; designed after fix PRs B to F, owner 2026-11-21)",
+      "confirmed": "gosec 2.30.0 run natively with the modules downloaded, 2026-11-21"
+    },
+    {
+      "check": "gosec",
+      "finding": "G115 modules/caddyhttp/reverseproxy/selectionpolicies.go:323",
+      "needs": "Go modules in the scan: vendored, or the consented module download step (ADR 0040; designed after fix PRs B to F, owner 2026-11-21)",
+      "confirmed": "gosec 2.30.0 run natively with the modules downloaded, 2026-11-21"
+    },
+    {
+      "check": "gosec",
+      "finding": "G115 modules/caddyhttp/reverseproxy/streaming.go:726",
+      "needs": "Go modules in the scan: vendored, or the consented module download step (ADR 0040; designed after fix PRs B to F, owner 2026-11-21)",
+      "confirmed": "gosec 2.30.0 run natively with the modules downloaded, 2026-11-21"
+    },
+    {
+      "check": "gosec",
+      "finding": "G115 modules/caddyhttp/reverseproxy/streaming.go:812",
+      "needs": "Go modules in the scan: vendored, or the consented module download step (ADR 0040; designed after fix PRs B to F, owner 2026-11-21)",
+      "confirmed": "gosec 2.30.0 run natively with the modules downloaded, 2026-11-21"
+    },
+    {
+      "check": "gosec",
+      "finding": "G115 modules/caddyhttp/timeouts/caddyfile.go:84",
+      "needs": "Go modules in the scan: vendored, or the consented module download step (ADR 0040; designed after fix PRs B to F, owner 2026-11-21)",
+      "confirmed": "gosec 2.30.0 run natively with the modules downloaded, 2026-11-21"
+    },
+    {
+      "check": "gosec",
+      "finding": "G115 modules/caddytls/ech.go:1162",
+      "needs": "Go modules in the scan: vendored, or the consented module download step (ADR 0040; designed after fix PRs B to F, owner 2026-11-21)",
+      "confirmed": "gosec 2.30.0 run natively with the modules downloaded, 2026-11-21"
+    },
+    {
+      "check": "gosec",
+      "finding": "G124 modules/caddyhttp/fileserver/browse.go:299",
+      "needs": "Go modules in the scan: vendored, or the consented module download step (ADR 0040; designed after fix PRs B to F, owner 2026-11-21)",
+      "confirmed": "gosec 2.30.0 run natively with the modules downloaded, 2026-11-21"
+    },
+    {
+      "check": "gosec",
+      "finding": "G124 modules/caddyhttp/fileserver/browse.go:316",
+      "needs": "Go modules in the scan: vendored, or the consented module download step (ADR 0040; designed after fix PRs B to F, owner 2026-11-21)",
+      "confirmed": "gosec 2.30.0 run natively with the modules downloaded, 2026-11-21"
+    },
+    {
+      "check": "gosec",
+      "finding": "G602 modules/caddyhttp/celmatcher.go:431",
+      "needs": "Go modules in the scan: vendored, or the consented module download step (ADR 0040; designed after fix PRs B to F, owner 2026-11-21)",
+      "confirmed": "gosec 2.30.0 run natively with the modules downloaded, 2026-11-21"
+    },
+    {
+      "check": "gosec",
+      "finding": "G602 modules/caddyhttp/celmatcher.go:435",
+      "needs": "Go modules in the scan: vendored, or the consented module download step (ADR 0040; designed after fix PRs B to F, owner 2026-11-21)",
+      "confirmed": "gosec 2.30.0 run natively with the modules downloaded, 2026-11-21"
+    },
+    {
+      "check": "gosec",
+      "finding": "G602 modules/caddyhttp/celmatcher.go:439",
+      "needs": "Go modules in the scan: vendored, or the consented module download step (ADR 0040; designed after fix PRs B to F, owner 2026-11-21)",
+      "confirmed": "gosec 2.30.0 run natively with the modules downloaded, 2026-11-21"
+    },
+    {
+      "check": "gosec",
+      "finding": "G602 modules/caddyhttp/celmatcher.go:444",
+      "needs": "Go modules in the scan: vendored, or the consented module download step (ADR 0040; designed after fix PRs B to F, owner 2026-11-21)",
+      "confirmed": "gosec 2.30.0 run natively with the modules downloaded, 2026-11-21"
+    },
+    {
+      "check": "gosec",
+      "finding": "G702 cmd/commandfuncs.go:78",
+      "needs": "Go modules in the scan: vendored, or the consented module download step (ADR 0040; designed after fix PRs B to F, owner 2026-11-21)",
+      "confirmed": "gosec 2.30.0 run natively with the modules downloaded, 2026-11-21"
+    },
+    {
+      "check": "gosec",
+      "finding": "G703 cmd/commandfuncs.go:779",
+      "needs": "Go modules in the scan: vendored, or the consented module download step (ADR 0040; designed after fix PRs B to F, owner 2026-11-21)",
+      "confirmed": "gosec 2.30.0 run natively with the modules downloaded, 2026-11-21"
+    },
+    {
+      "check": "gosec",
+      "finding": "G710 modules/caddyhttp/fileserver/staticfiles.go:889",
+      "needs": "Go modules in the scan: vendored, or the consented module download step (ADR 0040; designed after fix PRs B to F, owner 2026-11-21)",
+      "confirmed": "gosec 2.30.0 run natively with the modules downloaded, 2026-11-21"
+    }
+  ]
 }

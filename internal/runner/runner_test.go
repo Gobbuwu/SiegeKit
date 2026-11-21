@@ -348,6 +348,7 @@ func TestSelectAndRunBuiltinChecks(t *testing.T) {
 func TestRunSkipsPluginWithoutMatchingFiles(t *testing.T) {
 	f := &fake{act: func(s sandbox.Spec) (*sandbox.Result, error) {
 		write(t, s.OutDir, "gosec.sarif", `{"version":"2.1.0","runs":[{"tool":{"driver":{"name":"gosec"}},"results":[]}]}`)
+		write(t, s.OutDir, s.StdoutFile, `{"Golang errors": {}, "Stats": {"files": 1000}}`) // gosec's JSON on stdout (ADR 0040); more files than the target has
 		return &sandbox.Result{Status: sandbox.Completed}, nil
 	}}
 	o := opts(t)
@@ -501,5 +502,64 @@ func TestRunMarksUnreadableFilesIncomplete(t *testing.T) {
 		if p.Status != report.Ran {
 			t.Errorf("not root: %+v", p)
 		}
+	}
+}
+
+const gosecSARIF = `{"version":"2.1.0","runs":[{"tool":{"driver":{"name":"gosec","rules":[{"id":"G404","shortDescription":{"text":"weak random"}}]}},"results":[
+{"ruleId":"G404","level":"error","message":{"text":"weak random"},"locations":[{"physicalLocation":{"artifactLocation":{"uri":"/target/main.go"},"region":{"startLine":3}}}]}]}]}`
+
+// TestRunGosecSkippedPackagesIncomplete: packages gosec could not load make
+// the run incomplete, with their names, and the other findings are kept
+// (ADR 0040).
+func TestRunGosecSkippedPackagesIncomplete(t *testing.T) {
+	for _, c := range []struct {
+		name, stdout string
+		write        bool
+		status       report.Status
+		reason       string
+	}{
+		// The target holds main.go and lib/lib.go: 2 Go files.
+		{"complete", `{"Golang errors": {}, "Issues": [], "Stats": {"files": 2}}`, true, report.Ran, ""},
+		{"skipped packages", `{"Golang errors": {"/target/cmd/app/main.go": [{"line": 4, "column": 2, "error": "could not import example.com/dep"}], "/target/internal/x": []}, "Issues": [], "Stats": {"files": 2}}`, true, report.Failed, "gosec could not load 2 Go packages, so their code was not checked: cmd/app, internal/x."},
+		// gosec dropped files and named no error, as when Go cannot
+		// create its module cache (measured 2026-11-21).
+		{"files left out silently", `{"Golang errors": {}, "Issues": [], "Stats": {"files": 1}}`, true, report.Failed, "gosec checked 1 of the 2 Go files"},
+		{"no error list", `{"Issues": [], "Stats": {"files": 2}}`, true, report.Failed, "could not read the tool's error list"},
+		{"no file count", `{"Golang errors": {}, "Issues": []}`, true, report.Failed, "could not read the tool's error list"},
+		{"no stdout", "", false, report.Failed, "could not read the tool's error list"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			f := &fake{act: func(s sandbox.Spec) (*sandbox.Result, error) {
+				write(t, s.OutDir, "gosec.sarif", gosecSARIF)
+				if c.write {
+					write(t, s.OutDir, s.StdoutFile, c.stdout)
+				}
+				return &sandbox.Result{Status: sandbox.Completed}, nil
+			}}
+			o := opts(t)
+			write(t, o.TargetDir, "main.go", "package main\n")
+			if err := os.MkdirAll(filepath.Join(o.TargetDir, "lib"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			write(t, filepath.Join(o.TargetDir, "lib"), "lib.go", "package lib\n")
+			r, err := Run(context.Background(), f, []*manifest.Manifest{builtin(t, "gosec")}, o)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if f.specs[0].StdoutFile != "gosec-stdout.json" {
+				t.Errorf("stdout file %q", f.specs[0].StdoutFile)
+			}
+			p := r.Plugins[0]
+			if p.Status != c.status || !strings.Contains(p.Reason, c.reason) || p.Findings != 1 || len(r.Findings) != 1 {
+				t.Fatalf("plugin %+v, %d findings", p, len(r.Findings))
+			}
+			wantExit := report.ExitClean
+			if c.status == report.Failed {
+				wantExit = report.ExitIncomplete
+			}
+			if got := r.ExitCode(findings.Critical); got != wantExit {
+				t.Errorf("exit %d, want %d", got, wantExit)
+			}
+		})
 	}
 }

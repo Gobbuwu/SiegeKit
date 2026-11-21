@@ -48,13 +48,20 @@
       "count": 4
     },
     "gosec": {
-      "status": "ran",
+      "status": "failed",
+      "reason": "gosec could not load",
+      "why": "Scans have no network, so gosec cannot load the packages that import modules not in this repository; it names them and reports the rest (ADR 0040). Findings measured 2026-11-21 with native gosec 2.30.0 (Go 1.27.4) run as the sandbox runs it: non-root, no network, writable module cache, nothing downloaded. Findings gosec makes only with the modules present (native run with them downloaded) are under notMetYet. Gap measured in gosec-offline-gap-measurement-2026-11-21.md (project files).",
       "match": "exact",
       "findings": [
         "G103 internal/bytesconv/bytesconv.go:14",
-        "G103 internal/bytesconv/bytesconv.go:20"
+        "G103 internal/bytesconv/bytesconv.go:20",
+        "G104 context.go:717",
+        "G104 routergroup.go:271",
+        "G104 test_helpers.go:47",
+        "G304 context.go:760",
+        "G304 recovery.go:156"
       ],
-      "count": 4
+      "count": 9
     },
     "trivy": {
       "status": "ran",
@@ -74,5 +81,49 @@
     "weak-passwords": {
       "status": "ran"
     }
-  }
+  },
+  "notMetYet": [
+    {
+      "check": "gosec",
+      "finding": "G115 render/json.go:170",
+      "needs": "Go modules in the scan: vendored, or the consented module download step (ADR 0040; designed after fix PRs B to F, owner 2026-11-21)",
+      "confirmed": "gosec 2.30.0 run natively with the modules downloaded, 2026-11-21"
+    },
+    {
+      "check": "gosec",
+      "finding": "G115 utils.go:180",
+      "needs": "Go modules in the scan: vendored, or the consented module download step (ADR 0040; designed after fix PRs B to F, owner 2026-11-21)",
+      "confirmed": "gosec 2.30.0 run natively with the modules downloaded, 2026-11-21"
+    },
+    {
+      "check": "gosec",
+      "finding": "G115 utils.go:188",
+      "needs": "Go modules in the scan: vendored, or the consented module download step (ADR 0040; designed after fix PRs B to F, owner 2026-11-21)",
+      "confirmed": "gosec 2.30.0 run natively with the modules downloaded, 2026-11-21"
+    },
+    {
+      "check": "gosec",
+      "finding": "G120 binding/form.go:28",
+      "needs": "Go modules in the scan: vendored, or the consented module download step (ADR 0040; designed after fix PRs B to F, owner 2026-11-21)",
+      "confirmed": "gosec 2.30.0 run natively with the modules downloaded, 2026-11-21"
+    },
+    {
+      "check": "gosec",
+      "finding": "G120 binding/form.go:56",
+      "needs": "Go modules in the scan: vendored, or the consented module download step (ADR 0040; designed after fix PRs B to F, owner 2026-11-21)",
+      "confirmed": "gosec 2.30.0 run natively with the modules downloaded, 2026-11-21"
+    },
+    {
+      "check": "gosec",
+      "finding": "G124 context.go:1162",
+      "needs": "Go modules in the scan: vendored, or the consented module download step (ADR 0040; designed after fix PRs B to F, owner 2026-11-21)",
+      "confirmed": "gosec 2.30.0 run natively with the modules downloaded, 2026-11-21"
+    },
+    {
+      "check": "gosec",
+      "finding": "G124 context.go:1177",
+      "needs": "Go modules in the scan: vendored, or the consented module download step (ADR 0040; designed after fix PRs B to F, owner 2026-11-21)",
+      "confirmed": "gosec 2.30.0 run natively with the modules downloaded, 2026-11-21"
+    }
+  ]
 }

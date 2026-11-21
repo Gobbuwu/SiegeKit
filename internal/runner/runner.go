@@ -22,6 +22,7 @@ import (
 	"github.com/Gobbuwu/SiegeKit/internal/ffuf"
 	"github.com/Gobbuwu/SiegeKit/internal/files"
 	"github.com/Gobbuwu/SiegeKit/internal/findings"
+	"github.com/Gobbuwu/SiegeKit/internal/gosec"
 	"github.com/Gobbuwu/SiegeKit/internal/manifest"
 	"github.com/Gobbuwu/SiegeKit/internal/nuclei"
 	"github.com/Gobbuwu/SiegeKit/internal/report"
@@ -363,7 +364,8 @@ func runPlugin(ctx context.Context, ex Executor, m *manifest.Manifest, opt Optio
 		Image: image, Args: args, Env: m.Run.Env, TargetDir: opt.TargetDir, OutDir: out, Network: m.Network,
 		DataDir: dataDir, DataMount: dataMount, Files: fileMounts,
 		CPUs: cpus, MemoryMiB: m.Resources.MemoryMiB,
-		Timeout: time.Duration(m.Resources.TimeoutSeconds) * time.Second,
+		Timeout:    time.Duration(m.Resources.TimeoutSeconds) * time.Second,
+		StdoutFile: stdoutFile(m),
 	})
 	switch {
 	case err != nil:
@@ -392,7 +394,48 @@ func runPlugin(ctx context.Context, ex Executor, m *manifest.Manifest, opt Optio
 	pr.Status = report.Ran
 	pr.Reason = warning
 	pr.Findings = len(fs)
+	if o := m.Output.Stdout; o != nil {
+		// What the tool did not do (ADR 0040): its findings are kept, but
+		// the run is incomplete (exit code 4), as for unreadable files.
+		missed, err := notDone(filepath.Join(out, o.File), o.Parser, opt.TargetDir)
+		if err != nil {
+			pr.Status, pr.Reason = report.Failed, err.Error()
+		} else if missed != "" {
+			pr.Status, pr.Reason = report.Failed, missed
+		}
+		if warning != "" && pr.Status == report.Failed {
+			pr.Reason += " " + warning
+		}
+	}
 	return pr, fs
+}
+
+// stdoutFile is the file that receives m's standard output, if any.
+func stdoutFile(m *manifest.Manifest) string {
+	if m.Output == nil || m.Output.Stdout == nil {
+		return ""
+	}
+	return m.Output.Stdout.File
+}
+
+// notDone reads the saved standard output with parser and says what the
+// tool did not do in target, "" if nothing. Unreadable output is an error:
+// the run cannot be called complete without it.
+func notDone(path, parser, target string) (string, error) {
+	f, err := openOutput(path)
+	if err != nil {
+		return "", fmt.Errorf("could not read the tool's error list: %w", err)
+	}
+	defer f.Close()
+	switch parser {
+	case "gosec-errors":
+		why, err := gosec.Check(f, target, sandbox.TargetMount)
+		if err != nil {
+			return "", fmt.Errorf("could not read the tool's error list: %w", err)
+		}
+		return why, nil
+	}
+	return "", fmt.Errorf("unknown stdout parser %q", parser)
 }
 
 // repoIgnores records what the scanned repository told the tool to ignore:
@@ -491,21 +534,11 @@ type reportContext struct {
 // readReport opens the tool's report without following symlinks, because the
 // output directory was writable by the tool (threat model T7).
 func readReport(path string, m *manifest.Manifest, suppressed *int, rc reportContext) ([]findings.Finding, error) {
-	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0) // #nosec G304 -- the report the tool wrote in our private output directory; symlinks refused
-	if errors.Is(err, os.ErrNotExist) {
-		return nil, fmt.Errorf("tool wrote no report %q", filepath.Base(path))
-	}
-	if err != nil {
-		return nil, fmt.Errorf("open report: %w", err)
-	}
-	defer f.Close()
-	st, err := f.Stat()
+	f, err := openOutput(path)
 	if err != nil {
 		return nil, err
 	}
-	if !st.Mode().IsRegular() {
-		return nil, fmt.Errorf("report %q is not a regular file", filepath.Base(path))
-	}
+	defer f.Close()
 	mount := sandbox.TargetMount
 	if m.Network == "target-only" {
 		mount = "" // locations are URLs; nothing is mounted at /target
@@ -556,4 +589,26 @@ func lastLine(s string) string {
 		l = append([]rune{'…'}, l[len(l)-300:]...)
 	}
 	return string(l)
+}
+
+// openOutput opens a file the tool wrote in SiegeKit's private output
+// directory: a regular file, not a link.
+func openOutput(path string) (*os.File, error) {
+	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0) // #nosec G304 -- a file the tool wrote in our private output directory; symlinks refused
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, fmt.Errorf("tool wrote no report %q", filepath.Base(path))
+	}
+	if err != nil {
+		return nil, fmt.Errorf("open report: %w", err)
+	}
+	st, err := f.Stat()
+	if err != nil {
+		_ = f.Close() // read-only; the Stat error is the one to report
+		return nil, err
+	}
+	if !st.Mode().IsRegular() {
+		_ = f.Close() // read-only; nothing was read
+		return nil, fmt.Errorf("report %q is not a regular file", filepath.Base(path))
+	}
+	return f, nil
 }

@@ -424,6 +424,26 @@
           "type": "string",
           "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$",
           "description": "Name of the report file the tool writes inside {outdir}."
+        },
+        "stdout": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "file",
+            "parser"
+          ],
+          "description": "SiegeKit saves the tool's standard output to this file inside {outdir} and reads it with the parser for work the tool did not do, such as packages gosec could not load (ADR 0040). The run is then incomplete; its findings are kept.",
+          "properties": {
+            "file": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$"
+            },
+            "parser": {
+              "enum": [
+                "gosec-errors"
+              ]
+            }
+          }
         }
       }
     },

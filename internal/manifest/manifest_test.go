@@ -83,6 +83,7 @@ func TestSchemaEnumsMatch(t *testing.T) {
 		{"network", get("properties", "network", "enum"), Networks},
 		{"format", get("properties", "output", "properties", "format", "enum"), Formats},
 		{"parser", get("properties", "output", "properties", "parser", "enum"), Parsers},
+		{"stdout parser", get("properties", "output", "properties", "stdout", "properties", "parser", "enum"), StdoutParsers},
 	} {
 		if !slices.Equal(c.schema, c.goVals) {
 			t.Errorf("%s: schema %v != Go %v", c.name, c.schema, c.goVals)

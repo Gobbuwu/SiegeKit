@@ -103,13 +103,18 @@ jobs:
           code=$?
           set -e
           echo "exit code $code"
+          # 4 is allowed only when the known answer lists a check as
+          # failed: one that did part of its work and says what it left out
+          # (ADR 0040). The Known answers step checks status and reason.
+          if [ "$code" -eq 4 ] && jq -e '[.checks[] | select(.status == "failed")] | length > 0' "$ANSWERS" > /dev/null; then code=0; fi
           if [ "$code" -ne 0 ] && [ "$code" -ne 3 ]; then exit 1; fi
           # The gate's results hold for this engine only (ADR 0038). Fail if
           # the runner's engine changes.
           jq -e --arg e "$EXPECT_ENGINE" '.environment.engine | (.name + (if .rootless then " rootless" else " rootful" end)) == $e' "$RUNNER_TEMP/report/report.json"
-          # Belt and braces: every plugin ran, or was skipped because the
-          # repository has no files of its language.
-          jq -e '[.plugins[] | select(.status != "ran" and (.status != "skipped" or (.reason | startswith("no files matching") | not)))] | length == 0' "$RUNNER_TEMP/report/report.json"
+          # Belt and braces: every plugin ran, was skipped because the
+          # repository has no files of its language, or failed as its known
+          # answer says (ADR 0040).
+          jq -e --slurpfile a "$ANSWERS" '[.plugins[] | select(.status != "ran" and (.status != "skipped" or (.reason | startswith("no files matching") | not)) and (.status != "failed" or $a[0].checks[.id].status != "failed"))] | length == 0' "$RUNNER_TEMP/report/report.json"
       - name: Known answers
         if: ${{ !cancelled() }}
         # Every check must find what it is known to find on this commit, and

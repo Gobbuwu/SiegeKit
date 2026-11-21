@@ -2,7 +2,7 @@
 
 - Status: Accepted
 - Date: 2026-11-18
-- Amended by: [0020](0020-repository-suppressions.md) (suppressions in the scanned repository are counted)
+- Amended by: [0020](0020-repository-suppressions.md) (suppressions in the scanned repository are counted), [0040](0040-tools-that-skip-work.md) (a check that did part of its work is incomplete)
 
 ## Context
 

@@ -43,6 +43,7 @@ Each significant design decision is recorded as a short ADR before code is writt
 | [0037](0037-backend-live-check.md) | The live hosted-backend check (amends 0011) | Accepted |
 | [0038](0038-run-environment.md) | Every run and result names its environment (amends 0006) | Accepted |
 | [0039](0039-known-answers-and-engine-parity.md) | Known-answer tests, and one sandbox on every engine (amends 0006, 0038) | Accepted |
+| [0040](0040-tools-that-skip-work.md) | A tool that skips part of its work makes the run incomplete (amends 0009, 0039) | Accepted |
 
 ADRs 0002 to 0011 were accepted at the M0 design sign-off on 2026-11-18.
 

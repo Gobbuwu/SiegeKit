@@ -3,6 +3,7 @@
 - Status: Accepted
 - Date: 2026-11-20
 - Amends: [0006](0006-sandbox.md) (the same filesystem on both engines, `SIEGEKIT_ENGINE`), [0038](0038-run-environment.md) (CI runs on both engines)
+- Amended by: [0040](0040-tools-that-skip-work.md) (a known answer can be "failed")
 
 ## Context
 
