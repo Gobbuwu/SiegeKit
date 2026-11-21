@@ -2658,6 +2658,7 @@
     "gosec": {
       "status": "failed",
       "reason": "gosec could not load",
+      "why": "Scans have no network, so gosec cannot load the packages that import modules not in this repository; it names them and reports the rest (ADR 0040). Findings measured 2026-11-21 with native gosec 2.30.0 (Go 1.27.4) run as the sandbox runs it: non-root, no network, writable module cache, nothing downloaded. Findings gosec makes only with the modules present (native run with them downloaded) are under notMetYet. Gap measured in gosec-offline-gap-measurement-2026-11-21.md (project files).",
       "match": "exact",
       "findings": [
         "G103 databases/cassandra/go/main.go:73",
@@ -2670,8 +2671,7 @@
         "G304 _archived/https-nginx/make_secret.go:47",
         "G304 _archived/sharing-clusters/make_secret.go:41"
       ],
-      "count": 9,
-      "why": "Scans have no network, so gosec cannot load the packages that import modules not in this repository; it skips them and reports the rest (ADR 0040). Measured 2026-11-21: CI gate run 44849990603 shows gosec failed; the offline gap on this commit is in gosec-offline-gap-measurement-2026-11-21.md (project files). The missed findings are listed under notMetYet."
+      "count": 9
     },
     "trivy": {
       "status": "ran"
@@ -2695,49 +2695,49 @@
     {
       "check": "gosec",
       "finding": "G104 _archived/explorer/explorer.go:100-105",
-      "needs": "Go modules in the scan: vendored, or the consented module download step (ADR 0040, owner decision pending)",
+      "needs": "Go modules in the scan: vendored, or the consented module download step (ADR 0040; designed after fix PRs B to F, owner 2026-11-21)",
       "confirmed": "gosec 2.30.0 run natively with the modules downloaded, 2026-11-21"
     },
     {
       "check": "gosec",
       "finding": "G104 _archived/explorer/explorer.go:109",
-      "needs": "Go modules in the scan: vendored, or the consented module download step (ADR 0040, owner decision pending)",
+      "needs": "Go modules in the scan: vendored, or the consented module download step (ADR 0040; designed after fix PRs B to F, owner 2026-11-21)",
       "confirmed": "gosec 2.30.0 run natively with the modules downloaded, 2026-11-21"
     },
     {
       "check": "gosec",
       "finding": "G104 _archived/explorer/explorer.go:113",
-      "needs": "Go modules in the scan: vendored, or the consented module download step (ADR 0040, owner decision pending)",
+      "needs": "Go modules in the scan: vendored, or the consented module download step (ADR 0040; designed after fix PRs B to F, owner 2026-11-21)",
       "confirmed": "gosec 2.30.0 run natively with the modules downloaded, 2026-11-21"
     },
     {
       "check": "gosec",
       "finding": "G104 _archived/explorer/explorer.go:117",
-      "needs": "Go modules in the scan: vendored, or the consented module download step (ADR 0040, owner decision pending)",
+      "needs": "Go modules in the scan: vendored, or the consented module download step (ADR 0040; designed after fix PRs B to F, owner 2026-11-21)",
       "confirmed": "gosec 2.30.0 run natively with the modules downloaded, 2026-11-21"
     },
     {
       "check": "gosec",
       "finding": "G104 _archived/explorer/explorer.go:92",
-      "needs": "Go modules in the scan: vendored, or the consented module download step (ADR 0040, owner decision pending)",
+      "needs": "Go modules in the scan: vendored, or the consented module download step (ADR 0040; designed after fix PRs B to F, owner 2026-11-21)",
       "confirmed": "gosec 2.30.0 run natively with the modules downloaded, 2026-11-21"
     },
     {
       "check": "gosec",
       "finding": "G104 _archived/explorer/explorer.go:96",
-      "needs": "Go modules in the scan: vendored, or the consented module download step (ADR 0040, owner decision pending)",
+      "needs": "Go modules in the scan: vendored, or the consented module download step (ADR 0040; designed after fix PRs B to F, owner 2026-11-21)",
       "confirmed": "gosec 2.30.0 run natively with the modules downloaded, 2026-11-21"
     },
     {
       "check": "gosec",
       "finding": "G704 _archived/explorer/explorer.go:108",
-      "needs": "Go modules in the scan: vendored, or the consented module download step (ADR 0040, owner decision pending)",
+      "needs": "Go modules in the scan: vendored, or the consented module download step (ADR 0040; designed after fix PRs B to F, owner 2026-11-21)",
       "confirmed": "gosec 2.30.0 run natively with the modules downloaded, 2026-11-21"
     },
     {
       "check": "gosec",
       "finding": "G705 _archived/explorer/explorer.go:84",
-      "needs": "Go modules in the scan: vendored, or the consented module download step (ADR 0040, owner decision pending)",
+      "needs": "Go modules in the scan: vendored, or the consented module download step (ADR 0040; designed after fix PRs B to F, owner 2026-11-21)",
       "confirmed": "gosec 2.30.0 run natively with the modules downloaded, 2026-11-21"
     }
   ]

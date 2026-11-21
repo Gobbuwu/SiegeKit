@@ -18,14 +18,17 @@ This is the same failure as ZAP's cut-short attack scan (ADR 0039): a tool does 
 2. **gosec writes its JSON report to standard output as well** (`-stdout -verbose json`). SARIF stays the source of findings, so finding keys do not change. `gosec-errors` reads the JSON's "Golang errors" list and turns it into package directories (`internal/gosec`, fuzzed).
 3. **Any skipped package makes gosec "failed", with its findings kept**, as for files a root run cannot read (PR #21): the reason names up to 10 package directories and counts the rest, and says that vendoring the modules (`go mod vendor`) lets them be checked. Exit code 4 unless a finding gives 3. A missing or unreadable error list is also "failed": a run is not called complete without it.
 4. **Known answers can be "failed"** with the reason the check gives and a why. The gate accepts exit 4 and a failed plugin only where the answer says so. Findings the fixture is known to have but the offline run misses are listed under `notMetYet`, with "Go module download (owner decision pending)" as what they need.
-5. **Getting the modules into the scan** is a separate decision for the owner: a consented download step like `siegekit update` (ADR 0014). Until then the report says what was not checked.
+5. **gosec gets a writable module cache, and SiegeKit counts the files.** The first CI run found a second, silent way to skip: in the sandbox the image's `GOPATH` (`/go`) is not writable by the scan user, so Go cannot create its module cache, `go list` fails, and gosec drops every package that imports a module with no entry in "Golang errors" and exit 0 (gin: 4 of 54 files checked; reproduced natively as a non-root user without network, 2026-11-21; gosec skips a loaded package with no name, `analyzer.go`). The plugin sets `GOPATH=/tmp/go`, which gives the load errors of decision 3 instead. For any other cause, `internal/gosec` counts the Go files gosec should check (each directory with a `.go` file, `vendor` and `.git` left out as gosec's default `-exclude-dir` does; go/build for Linux on this architecture, no test files, no cgo files, regular files only) and the check is "failed" when gosec's own count (`Stats.files`) is lower and it named no error. On the 10 measured repositories the count was never higher than what gosec checked with the modules present (211 against 243 on caddy, 5 against 6 on kubernetes/examples, 93 against 94 on shiori, equal on the others), and it caught the silent skip on all 10 runs without a module cache.
+6. **Getting the modules into the scan** is a separate decision for the owner: a consented download step like `siegekit update` (ADR 0014). Until then the report says what was not checked.
 
 ## Consequences
 
 - Scans of most Go apps that do not vendor their modules now end incomplete (exit 4) and name the packages. That is true, and it is louder than before.
 - Code that does not compile is also reported as not checked (2 of 10 repositories had such packages even with their modules).
 - The pattern applies to any tool whose report format hides skipped work: add a stdout parser instead of trusting exit 0.
-- Not verified: the Go version inside the pinned gosec image, and whether it gives the same load errors as the native gosec measured here. The gate's runs on both engines will show the image's own numbers.
+- The image's far lower finding counts in CI (caddy 2 against 74 natively offline, awesome-compose 1 against 6) were this missing module cache: native gosec without one gave the same numbers (caddy 2, awesome-compose 1).
+- The file count is a lower bound: a file built only for a newer Go release than SiegeKit's, or only with cgo, is not counted, so a skip of such files alone is not seen.
+- Not verified: the exact Go version inside the pinned gosec image (its release workflow builds it from `golang:1.27-alpine`).
 
 ## Alternatives considered
 
