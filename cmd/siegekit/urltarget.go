@@ -801,7 +801,7 @@ func runURL(ctx context.Context, u *target.URL, addrs []netip.Addr, mode target.
 		case stdinIsTerminal():
 			fmt.Fprintf(stdout, "%s will send these %d request(s) to %s:\n", authz.WriteID, len(o.writes.Writes), u)
 			for _, w := range o.writes.Writes {
-				fmt.Fprintf(stdout, "  %s %s\n", w.Method, w.Path)
+				fmt.Fprintf(stdout, "  %s\n", w.Label())
 			}
 			fmt.Fprintf(stdout, "Each is sent as account B and with no login; where the recording shows how account A made the object, SiegeKit first makes a copy with A's request. This changes data in the app: use a throwaway database or a snapshot. Type %q to run them: ", changeTestData)
 			line, _ := o.in.ReadString('\n')

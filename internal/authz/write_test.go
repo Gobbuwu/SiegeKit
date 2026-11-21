@@ -593,3 +593,126 @@ func FuzzParseWrites(f *testing.F) {
 		}
 	})
 }
+
+func TestGraphQLOp(t *testing.T) {
+	for _, c := range []struct {
+		body, kind, name string
+		ok               bool
+	}{
+		{`{"query":"mutation EditPaste($id: Int!) { editPaste(id: $id) { paste { id } } }","variables":{"id":1}}`, "mutation", "EditPaste", true},
+		{`{"query":"mutation { deletePaste(id: 1) { result } }"}`, "mutation", "mutation", true},
+		{`{"query":"query getPastes { pastes { id } }"}`, "query", "", true},
+		{`{"query":"{ pastes { id } }"}`, "query", "", true},
+		{`{"query":"subscription s { paste { id } }"}`, "subscription", "", true},
+		// operationName picks the operation that runs.
+		{`{"query":"query A { a } mutation B { b }","operationName":"B"}`, "mutation", "B", true},
+		{`{"query":"query A { a } mutation B { b }","operationName":"A"}`, "query", "", true},
+		// A comment naming a mutation is not one.
+		{`{"query":"# mutation X\nquery Y { y }"}`, "query", "", true},
+		{`[{"query":"query a { a }"},{"query":"mutation m { m }"}]`, "mutation", "m", true},
+		{`[{"query":"query a { a }"},{"query":"{ b }"}]`, "query", "", true},
+		// A persisted query sent by its hash, plain JSON, a form: not recognised.
+		{`{"extensions":{"persistedQuery":{"sha256Hash":"abc"}}}`, "", "", false},
+		{`{"title":"x"}`, "", "", false},
+		{`query=x`, "", "", false},
+		{`[]`, "", "", false},
+	} {
+		kind, name, ok := graphQLOp([]byte(c.body))
+		if kind != c.kind || name != c.name || ok != c.ok {
+			t.Errorf("%s: %q %q %v", c.body, kind, name, ok)
+		}
+	}
+}
+
+func TestGraphQLRefused(t *testing.T) {
+	for body, want := range map[string]bool{
+		`{"errors":[{"message":"not allowed"}],"data":{"editPaste":null}}`: true,
+		`{"errors":[{"message":"not allowed"}],"data":null}`:               true,
+		`{"errors":[{"message":"not allowed"}]}`:                           true,
+		`{"errors":[{"message":"partly"}],"data":{"editPaste":{"id":1}}}`:  false,
+		`{"data":{"editPaste":{"id":1}}}`:                                  false,
+		`[{"errors":[{"message":"x"}]},{"errors":[{"message":"y"}]}]`:      true,
+		`[{"errors":[{"message":"x"}]},{"data":{"m":1}}]`:                  false,
+		`not json`: false,
+	} {
+		if got := graphQLRefused([]byte(body)); got != want {
+			t.Errorf("%s: %v", body, got)
+		}
+	}
+}
+
+// TestWriteCheckGraphQL: queries are reads and are not replayed; a
+// mutation refused with 200 and an "errors" list is not accepted; one the
+// app lets B run on A's copy is.
+func TestWriteCheckGraphQL(t *testing.T) {
+	for _, ownerCheck := range []bool{true, false} {
+		var mu sync.Mutex
+		notes, next := map[int]string{}, 7
+		var sent []string
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			mu.Lock()
+			defer mu.Unlock()
+			u := map[string]string{"Bearer A": "alice", "Bearer B": "bob"}[r.Header.Get("Authorization")]
+			var q struct {
+				Query     string         `json:"query"`
+				Variables map[string]any `json:"variables"`
+			}
+			json.NewDecoder(r.Body).Decode(&q)
+			sent = append(sent, u+" "+strings.Fields(q.Query)[0]+" "+strings.Fields(q.Query)[1])
+			refuse := func() { fmt.Fprint(w, `{"errors":[{"message":"not allowed"}],"data":{"x":null}}`) }
+			switch {
+			case u == "":
+				refuse()
+			case strings.HasPrefix(q.Query, "mutation createNote"):
+				next++
+				notes[next] = u
+				fmt.Fprintf(w, `{"data":{"createNote":{"note":{"id":%d}}}}`, next)
+			case strings.HasPrefix(q.Query, "mutation editNote"):
+				id := int(q.Variables["id"].(float64))
+				if notes[id] == "" || ownerCheck && notes[id] != u {
+					refuse()
+					return
+				}
+				fmt.Fprint(w, `{"data":{"editNote":{"ok":true}}}`)
+			default:
+				fmt.Fprint(w, `{"data":{"notes":[]}}`)
+			}
+		}))
+		noSleep(t)
+		a := map[string]string{"Authorization": "Bearer A"}
+		u := srv.URL + "/graphql"
+		har := writeHAR(t, []writeEntry{
+			{method: "POST", url: u, headers: a, mime: "application/json", body: `{"query":"query notes { notes { id } }"}`, status: 200, answer: `{"data":{"notes":[]}}`},
+			{method: "POST", url: u, headers: a, mime: "application/json", body: `{"query":"mutation createNote { createNote(text: \"x\") { note { id } } }"}`, status: 200, answer: `{"data":{"createNote":{"note":{"id":7}}}}`},
+			{method: "POST", url: u, headers: a, mime: "application/json", body: `{"query":"mutation editNote($id: Int!) { editNote(id: $id) { ok } }","variables":{"id":7}}`, status: 200, answer: `{"data":{"editNote":{"ok":true}}}`},
+		})
+		tu := mustTarget(t, srv.URL+"/")
+		ws, err := ParseWrites(har, tu)
+		if err != nil || len(ws.Writes) != 2 || ws.GraphQLReads != 1 || ws.Writes[1].GraphQL != "editNote" || ws.Writes[1].Create == nil ||
+			ws.Writes[1].Label() != "POST /graphql (GraphQL editNote)" {
+			t.Fatalf("%v %+v", err, ws)
+		}
+		cfg := egress.Config{Target: tu, Addrs: []netip.Addr{netip.MustParseAddr("127.0.0.1")}, Version: "test"}
+		res, err := WriteCheck(context.Background(), cfg, ws.Writes, http.Header{"Authorization": {"Bearer B"}}, "alice", 10, target.Local)
+		srv.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+		fs := WriteFindings(srv.URL, res)
+		for _, s := range sent {
+			if strings.HasPrefix(s, " query") || strings.HasPrefix(s, "bob query") {
+				t.Errorf("a query was replayed: %v", sent)
+			}
+		}
+		if ownerCheck && len(fs) != 0 {
+			t.Errorf("owner-checked: %+v", fs)
+		}
+		if !ownerCheck && (len(fs) != 1 || fs[0].RuleID != "cross-account-write" || fs[0].Severity != findings.Medium ||
+			!strings.Contains(fs[0].Message, "POST /graphql (GraphQL editNote)")) {
+			t.Errorf("not owner-checked: %+v", fs)
+		}
+		if sum := res.WriteSummary(ws); !strings.Contains(sum, "1 GraphQL queries or subscriptions (reads) not replayed") {
+			t.Errorf("summary %s", sum)
+		}
+	}
+}

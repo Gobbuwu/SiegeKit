@@ -60,6 +60,19 @@ type Write struct {
 	// a header or the body. A refusal of B's or the no-login replay may
 	// come from that token, not from access control (ADR 0049).
 	CSRF bool
+	// GraphQL names the mutation of a GraphQL request ("mutation" when it
+	// has no name), empty for other requests. GraphQL answers a refused
+	// operation with 200 and an "errors" list, so Accepted reads the body.
+	GraphQL string
+}
+
+// Label is the write as people read it: method and path, plus the
+// GraphQL mutation, since every GraphQL write shares one path.
+func (w Write) Label() string {
+	if w.GraphQL != "" {
+		return w.Method + " " + w.Path + " (GraphQL " + w.GraphQL + ")"
+	}
+	return w.Method + " " + w.Path
 }
 
 // Create is a recorded POST whose answer gave the ID a later write uses.
@@ -82,6 +95,9 @@ type Writes struct {
 	NoBody       int // the HAR file holds form fields but not the body text
 	Duplicate    int
 	OverLimit    int // past MaxWrites
+	// GraphQLReads counts GraphQL queries and subscriptions sent with
+	// POST: they read, so they are not replayed as writes.
+	GraphQLReads int
 }
 
 type harWriteFile struct {
@@ -194,8 +210,20 @@ func ParseWrites(data []byte, t *target.URL) (*Writes, error) {
 			hd.Del("Content-Type")
 		}
 		wr := Write{Method: method, Path: p, Header: hd, Body: body, CSRF: carriesCSRF(hd, body), RecordedStatus: e.Response.Status}
+		if kind, name, ok := graphQLOp(body); ok {
+			if kind != "mutation" {
+				w.GraphQLReads++
+				continue
+			}
+			wr.GraphQL = name
+		}
 		if method == http.MethodPost {
-			if ids := answerIDs(e.Response.Status, e.Response.Content.Text, e.Response.Content.Encoding); len(ids) > 0 {
+			depth := 3
+			if wr.GraphQL != "" {
+				// GraphQL nests one level more: data, the mutation, its payload.
+				depth = 4
+			}
+			if ids := answerIDs(e.Response.Status, e.Response.Content.Text, e.Response.Content.Encoding, depth); len(ids) > 0 {
 				creates = append(creates, recordedCreate{index: i, c: Create{Path: p, Header: hd.Clone(), Body: body}, ids: ids})
 			}
 		}
@@ -244,9 +272,9 @@ func idRank(key string) int {
 
 // answerIDs returns the ID fields of a 2xx JSON answer: keys named like
 // idNames whose value is a whole number or a short string without "/" or
-// spaces, in objects at most 3 deep (not inside arrays), nearest first and
-// by idNames order.
-func answerIDs(status int, text, encoding string) []idField {
+// spaces, in objects at most maxDepth deep (3, or 4 for GraphQL; not
+// inside arrays), nearest first and by idNames order.
+func answerIDs(status int, text, encoding string, maxDepth int) []idField {
 	if status < 200 || status >= 300 || text == "" {
 		return nil
 	}
@@ -273,7 +301,7 @@ func answerIDs(status int, text, encoding string) []idField {
 			path []string
 		}{m, nil})
 	}
-	for depth := 0; depth < 3 && len(level) > 0; depth++ {
+	for depth := 0; depth < maxDepth && len(level) > 0; depth++ {
 		next := level[:0:0]
 		for _, l := range level {
 			keys := make([]string, 0, len(l.obj))
@@ -855,7 +883,7 @@ func newID(a Answer, field []string) (string, bool) {
 // 2026-11-21, ADR 0049).
 func (r WriteReplay) Accepted() bool {
 	if ok2xx(r.Answer) {
-		return true
+		return r.GraphQL == "" || !graphQLRefused(r.Answer.Body)
 	}
 	return r.Answer.Err == "" && r.Answer.Status >= 300 && r.Answer.Status < 400 &&
 		r.RecordedStatus >= 300 && r.RecordedStatus < 400 && !toLogin(r.Location) && !echoed(r.Location, r.Sent, r.Body)
@@ -949,10 +977,10 @@ func WriteFindings(origin string, res WriteResult) []findings.Finding {
 				cwe = "CWE-639"
 			}
 			f.RuleID, f.Title, f.CWEs = "cross-account-write", "Another account can change this data", []string{cwe}
-			f.Message = fmt.Sprintf("%s %s, recorded as account A and sent as account B on %s, was accepted (status %d). Account B can likely change or delete account A's data: broken access control (OWASP API1 and API5). %s", r.Method, pathOnly, obj, r.Answer.Status, proof)
+			f.Message = fmt.Sprintf("%s %s, recorded as account A and sent as account B on %s, was accepted (status %d). Account B can likely change or delete account A's data: broken access control (OWASP API1 and API5). %s", r.Method, gqlPath(pathOnly, r.GraphQL), obj, r.Answer.Status, proof)
 		} else {
 			f.RuleID, f.Title, f.CWEs = "no-login-write", "Data can be changed with no login", []string{"CWE-306"}
-			f.Message = fmt.Sprintf("%s %s, recorded as account A and sent with no login on %s, was accepted (status %d). Anyone may be able to change this data: missing authentication (OWASP API2). %s", r.Method, pathOnly, obj, r.Answer.Status, proof)
+			f.Message = fmt.Sprintf("%s %s, recorded as account A and sent with no login on %s, was accepted (status %d). Anyone may be able to change this data: missing authentication (OWASP API2). %s", r.Method, gqlPath(pathOnly, r.GraphQL), obj, r.Answer.Status, proof)
 		}
 		out = append(out, f)
 	}
@@ -980,7 +1008,7 @@ func (r WriteResult) WriteSummary(w *Writes) string {
 			medium++
 		}
 		if rp.Accepted() {
-			accepted = appendOnce(accepted, fmt.Sprintf("%s %s as %s", rp.Method, pathOf(rp.Sent), whoName(rp.Who)))
+			accepted = appendOnce(accepted, fmt.Sprintf("%s as %s", Write{Method: rp.Method, Path: pathOf(rp.Sent), GraphQL: rp.GraphQL}.Label(), whoName(rp.Who)))
 		}
 		if rp.Recreated && rp.Create != nil {
 			recreatedAt = appendOnce(recreatedAt, "POST "+pathOf(rp.Create.Path))
@@ -1025,7 +1053,7 @@ func (r WriteResult) WriteSummary(w *Writes) string {
 		for _, x := range []struct {
 			n    int
 			what string
-		}{{w.NoBody, "with form fields but no body text in the HAR file"}, {w.Duplicate, "duplicates"}, {w.OverLimit, fmt.Sprintf("over the %d-write limit", MaxWrites)}} {
+		}{{w.NoBody, "with form fields but no body text in the HAR file"}, {w.GraphQLReads, "GraphQL queries or subscriptions (reads)"}, {w.Duplicate, "duplicates"}, {w.OverLimit, fmt.Sprintf("over the %d-write limit", MaxWrites)}} {
 			if x.n > 0 {
 				notes = append(notes, fmt.Sprintf("%d %s not replayed", x.n, x.what))
 			}
@@ -1185,4 +1213,103 @@ func mergeCookies(header string, set []*http.Cookie) string {
 		}
 	}
 	return strings.Join(out, "; ")
+}
+
+// graphQLOp reads a GraphQL-over-HTTP request body: a JSON object, or a
+// batch of them, with a "query" string. kind is "mutation" when the
+// operation it runs (operationName, else the first one) is a mutation,
+// else "query" or "subscription"; name is the mutation's name. A body
+// without query text, such as a persisted query sent by its hash, is not
+// recognised (ok false) and stays a write.
+func graphQLOp(body []byte) (kind, name string, ok bool) {
+	var one map[string]any
+	if json.Unmarshal(body, &one) == nil {
+		return graphQLDoc(one)
+	}
+	var batch []map[string]any
+	if json.Unmarshal(body, &batch) != nil || len(batch) == 0 {
+		return "", "", false
+	}
+	kind = "query"
+	for _, b := range batch {
+		k, n, isGQL := graphQLDoc(b)
+		if !isGQL {
+			return "", "", false
+		}
+		if k == "mutation" && kind != "mutation" {
+			kind, name = k, n
+		}
+	}
+	return kind, name, true
+}
+
+var (
+	reGraphQLComment = regexp.MustCompile(`#[^\n]*`)
+	reGraphQLOp      = regexp.MustCompile(`(?:^|[\s}])(query|mutation|subscription)\b\s*([_A-Za-z][_0-9A-Za-z]*)?`)
+)
+
+func graphQLDoc(m map[string]any) (kind, name string, ok bool) {
+	q, isString := m["query"].(string)
+	if !isString || strings.TrimSpace(q) == "" {
+		return "", "", false
+	}
+	q = reGraphQLComment.ReplaceAllString(q, "")
+	want, _ := m["operationName"].(string)
+	ops := reGraphQLOp.FindAllStringSubmatch(q, -1)
+	if len(ops) == 0 {
+		// The shorthand "{ field }" is a query.
+		if strings.HasPrefix(strings.TrimSpace(q), "{") {
+			return "query", "", true
+		}
+		return "", "", false
+	}
+	op := ops[0]
+	for _, o := range ops {
+		if want != "" && o[2] == want {
+			op = o
+			break
+		}
+	}
+	if op[1] != "mutation" {
+		return op[1], "", true
+	}
+	if op[2] == "" {
+		return "mutation", "mutation", true
+	}
+	return "mutation", op[2], true
+}
+
+// graphQLRefused reports whether a 2xx GraphQL answer refused the
+// operation: an "errors" list and no data (absent, null, or only null
+// fields). GraphQL over HTTP answers such errors with 200.
+func graphQLRefused(body []byte) bool {
+	var batch []json.RawMessage
+	if json.Unmarshal(body, &batch) == nil && len(batch) > 0 {
+		for _, b := range batch {
+			if !graphQLRefused(b) {
+				return false
+			}
+		}
+		return true
+	}
+	var a struct {
+		Data   map[string]any    `json:"data"`
+		Errors []json.RawMessage `json:"errors"`
+	}
+	if json.Unmarshal(body, &a) != nil || len(a.Errors) == 0 {
+		return false
+	}
+	for _, v := range a.Data {
+		if v != nil {
+			return false
+		}
+	}
+	return true
+}
+
+func gqlPath(path, op string) string {
+	if op == "" {
+		return path
+	}
+	return path + " (GraphQL " + op + ")"
 }
