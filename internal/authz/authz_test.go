@@ -32,22 +32,10 @@ func har(t *testing.T, es []entry, headers map[string]string) []byte {
 	t.Helper()
 	var f harFile
 	for _, e := range es {
-		var x struct {
-			Request struct {
-				Method  string `json:"method"`
-				URL     string `json:"url"`
-				Headers []struct {
-					Name  string `json:"name"`
-					Value string `json:"value"`
-				} `json:"headers"`
-			} `json:"request"`
-		}
+		var x harEntry
 		x.Request.Method, x.Request.URL = e.method, e.url
 		for k, v := range headers {
-			x.Request.Headers = append(x.Request.Headers, struct {
-				Name  string `json:"name"`
-				Value string `json:"value"`
-			}{k, v})
+			x.Request.Headers = append(x.Request.Headers, harHeader{k, v})
 		}
 		f.Log.Entries = append(f.Log.Entries, x)
 	}
@@ -101,7 +89,7 @@ func TestParseHAR(t *testing.T) {
 	for _, c := range []struct{ data, want string }{
 		{"not json", "not a HAR file"},
 		{`{"log":{"entries":[]}}`, "no requests"},
-		{string(har(t, []entry{{"POST", "http://localhost:3000/x"}, {"GET", "http://localhost:3000/a.js"}}, nil)), "no GET or HEAD request"},
+		{string(har(t, []entry{{"OPTIONS", "http://localhost:3000/x"}, {"GET", "http://localhost:3000/a.js"}}, nil)), "no request to http://localhost:3000 other than static files"},
 	} {
 		if _, err := ParseHAR([]byte(c.data), tu); err == nil || !strings.Contains(err.Error(), c.want) {
 			t.Errorf("%.30q: %v, want %q", c.data, err, c.want)
@@ -378,8 +366,13 @@ func FuzzParseHAR(f *testing.F) {
 	}
 	f.Fuzz(func(t *testing.T, data []byte, session string) {
 		if h, err := ParseHAR(data, tu); err == nil {
-			if len(h.Requests) == 0 || len(h.Requests) > MaxRequests {
-				t.Fatalf("%d requests", len(h.Requests))
+			if len(h.Requests)+len(h.Recorded) == 0 || len(h.Requests) > MaxRequests || len(h.Recorded) > MaxRecorded {
+				t.Fatalf("%d requests, %d recorded", len(h.Requests), len(h.Recorded))
+			}
+			for _, x := range h.Recorded {
+				if !recordMethods[x.Method] || !strings.HasPrefix(x.URL, "http://localhost:3000/") || x.Body == "" && (x.MimeType != "" || x.Header.Get("Content-Type") != "") || x.Header.Get("Host") != "" {
+					t.Fatalf("%+v", x)
+				}
 			}
 			for _, r := range h.Requests {
 				if r.Method != "GET" && r.Method != "HEAD" || !strings.HasPrefix(r.Path, "/") || r.Header.Get("Host") != "" || r.Header.Get("User-Agent") != "" {
@@ -460,5 +453,82 @@ func TestSecretFields(t *testing.T) {
 	many.WriteString("}")
 	if got := SecretFields([]byte(many.String())); len(got) != 5 {
 		t.Errorf("%v", got)
+	}
+}
+
+// TestParseHARRecorded checks which recorded requests are kept for ZAP's
+// attack scan (ADR 0047): GET, HEAD, POST, PUT, PATCH and DELETE on the
+// target's origin, static files left out, without duplicates.
+func TestParseHARRecorded(t *testing.T) {
+	tu := mustTarget(t, "http://localhost:3000/")
+	e := func(method, u, mime, body string, hs ...harHeader) harEntry {
+		var x harEntry
+		x.Request.Method, x.Request.URL, x.Request.Headers = method, u, hs
+		if body != "" || mime != "" {
+			x.Request.PostData = &harPostData{MimeType: mime, Text: body}
+		}
+		return x
+	}
+	var f harFile
+	f.Log.Entries = []harEntry{
+		e("POST", "http://localhost:3000/api/order", "application/xml", "<order/>", harHeader{"Cookie", "s=A"}, harHeader{"Content-Length", "8"}),
+		e("POST", "http://localhost:3000/api/order", "application/xml", "<order/>"),                      // duplicate
+		e("POST", "http://localhost:3000/api/order", "application/xml", "<order n=\"2\"/>"),              // another body
+		e("PUT", "http://localhost:3000/soap?v=2", "application/soap+xml; charset=utf-8", "<Envelope/>"), // query kept
+		e("POST", "http://localhost:3000/json", "application/json", `{"a":1}`),
+		e("POST", "http://localhost:3000/empty", "application/xml", "", harHeader{"Content-Type", "text/xml"}), // no body: no type
+		e("DELETE", "http://localhost:3000/x", "", ""),
+		e("OPTIONS", "http://localhost:3000/x", "", ""),                                           // other method
+		e("POST", "http://localhost:3001/x", "application/xml", "<a/>"),                           // other origin
+		e("POST", "http://localhost:3000//evil.test/x", "application/xml", "<a/>"),                // path not sendable
+		e("POST", "http://localhost:3000/hdr", "", "<a/>", harHeader{"content-type", "text/xml"}), // type from the header
+		e("GET", "http://localhost:3000/main.js", "", ""),                                         // static
+		e("GET", "http://localhost:3000/page", "", ""),
+	}
+	data, err := json.Marshal(f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h, err := ParseHAR(data, tu)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, x := range h.Recorded {
+		got = append(got, x.Method+" "+x.URL+" "+x.Header.Get("Content-Type"))
+	}
+	want := []string{
+		"POST http://localhost:3000/api/order application/xml",
+		"POST http://localhost:3000/api/order application/xml",
+		"PUT http://localhost:3000/soap?v=2 application/soap+xml; charset=utf-8",
+		"POST http://localhost:3000/json application/json",
+		"POST http://localhost:3000/empty ",
+		"DELETE http://localhost:3000/x ",
+		"POST http://localhost:3000/hdr text/xml",
+		"GET http://localhost:3000/page ",
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("recorded requests\n%v\nwant\n%v", got, want)
+	}
+	if x := h.Recorded[0]; x.Header.Get("Cookie") != "s=A" || x.Header.Get("Content-Length") != "" || x.Body != "<order/>" {
+		t.Errorf("first: %+v", x)
+	}
+	if len(h.Requests) != 1 || h.Static != 1 || h.OtherOrigin != 1 || h.BadPath != 1 {
+		t.Errorf("replay %d, counts %+v", len(h.Requests), h)
+	}
+
+	// A recording with no GET or HEAD request is accepted.
+	f.Log.Entries = f.Log.Entries[:1]
+	data, _ = json.Marshal(f)
+	if h, err := ParseHAR(data, tu); err != nil || len(h.Requests) != 0 || len(h.Recorded) != 1 {
+		t.Errorf("POST only: %+v %v", h, err)
+	}
+	var many harFile
+	for i := range MaxRecorded + 3 {
+		many.Log.Entries = append(many.Log.Entries, e("POST", fmt.Sprintf("http://localhost:3000/x/%d", i), "text/xml", "<a/>"))
+	}
+	data, _ = json.Marshal(many)
+	if h, err := ParseHAR(data, tu); err != nil || len(h.Recorded) != MaxRecorded || h.RecordedOverLimit != 3 {
+		t.Errorf("limit: %d %d %v", len(h.Recorded), h.RecordedOverLimit, err)
 	}
 }

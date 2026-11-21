@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -64,6 +66,26 @@ func vulnApp() http.Handler {
 	mux.HandleFunc("/static/vendor.js.map", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		fmt.Fprint(w, `{"version":3,"sources":["src/vendor.js"],"sourcesContent":["export const vendor = 1;"],"mappings":"AAAA"}`)
+	})
+	// XML external entities (ADR 0047): POST /api/import reads the XML it
+	// is sent and resolves each file:// entity its DOCTYPE declares, as a
+	// parser with external entities on would, then echoes the document.
+	// Go's encoding/xml never resolves entities, so this is done by hand.
+	// The page never sends XML: only a recorded request reaches it.
+	mux.HandleFunc("/api/import", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		b, _ := io.ReadAll(io.LimitReader(r.Body, 64<<10))
+		doc := string(b)
+		for _, m := range reXMLEntity.FindAllStringSubmatch(doc, 4) {
+			f, _ := os.ReadFile(m[2]) // #nosec G304 -- the planted flaw; the test server listens on loopback only
+			doc = strings.ReplaceAll(doc, "&"+m[1]+";", string(f))
+		}
+		doc = reXMLDoctype.ReplaceAllString(doc, "")
+		w.Header().Set("Content-Type", "application/xml")
+		fmt.Fprint(w, "<imported>"+doc+"</imported>")
 	})
 	// Reflected cross-site scripting: the query is echoed unescaped.
 	mux.HandleFunc("/search", func(w http.ResponseWriter, r *http.Request) {
@@ -273,6 +295,15 @@ var vulnAppMinRequests = map[string]int{
 	"schemathesis":         18,    // 21 with vulnAppSchemathesisSeed on every run (12 local runs, 2026-11-21)
 }
 
+var (
+	reXMLEntity  = regexp.MustCompile(`<!ENTITY\s+([A-Za-z_][\w.-]*)\s+SYSTEM\s+["']file://([^"']+)["']\s*>`)
+	reXMLDoctype = regexp.MustCompile(`(?s)<\?xml[^>]*\?>|<!DOCTYPE[^\[>]*(\[.*?\])?\s*>`)
+)
+
+// vulnAppRecordedRequest is the recorded XML request given to zap-active, as a
+// HAR file would hold it (ADR 0047).
+const vulnAppRecordedRequest = `<?xml version="1.0"?><order><item>hat</item></order>`
+
 // vulnAppSchemathesisSeed is the seed the test passes to Schemathesis, so
 // that its count above is the same every run (see findsPlanted).
 const vulnAppSchemathesisSeed = "1"
@@ -291,6 +322,7 @@ var vulnAppIssues = map[string]map[string]string{
 		"10036": "Server header leaks a version",
 	},
 	"zap-active": {
+		"90023": "XML external entity in POST /api/import, given as a recorded request",
 		"40012": "reflected cross-site scripting in /search",
 		"40018": "SQL injection in /item",
 		"6":     "path traversal in /file",

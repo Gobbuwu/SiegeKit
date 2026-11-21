@@ -1,6 +1,6 @@
 {
   "fixture": "juice-shop v20.4.0 by URL (docker.io/bkimminich/juice-shop@sha256:9bbaecc41791f00b002bc65931cc5ff355fbdb941fa72b06558c18dace43197b)",
-  "measured": "CI gate runs 44834908813 and 44836476025 on 2026-11-20 (ubuntu-latest), each on podman 5.7.0 rootless, cgroup v2, and docker 29.4.2 rootful, cgroup v2: four runs. Minimum requests are 90% of the fewest of the four; public-maps and schemathesis (and served-secrets' higher minimum) from 3 local runs on 2026-11-21 (docker 29.10.0 rootful, cgroup v1: 11, 4 and 17 requests on each run), confirmed by the gate of #56 (ADR 0046)",
+  "measured": "CI gate runs 44834908813 and 44836476025 on 2026-11-20 (ubuntu-latest), each on podman 5.7.0 rootless, cgroup v2, and docker 29.4.2 rootful, cgroup v2: four runs. Minimum requests are 90% of the fewest of the four; public-maps and schemathesis (and served-secrets' higher minimum) from 3 local runs on 2026-11-21 (docker 29.10.0 rootful, cgroup v1: 11, 4 and 17 requests on each run), confirmed by the gate of #56 (ADR 0046); zap-active's recorded requests (ADR 0047) from 2 local runs on 2026-11-21 (docker 29.10.0 rootful, cgroup v1), to be confirmed by the gate of the ADR 0047 PR",
   "checks": {
     "access-control": {
       "status": "ran",
@@ -128,27 +128,18 @@
     "zap-active": {
       "status": "ran",
       "match": "includes",
-      "why": "the findings were the same on all four runs; the minimum is 90% of the fewest requests (3,442), so a cut-short scan (about 944 requests on Podman before ADR 0039) fails",
+      "why": "the findings were the same on all four runs; the minimum is 90% of the fewest requests, so a cut-short scan (about 944 requests on Podman before ADR 0039) fails. Since ADR 0047 it also attacks the gate recording's 13 requests: 7,481 requests in each of 2 local runs (docker 29.10.0 rootful, cgroup v1), with 40018 on the product search and the JSON login (both confirmed by hand on 2026-11-20) and 40045 on the login, which is probably a false positive (Spring4Shell on a Node app; not checked by hand, for the M2 result-quality triage)",
       "findings": [
         "10104 /assets",
-        "10104 /assets/public"
+        "10104 /assets/public",
+        "40018 /rest/products/search",
+        "40018 /rest/user/login",
+        "40045 /rest/user/login"
       ],
-      "minRequests": 3097
+      "minRequests": 6732
     }
   },
   "notMetYet": [
-    {
-      "check": "zap-active",
-      "finding": "40018 /rest/products/search",
-      "needs": "part 5, the shared URL list: seeded with the app's script paths, ZAP found it in 3 of 3 local runs (zap-memory-seeding-measurement-2026-11-20.md, run sc0)",
-      "confirmed": "2026-11-20 by hand: GET /rest/products/search?q=qwert')) UNION SELECT id,email,password,4,5,6,7,8,9 FROM Users-- answers SQLITE_ERROR about the UNION's columns, so the query text reaches SQL"
-    },
-    {
-      "check": "zap-active",
-      "finding": "40018 /rest/user/login",
-      "needs": "not planned yet: ZAP never sends the JSON login, and part 5 seeds GET URLs only; to plan at the M2 milestone check",
-      "confirmed": "2026-11-20 by hand: POST /rest/user/login with email \"' OR 1=1--\" returns a token for admin@juice-sh.op"
-    },
     {
       "check": "zap-active",
       "finding": "40026 /",

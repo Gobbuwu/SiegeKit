@@ -83,26 +83,61 @@ type HAR struct {
 	Duplicate   int
 	OverLimit   int // past MaxRequests
 	FromSpec    int // added from the OpenAPI spec by AddSpecRoutes
+	// Recorded holds the recording's GET, HEAD, POST, PUT, PATCH and
+	// DELETE requests to the target's origin, bodies included and static
+	// files left out, for ZAP's attack scan (ADR 0047). This check
+	// replays only their GET and HEAD requests.
+	Recorded          []RecordedRequest
+	RecordedOverLimit int // past MaxRecorded
+}
+
+// MaxRecorded is how many recorded requests go to ZAP (ADR 0047).
+const MaxRecorded = 100
+
+// recordMethods are the methods kept for ZAP's attack scan.
+var recordMethods = map[string]bool{
+	http.MethodGet: true, http.MethodHead: true, http.MethodPost: true,
+	http.MethodPut: true, http.MethodPatch: true, http.MethodDelete: true,
+}
+
+// RecordedRequest is a request of the recording, for ZAP's attack scan.
+type RecordedRequest struct {
+	Method   string
+	URL      string // origin, path and query
+	Header   http.Header
+	MimeType string
+	Body     string
 }
 
 type harFile struct {
 	Log struct {
-		Entries []struct {
-			Request struct {
-				Method  string `json:"method"`
-				URL     string `json:"url"`
-				Headers []struct {
-					Name  string `json:"name"`
-					Value string `json:"value"`
-				} `json:"headers"`
-			} `json:"request"`
-		} `json:"entries"`
+		Entries []harEntry `json:"entries"`
 	} `json:"log"`
 }
 
-// ParseHAR reads a HAR file recorded as account A and keeps the GET and
-// HEAD requests to the target's origin, in order, without duplicates and
-// without static files, at most MaxRequests.
+type harEntry struct {
+	Request struct {
+		Method   string       `json:"method"`
+		URL      string       `json:"url"`
+		Headers  []harHeader  `json:"headers"`
+		PostData *harPostData `json:"postData"`
+	} `json:"request"`
+}
+
+type harHeader struct {
+	Name  string `json:"name"`
+	Value string `json:"value"`
+}
+
+type harPostData struct {
+	MimeType string `json:"mimeType"`
+	Text     string `json:"text"`
+}
+
+// ParseHAR reads a HAR file recorded as account A. It keeps the GET and
+// HEAD requests to the target's origin for replay, in order, without
+// duplicates and without static files, at most MaxRequests, and the
+// requests for ZAP's attack scan in Recorded (ADR 0047).
 func ParseHAR(data []byte, t *target.URL) (*HAR, error) {
 	if len(data) > MaxHARSize {
 		return nil, fmt.Errorf("the HAR file is larger than %d MiB", MaxHARSize>>20)
@@ -115,7 +150,7 @@ func ParseHAR(data []byte, t *target.URL) (*HAR, error) {
 		return nil, errors.New("the HAR file holds no requests")
 	}
 	h := &HAR{}
-	seen := map[string]bool{}
+	seen, seenRec := map[string]bool{}, map[string]bool{}
 	for _, e := range f.Log.Entries {
 		r := e.Request
 		u, err := url.Parse(r.URL)
@@ -129,7 +164,7 @@ func ParseHAR(data []byte, t *target.URL) (*HAR, error) {
 			continue
 		}
 		method := strings.ToUpper(r.Method)
-		if method != http.MethodGet && method != http.MethodHead {
+		if !recordMethods[method] {
 			h.OtherMethod++
 			continue
 		}
@@ -148,6 +183,11 @@ func ParseHAR(data []byte, t *target.URL) (*HAR, error) {
 		if u.RawQuery != "" {
 			p += "?" + u.RawQuery
 		}
+		h.addRecorded(method, t.Origin()+p, r.Headers, r.PostData, seenRec)
+		if method != http.MethodGet && method != http.MethodHead {
+			h.OtherMethod++
+			continue
+		}
 		if seen[method+" "+p] {
 			h.Duplicate++
 			continue
@@ -157,20 +197,56 @@ func ParseHAR(data []byte, t *target.URL) (*HAR, error) {
 			h.OverLimit++
 			continue
 		}
-		hd := http.Header{}
-		for _, kv := range r.Headers {
-			k := http.CanonicalHeaderKey(kv.Name)
-			if k == "" || strings.HasPrefix(kv.Name, ":") || skipHeaders[k] || strings.HasPrefix(k, "Proxy-") || strings.HasPrefix(k, "Sec-") {
-				continue
-			}
-			hd.Add(k, kv.Value)
-		}
-		h.Requests = append(h.Requests, Request{Method: method, Path: p, Header: hd})
+		h.Requests = append(h.Requests, Request{Method: method, Path: p, Header: replayHeaders(r.Headers)})
 	}
-	if len(h.Requests) == 0 {
-		return nil, fmt.Errorf("the HAR file has no GET or HEAD request to %s other than static files", t.Origin())
+	if len(h.Requests) == 0 && len(h.Recorded) == 0 {
+		return nil, fmt.Errorf("the HAR file has no request to %s other than static files", t.Origin())
 	}
 	return h, nil
+}
+
+// replayHeaders keeps the recorded headers that a replay may send.
+func replayHeaders(in []harHeader) http.Header {
+	hd := http.Header{}
+	for _, kv := range in {
+		k := http.CanonicalHeaderKey(kv.Name)
+		if k == "" || strings.HasPrefix(kv.Name, ":") || skipHeaders[k] || strings.HasPrefix(k, "Proxy-") || strings.HasPrefix(k, "Sec-") {
+			continue
+		}
+		hd.Add(k, kv.Value)
+	}
+	return hd
+}
+
+// addRecorded keeps a request for ZAP's attack scan (ADR 0047): its
+// method, URL (origin, path and query), the headers a replay may send and
+// the body with its type. seen drops duplicates of the same method, URL and
+// body; at most MaxRecorded are kept.
+func (h *HAR) addRecorded(method, u string, headers []harHeader, pd *harPostData, seen map[string]bool) {
+	var body, mime string
+	if pd != nil {
+		body, mime = pd.Text, pd.MimeType
+	}
+	key := method + " " + u + " " + body
+	if seen[key] {
+		return
+	}
+	seen[key] = true
+	if len(h.Recorded) == MaxRecorded {
+		h.RecordedOverLimit++
+		return
+	}
+	hd := replayHeaders(headers)
+	if mime == "" {
+		mime = hd.Get("Content-Type")
+	}
+	if body == "" {
+		mime = ""
+		hd.Del("Content-Type")
+	} else if mime != "" {
+		hd.Set("Content-Type", mime)
+	}
+	h.Recorded = append(h.Recorded, RecordedRequest{Method: method, URL: u, Header: hd, MimeType: mime, Body: body})
 }
 
 // SpecRoutes returns the GET paths of a JSON OpenAPI or Swagger spec that

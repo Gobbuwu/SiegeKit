@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"net/netip"
 	"os"
 	"path/filepath"
@@ -15,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Gobbuwu/SiegeKit/internal/authz"
 	"github.com/Gobbuwu/SiegeKit/internal/egress"
 	"github.com/Gobbuwu/SiegeKit/internal/findings"
 	"github.com/Gobbuwu/SiegeKit/internal/manifest"
@@ -63,6 +65,10 @@ type URLOptions struct {
 	// they are skipped, with NoOpenAPI as the reason (ADR 0028).
 	OpenAPI   *openapi.Spec
 	NoOpenAPI string
+	// Recorded are the requests of the person's HAR file, for
+	// plugins with run.recordedRequests (ADR 0047); RecordedFrom names the file.
+	Recorded     []authz.RecordedRequest
+	RecordedFrom string
 }
 
 // RunURL runs each selected active plugin against the target in turn, each
@@ -180,12 +186,25 @@ func runActive(ctx context.Context, run ActiveRunner, m *manifest.Manifest, opt 
 		rc.BasePath, rc.BaseKnown = openapi.BasePath(opt.OpenAPI.Data, opt.OpenAPI.Format)
 		pr.Input = "OpenAPI spec " + opt.OpenAPI.Source
 	}
+	recorded := m.Run.Recorded && len(opt.Recorded) > 0
+	if recorded {
+		dir, err := writeRecorded(work, m.ID, opt.Recorded)
+		if err != nil {
+			return fail(report.Failed, "write recorded requests: %v", err)
+		}
+		fileMounts = append(fileMounts, sandbox.FileMount{Host: dir, Mount: RecordedMount})
+		pr.Input = fmt.Sprintf("%d recorded request(s) from %s", len(opt.Recorded), opt.RecordedFrom)
+	}
 	cpus := min(m.Resources.CPUs, runtime.NumCPU())
 	u := opt.Target.String()
 	args := substituteURL(m.Run.Args, opt.Target, cpus, opt.Limits.Rate, specFile)
 	var configFile string
 	if m.Run.Config != nil {
-		b, err := json.Marshal(configFor(m.Run.Config, u))
+		c := configFor(m.Run.Config, u).(map[string]any)
+		if recorded {
+			c["jobs"] = withImport(c["jobs"].([]any))
+		}
+		b, err := json.Marshal(c)
 		if err != nil {
 			return fail(report.Failed, "write tool configuration: %v", err)
 		}
@@ -304,6 +323,75 @@ func writeSpec(work, id string, s *openapi.Spec) (string, string, error) {
 		return "", "", err
 	}
 	return dir, name, nil
+}
+
+// RecordedMount is where the recorded requests are mounted (ADR 0047).
+const RecordedMount = manifest.RecordedMount
+
+const recordedFile = "requests.har"
+
+// withImport returns ZAP automation jobs with an "import" job for the
+// recorded requests before the first spider job, so the attack scan that
+// follows includes them.
+func withImport(jobs []any) []any {
+	imp := map[string]any{"type": "import", "parameters": map[string]any{"type": "har", "fileName": RecordedMount + "/" + recordedFile}}
+	i := slices.IndexFunc(jobs, func(j any) bool { o, _ := j.(map[string]any); return o["type"] == "spider" })
+	if i < 0 {
+		i = len(jobs) // not allowed by the manifest check
+	}
+	return slices.Concat(jobs[:i:i], []any{imp}, jobs[i:])
+}
+
+// writeRecorded writes the requests as a HAR 1.2 file into a new directory
+// under work and returns the directory, which is mounted read-only. The
+// file holds the recording's session headers; it is removed with the run.
+func writeRecorded(work, id string, reqs []authz.RecordedRequest) (string, error) {
+	type nv struct {
+		Name  string `json:"name"`
+		Value string `json:"value"`
+	}
+	entries := make([]any, 0, len(reqs))
+	for _, r := range reqs {
+		hs := []nv{}
+		for _, k := range slices.Sorted(maps.Keys(r.Header)) {
+			for _, v := range r.Header[k] {
+				hs = append(hs, nv{k, v})
+			}
+		}
+		req := map[string]any{
+			"method": r.Method, "url": r.URL, "httpVersion": "HTTP/1.1", "headers": hs, "queryString": []nv{}, "cookies": []nv{},
+			"headersSize": -1, "bodySize": len(r.Body),
+		}
+		if r.Body != "" {
+			req["postData"] = map[string]any{"mimeType": r.MimeType, "text": r.Body}
+		}
+		entries = append(entries, map[string]any{
+			"startedDateTime": "1970-01-01T00:00:00.000Z", "time": 0,
+			"request": req,
+			"response": map[string]any{
+				"status": 0, "statusText": "", "httpVersion": "HTTP/1.1", "headers": []nv{}, "cookies": []nv{},
+				"content": map[string]any{"size": 0, "mimeType": "", "text": ""}, "redirectURL": "", "headersSize": -1, "bodySize": -1,
+			},
+			"cache": map[string]any{}, "timings": map[string]any{"send": 0, "wait": 0, "receive": 0},
+		})
+	}
+	b, err := json.Marshal(map[string]any{"log": map[string]any{"version": "1.2", "creator": map[string]any{"name": "SiegeKit", "version": "1"}, "entries": entries}})
+	if err != nil {
+		return "", err
+	}
+	dir, err := os.MkdirTemp(work, id+"-recorded-")
+	if err != nil {
+		return "", err
+	}
+	// Read by the tool's user, which may differ from ours. The run
+	// directory above it is private and removed after the run.
+	if err := os.Chmod(dir, 0o755); err != nil { // #nosec G302 -- read by the tool's user; removed with the run directory
+		return "", err
+	}
+	if err := os.WriteFile(filepath.Join(dir, recordedFile), b, 0o644); err != nil { // #nosec G306 -- read by the tool's user; removed with the run directory
+		return "", err
+	}
+	return dir, nil
 }
 
 const wordlistFile = "paths.txt"

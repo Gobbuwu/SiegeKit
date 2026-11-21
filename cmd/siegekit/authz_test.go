@@ -17,6 +17,8 @@ import (
 	"github.com/Gobbuwu/SiegeKit/internal/egress"
 	"github.com/Gobbuwu/SiegeKit/internal/findings"
 	"github.com/Gobbuwu/SiegeKit/internal/report"
+	"github.com/Gobbuwu/SiegeKit/internal/runner"
+	"github.com/Gobbuwu/SiegeKit/internal/sandbox"
 	"github.com/Gobbuwu/SiegeKit/internal/verify"
 )
 
@@ -105,7 +107,7 @@ func TestScanURLAccessControl(t *testing.T) {
 		{"", []string{"--har", harFile, t.TempDir()}, exitUsage, "only apply to URL targets"},
 		{"", []string{"--har", filepath.Join(t.TempDir(), "missing.har"), "http://localhost:3000/"}, exitInvalid, "--har:"},
 		{"", []string{"--har", t.TempDir(), "http://localhost:3000/"}, exitInvalid, "not a regular file"},
-		{"", []string{"--har", writeHAR(t, "http://other.test/rest/basket/1"), "http://localhost:3000/"}, exitInvalid, "no GET or HEAD request"},
+		{"", []string{"--har", writeHAR(t, "http://other.test/rest/basket/1"), "http://localhost:3000/"}, exitInvalid, "no request to http://localhost:3000"},
 		{"Host: evil.test", []string{"--har", harFile, "http://localhost:3000/"}, exitInvalid, "cannot set Host"},
 	} {
 		if c.env != "" {
@@ -237,5 +239,69 @@ func TestScanURLAccessControl(t *testing.T) {
 	code, out = scanIn(true, "shop.example\ntest accounts\n", "--deployed", "--har", writeHAR(t, "https://shop.example/api/me"), "--only", "access-control", "https://shop.example/")
 	if code != exitOK || len(*calls) != 1 || !(*calls)[0].cfg.VerifyTLS || !(*calls)[0].cfg.ReadOnly || (*calls)[0].rate != 10 {
 		t.Errorf("deployed: exit %d %+v\n%s", code, *calls, out)
+	}
+}
+
+// TestScanURLRecordedRequests checks ADR 0047: a recording's requests go to
+// zap-active only after the person types "test accounts"; a recording with
+// no GET request skips access-control.
+func TestScanURLRecordedRequests(t *testing.T) {
+	old := resolver
+	resolver = fakeResolver{"localhost": "127.0.0.1"}
+	t.Cleanup(func() { resolver = old })
+	t.Cleanup(func() { stdinIsTerminal = func() bool { return false } })
+	b, err := json.Marshal(map[string]any{"log": map[string]any{"entries": []map[string]any{{"request": map[string]any{
+		"method": "POST", "url": "http://localhost:3000/api/order",
+		"headers":  []map[string]string{{"name": "Cookie", "value": "s=A"}},
+		"postData": map[string]string{"mimeType": "application/xml", "text": "<order/>"},
+	}}}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	har := filepath.Join(t.TempDir(), "x.har")
+	if err := os.WriteFile(har, b, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct {
+		tty      bool
+		input    string
+		recorded bool
+		want     string
+	}{
+		{true, "test accounts\n", true, `zap-active attacks 1 recorded request(s) with the sessions of account A (the HAR file's session). Type "test accounts"`},
+		{true, "yes\n", false, `zap-active           runs without the recorded requests - not confirmed: "test accounts" was not typed`},
+		{false, "", false, "zap-active           runs without the recorded requests - it replays account sessions"},
+	} {
+		f := useActive(t)
+		useData(t)
+		calls := useAuthz(t, authz.Result{}, nil)
+		stdinIsTerminal = func() bool { return c.tty }
+		stdin = strings.NewReader(c.input)
+		var out, errb bytes.Buffer
+		code := run([]string{"scan", "--no-save", "--authorized-host", "localhost", "--har", har, "--only", "access-control,zap-active", "http://localhost:3000/"}, &out, &errb)
+		if code != report.ExitClean && code != report.ExitFindings || len(f.specs) != 1 || len(*calls) != 0 || !strings.Contains(out.String(), c.want) {
+			t.Fatalf("%q: exit %d, %d runs, %d checks\n%s%s", c.input, code, len(f.specs), len(*calls), out.String(), errb.String())
+		}
+		mounted := slices.ContainsFunc(f.specs[0].Files, func(m sandbox.FileMount) bool { return m.Mount == runner.RecordedMount })
+		if mounted != c.recorded {
+			t.Errorf("%q: recorded requests mounted %v", c.input, mounted)
+		}
+		bb, err := os.ReadFile(filepath.Join("siegekit-report", "report.json"))
+		var r report.Run
+		if err != nil || json.Unmarshal(bb, &r) != nil {
+			t.Fatal(err)
+		}
+		for _, p := range r.Plugins {
+			switch p.ID {
+			case authz.ID:
+				if p.Status != report.Skipped || p.Cause != report.CauseNoInput || !strings.Contains(p.Reason, "x.har has no GET or HEAD request to replay; its 1 other request(s) go to zap-active") {
+					t.Errorf("%q: %+v", c.input, p)
+				}
+			case "zap-active":
+				if want := map[bool]string{true: "1 recorded request(s) from x.har"}[c.recorded]; p.Input != want {
+					t.Errorf("%q: input %q", c.input, p.Input)
+				}
+			}
+		}
 	}
 }

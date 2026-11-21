@@ -5,6 +5,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"maps"
+	"net/http"
 	"net/netip"
 	"os"
 	"path/filepath"
@@ -12,6 +14,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Gobbuwu/SiegeKit/internal/authz"
 	"github.com/Gobbuwu/SiegeKit/internal/egress"
 	"github.com/Gobbuwu/SiegeKit/internal/files"
 	"github.com/Gobbuwu/SiegeKit/internal/manifest"
@@ -248,6 +251,107 @@ func TestOpenAPISpec(t *testing.T) {
 		}
 		if p.Status != report.Ran || p.Input != "OpenAPI spec http://app.test:8000/openapi.json" || len(r.Findings) != 1 || r.Findings[0].Location.URI != "http://app.test:8000/api/items/{id}" {
 			t.Errorf("exit %d: %+v %+v", exit, p, r.Findings)
+		}
+	}
+}
+
+// TestRecordedRequests checks ADR 0047: zap-active gets the recorded
+// requests as a HAR file, mounted read-only, and an import job before its
+// spider; zap and runs without recorded requests are unchanged.
+func TestRecordedRequests(t *testing.T) {
+	za, zp := builtin(t, "zap-active"), builtin(t, "zap")
+	if !za.Run.Recorded || zp.Run.Recorded {
+		t.Fatalf("recordedRequests: zap-active %v, zap %v", za.Run.Recorded, zp.Run.Recorded)
+	}
+	opt := urlOpts(t)
+	opt.RecordedFrom = "a.har"
+	opt.Recorded = []authz.RecordedRequest{{Method: "POST", URL: "http://app.test:8000/api/order", Header: http.Header{"Cookie": {"s=A"}, "Content-Type": {"application/xml"}}, MimeType: "application/xml", Body: "<order/>"}}
+	type seen struct {
+		jobs []string
+		har  []byte
+	}
+	got := map[string]seen{}
+	run := func(_ context.Context, sp sandbox.Spec, _ egress.Config) (*ActiveResult, error) {
+		var s seen
+		b, err := os.ReadFile(sp.ConfigFile)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var c struct {
+			Jobs []struct {
+				Type       string         `json:"type"`
+				Parameters map[string]any `json:"parameters"`
+			} `json:"jobs"`
+		}
+		if err := json.Unmarshal(b, &c); err != nil {
+			t.Fatal(err)
+		}
+		for _, j := range c.Jobs {
+			s.jobs = append(s.jobs, j.Type)
+			if j.Type == "import" && (j.Parameters["type"] != "har" || j.Parameters["fileName"] != RecordedMount+"/requests.har") {
+				t.Errorf("import job %v", j.Parameters)
+			}
+		}
+		for _, f := range sp.Files {
+			if f.Mount == RecordedMount {
+				s.har, _ = os.ReadFile(filepath.Join(f.Host, "requests.har"))
+			}
+		}
+		got[sp.Image+" "+strings.Join(s.jobs, ",")] = s
+		os.WriteFile(filepath.Join(sp.OutDir, "zap.json"), []byte(zapReport), 0o600)
+		return &ActiveResult{Result: &sandbox.Result{Status: sandbox.Completed}, Stats: egress.Stats{Requests: 1}}, nil
+	}
+	r, err := RunURL(context.Background(), run, []*manifest.Manifest{zp, za}, opt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var withImport, without int
+	for k, s := range got {
+		switch {
+		case strings.HasSuffix(k, "passiveScan-config,import,spider,activeScan,report"):
+			withImport++
+			var h struct {
+				Log struct {
+					Entries []struct {
+						Request struct {
+							Method, URL string
+							Headers     []struct{ Name, Value string }
+							PostData    struct{ MimeType, Text string }
+						}
+					}
+				}
+			}
+			if err := json.Unmarshal(s.har, &h); err != nil || len(h.Log.Entries) != 1 {
+				t.Fatalf("HAR %s %v", s.har, err)
+			}
+			e := h.Log.Entries[0].Request
+			if e.Method != "POST" || e.URL != "http://app.test:8000/api/order" || e.PostData.Text != "<order/>" || e.PostData.MimeType != "application/xml" ||
+				!slices.Contains(e.Headers, struct{ Name, Value string }{"Cookie", "s=A"}) {
+				t.Errorf("entry %+v", e)
+			}
+		case !strings.Contains(k, "import"):
+			without++
+			if s.har != nil {
+				t.Errorf("%s got the recorded requests", k)
+			}
+		}
+	}
+	if withImport != 1 || without != 1 {
+		t.Errorf("runs %v", slices.Collect(maps.Keys(got)))
+	}
+	if p := r.Plugins[1]; p.ID != "zap-active" || p.Input != "1 recorded request(s) from a.har" || r.Plugins[0].Input != "" {
+		t.Errorf("plugins %+v", r.Plugins)
+	}
+
+	// No recorded requests: no import job, no mount.
+	got = map[string]seen{}
+	opt.Recorded = nil
+	if _, err := RunURL(context.Background(), run, []*manifest.Manifest{za}, opt); err != nil {
+		t.Fatal(err)
+	}
+	for k, s := range got {
+		if strings.Contains(k, "import") || s.har != nil {
+			t.Errorf("without recorded requests: %s", k)
 		}
 	}
 }
