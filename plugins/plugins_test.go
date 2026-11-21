@@ -154,6 +154,13 @@ func checkZAP(t *testing.T, m *manifest.Manifest) {
 	if !slices.Contains(m.Run.Args, "network.connection.httpProxy.port="+strconv.Itoa(sandbox.RelayPort)) {
 		t.Errorf("%s: outbound proxy port is not the relay's", m.ID)
 	}
+	// ZAP 2.17 keeps only the first few instances of a "systemic" alert
+	// type per host and drops the rest with exit 0; which paths are kept
+	// depends on thread timing (measured 2026-11-21, ADR 0043). SiegeKit
+	// reports every instance, so the limit must be off.
+	if !slices.Contains(m.Run.Args, "alert.systemicLimit=0") {
+		t.Errorf("%s: ZAP must report every alert instance (alert.systemicLimit=0)", m.ID)
+	}
 	// zap.sh sizes the Java heap from the host's memory on cgroup v2
 	// hosts, not from the container limit, so the container is
 	// killed (exit 137, seen in CI 2026-11-19). The heap must be

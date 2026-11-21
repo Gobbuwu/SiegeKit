@@ -3,7 +3,7 @@
 - Status: Accepted
 - Date: 2026-11-19
 - Amends: [0004](0004-plugin-manifest.md) (two manifest fields)
-- Amended by: [0025](0025-m2-5-web-tools.md) (`--allow-destructive` waits until M2.10), [0026](0026-nuclei.md) (the connection limit counts connections to the target; item 5)
+- Amended by: [0025](0025-m2-5-web-tools.md) (`--allow-destructive` waits until M2.10), [0026](0026-nuclei.md) (the connection limit counts connections to the target; item 5), [0043](0043-zap-reports-every-alert.md) (`alert.systemicLimit=0`)
 
 ## Context
 
