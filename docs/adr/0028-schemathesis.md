@@ -2,6 +2,7 @@
 
 - Status: Accepted
 - Date: 2026-11-20
+- Amended by: [0046](0046-public-api-maps.md) (an 11th path, swagger-ui-express's setup script; every path is tried once per run)
 - Amends: [0004](0004-plugin-manifest.md) (placeholders `{openapi}` and `{target-origin}`, field `run.findingsExitCodes`, parser `schemathesis-json`), [0025](0025-m2-5-web-tools.md) item 4 (how the spec is fetched and checked)
 
 ## Context

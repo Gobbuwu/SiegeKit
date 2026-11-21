@@ -33,6 +33,37 @@ var DefaultPaths = []string{
 	"/swagger/v1/swagger.json",
 }
 
+// SwaggerUIInitPath is where swagger-ui-express, mounted at /api-docs as
+// its README shows, serves the script that sets up its page (ADR 0046).
+// The script holds the whole spec: swagger-ui-express 5.0.1 writes
+// "var options = " and its options as JSON, with the spec under
+// "swaggerDoc" (read from the package in Juice Shop v20.4.0, 2026-11-21).
+const SwaggerUIInitPath = "/api-docs/swagger-ui-init.js"
+
+// FromSwaggerUIInit returns the spec that a swagger-ui-express setup
+// script holds, or an error when b is not such a script. Only the
+// "swaggerDoc" value is decoded: other options may hold JavaScript
+// functions, which are not JSON.
+func FromSwaggerUIInit(b []byte) ([]byte, error) {
+	if len(b) > MaxSize {
+		return nil, fmt.Errorf("script larger than %d bytes", MaxSize)
+	}
+	_, rest, ok := bytes.Cut(b, []byte("var options = {"))
+	if !ok {
+		return nil, errors.New("not a swagger-ui-express setup script")
+	}
+	rest = bytes.TrimLeft(rest, " \t\r\n")
+	const key = `"swaggerDoc":`
+	if !bytes.HasPrefix(rest, []byte(key)) {
+		return nil, errors.New("the setup script holds no spec (swaggerDoc)")
+	}
+	var doc json.RawMessage
+	if err := json.NewDecoder(bytes.NewReader(rest[len(key):])).Decode(&doc); err != nil {
+		return nil, fmt.Errorf("the spec in the setup script is not valid JSON: %w", err)
+	}
+	return doc, nil
+}
+
 var (
 	reYAMLVersion = regexp.MustCompile(`(?m)^(openapi:[ \t]*['"]?3\.[0-9]|swagger:[ \t]*['"]?2\.0)`)
 	reYAMLPaths   = regexp.MustCompile(`(?m)^paths:`)

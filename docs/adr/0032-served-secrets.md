@@ -2,6 +2,7 @@
 
 - Status: Accepted
 - Date: 2026-11-20
+- Amended by: [0046](0046-public-api-maps.md) (`<file>.map` is also tried for scripts and styles that name no source map)
 - Amends: [0010](0010-login-checks.md) (how the served files are obtained)
 
 ## Context

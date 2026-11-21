@@ -67,7 +67,9 @@ func TestServedFindsPlantedIssues(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(res.Files) != 3 || res.Requests != 3 {
+	// The page, two scripts, the map app.js names and the one found next
+	// to vendor.js (ADR 0046).
+	if len(res.Files) != 5 || res.Requests != 5 || res.Probed != 1 || res.NotMap != 0 {
 		t.Fatalf("collected %+v", res)
 	}
 	run, err := Run(context.Background(), e, []*manifest.Manifest{gl}, Options{Version: "test", TargetDir: dir, WorkDir: work})

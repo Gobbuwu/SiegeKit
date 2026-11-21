@@ -20,6 +20,7 @@ import (
 	"github.com/Gobbuwu/SiegeKit/internal/login"
 	"github.com/Gobbuwu/SiegeKit/internal/manifest"
 	"github.com/Gobbuwu/SiegeKit/internal/openapi"
+	"github.com/Gobbuwu/SiegeKit/internal/publicmaps"
 	"github.com/Gobbuwu/SiegeKit/internal/report"
 	"github.com/Gobbuwu/SiegeKit/internal/runner"
 	"github.com/Gobbuwu/SiegeKit/internal/sandbox"
@@ -239,7 +240,7 @@ func TestScanURLDeployed(t *testing.T) {
 	old := resolver
 	resolver = fakeResolver{"shop.example": "93.184.215.14", "api.shop.example": "93.184.215.15", "rebind.example": "10.0.0.5"}
 	t.Cleanup(func() { resolver = old })
-	useActive(t)
+	f := useActive(t)
 	data := t.TempDir()
 	t.Setenv("XDG_DATA_HOME", data)
 	tokenOf := func(host string) string {
@@ -295,6 +296,16 @@ func TestScanURLDeployed(t *testing.T) {
 				t.Errorf("no hosting-policy reminder:\n%s", out)
 			}
 		})
+	}
+
+	// public-maps sends only GETs, so it runs on deployed targets: each
+	// spec path is tried once. The spec it finds is reported, not given
+	// to Schemathesis, which does not run there (ADR 0046, ADR 0028).
+	f.got = nil
+	code, out = scan(true, "shop.example\n", "--only", "public-maps,schemathesis", "--report-dir", t.TempDir(), "https://shop.example/")
+	if code != exitOK && code != report.ExitFindings || !slices.Equal(f.got, publicmaps.Paths()) ||
+		!strings.Contains(out, "public-maps          ran        1 finding(s)") || !strings.Contains(out, "schemathesis         skipped") {
+		t.Errorf("deployed public-maps: exit %d, spec requests %v\n%s", code, f.got, out)
 	}
 
 	// Without a terminal, or with the flag, nothing is sent to the target.
@@ -370,7 +381,7 @@ func TestScanURLRunsActivePlugins(t *testing.T) {
 		t.Fatal(err)
 	}
 	var e audit.Entry
-	if err := json.Unmarshal(b, &e); err != nil || e.Target != "http://localhost:3000/app" || e.Mode != "local" || e.Verification != "loopback + --authorized-host" || e.Confirmed != "localhost" || !slices.Equal(e.Plugins, []string{"ffuf", "nuclei", "nuclei-default-login", "nuclei-intrusive", "schemathesis", "zap", "zap-active", "served-secrets"}) {
+	if err := json.Unmarshal(b, &e); err != nil || e.Target != "http://localhost:3000/app" || e.Mode != "local" || e.Verification != "loopback + --authorized-host" || e.Confirmed != "localhost" || !slices.Equal(e.Plugins, []string{"ffuf", "nuclei", "nuclei-default-login", "nuclei-intrusive", "schemathesis", "zap", "zap-active", "served-secrets", "public-maps"}) {
 		t.Errorf("audit entry %+v %v", e, err)
 	}
 	// The report names the URL and the request counts.
@@ -379,12 +390,17 @@ func TestScanURLRunsActivePlugins(t *testing.T) {
 		t.Fatal(err)
 	}
 	var r report.Run
-	if err := json.Unmarshal(b, &r); err != nil || r.Target != "http://localhost:3000/app" || len(r.Findings) != 1 || r.Plugins[5].Requests != 3 || r.Plugins[4].ID != "access-control" || r.Plugins[4].Status != report.Skipped ||
+	if err := json.Unmarshal(b, &r); err != nil || r.Target != "http://localhost:3000/app" || len(r.Findings) != 2 || r.Plugins[6].Requests != 3 || r.Plugins[5].ID != "access-control" || r.Plugins[5].Status != report.Skipped ||
+		r.Plugins[4].ID != "public-maps" || r.Plugins[4].Status != report.Ran || r.Plugins[4].Requests != len(publicmaps.Paths()) || r.Plugins[4].Findings != 1 ||
 		r.Plugins[3].ID != "backend-live" || r.Plugins[3].Status != report.Skipped || !strings.Contains(r.Plugins[3].Reason, "no backend URL was given") || r.Plugins[2].ID != "served-secrets" || r.Plugins[2].Status != report.Ran ||
 		r.Plugins[1].ID != "rate-limit" || r.Plugins[1].Status != report.Skipped || !strings.Contains(r.Plugins[1].Reason, "no URL was given") || r.Plugins[0].ID != "login-throttle" || r.Plugins[0].Status != report.Skipped || !strings.Contains(r.Plugins[0].Reason, "no login was given") {
 		t.Errorf("report %+v %v", r, err)
 	}
 	if f := r.Findings[0]; f.Location.URI != "http://localhost:3000/app" || !slices.Equal(f.CWEs, []string{"CWE-1021"}) || !strings.HasPrefix(f.HelpURI, "https://developer.mozilla.org/") {
+		t.Errorf("finding %+v", f)
+	}
+	// The spec served at the first default path is an "attack map" (ADR 0046).
+	if f := r.Findings[1]; f.RuleID != "public-api-spec" || f.Location.URI != "http://localhost:3000/openapi.json" || f.Severity != findings.Low {
 		t.Errorf("finding %+v", f)
 	}
 }
@@ -425,13 +441,13 @@ func TestScanURLDestructiveNeedsConfirmation(t *testing.T) {
 			}
 			b, err := os.ReadFile(filepath.Join(data, "siegekit", "audit.log"))
 			var e audit.Entry
-			if err != nil || json.Unmarshal(b, &e) != nil || e.Verification != tc.verification || len(e.Plugins) != tc.runs+1 || e.Plugins[tc.runs] != "served-secrets" {
+			if err != nil || json.Unmarshal(b, &e) != nil || e.Verification != tc.verification || len(e.Plugins) != tc.runs+2 || e.Plugins[tc.runs] != "served-secrets" || e.Plugins[tc.runs+1] != "public-maps" {
 				t.Errorf("audit entry %+v %v", e, err)
 			}
 			if tc.runs == 3 { // the four destructive plugins were skipped
 				b, err := os.ReadFile(filepath.Join("siegekit-report", "report.json"))
 				var r report.Run
-				if err != nil || json.Unmarshal(b, &r) != nil || len(r.Plugins) != 12 {
+				if err != nil || json.Unmarshal(b, &r) != nil || len(r.Plugins) != 13 {
 					t.Fatalf("report %+v %v", r.Plugins, err)
 				}
 				for _, p := range r.Plugins {
@@ -440,8 +456,10 @@ func TestScanURLDestructiveNeedsConfirmation(t *testing.T) {
 						t.Errorf("plugin %+v", p)
 					}
 				}
-				// No spec is looked for when Schemathesis does not run.
-				if len(f.got) != 0 {
+				// When Schemathesis does not run, the spec paths are tried
+				// only for public-maps, once each, after the plugins that
+				// skip (ADR 0046).
+				if !slices.Equal(f.got, publicmaps.Paths()) {
 					t.Errorf("spec requests %v", f.got)
 				}
 			}
@@ -483,8 +501,9 @@ func TestScanURLNotRun(t *testing.T) {
 		t.Errorf("macOS: exit %d, %d runs\n%s", code, len(f.specs), out.String())
 	}
 
-	// The relay image missing and no terminal: nothing is installed, every
-	// active plugin is skipped, and no audit entry or traffic follows.
+	// The relay image missing and no terminal: nothing is installed and
+	// every plugin is skipped. Only public-maps, which needs no image,
+	// sends its GET requests (ADR 0046).
 	e := &fakeEngine{have: map[string]bool{}}
 	for _, id := range []string{"zap", "zap-active"} {
 		img, _ := runner.ImageFor(builtinManifest(t, id))
@@ -493,11 +512,13 @@ func TestScanURLNotRun(t *testing.T) {
 	useEngine(t, e, nil)
 	out.Reset()
 	code = run([]string{"scan", "--no-save", "http://localhost"}, &out, &errb)
-	if code != report.ExitIncomplete || len(f.specs) != 0 || len(e.pulled) != 0 || !strings.Contains(out.String(), "is not installed (no terminal to ask; use --yes)") {
+	if code == report.ExitIncomplete || len(f.specs) != 0 || len(e.pulled) != 0 || !strings.Contains(out.String(), "is not installed (no terminal to ask; use --yes)") {
 		t.Errorf("relay missing: exit %d, %d runs, pulled %v\n%s", code, len(f.specs), e.pulled, out.String())
 	}
-	if _, err := os.Stat(filepath.Join(os.Getenv("XDG_DATA_HOME"), "siegekit", "audit.log")); err == nil {
-		t.Error("audit entry written although nothing ran")
+	b, err := os.ReadFile(filepath.Join(os.Getenv("XDG_DATA_HOME"), "siegekit", "audit.log"))
+	var a audit.Entry
+	if err != nil || json.Unmarshal(b, &a) != nil || !slices.Equal(a.Plugins, []string{"public-maps"}) {
+		t.Errorf("audit entry %+v %v", a, err)
 	}
 }
 
@@ -541,8 +562,11 @@ func TestScanURLOpenAPI(t *testing.T) {
 		{"url", "http://localhost:3000/docs/spec.json", map[string]string{"/docs/spec.json": testSpec}, report.ExitClean, report.Ran, "OpenAPI spec http://localhost:3000/docs/spec.json", 1},
 		{"url not served", "http://localhost:3000/docs/spec.json", nil, report.ExitIncomplete, report.Failed, "could not be used: answered 404", 1},
 		{"url not a spec", "http://localhost:3000/docs", map[string]string{"/docs": "<html></html>"}, report.ExitIncomplete, report.Failed, "an HTML page", 1},
-		{"default path", "", map[string]string{"/v3/api-docs": testSpec}, report.ExitClean, report.Ran, "OpenAPI spec http://localhost:3000/v3/api-docs", 5},
-		{"none found", "", map[string]string{}, report.ExitIncomplete, report.Skipped, "none was found at /openapi.json, /openapi.yaml", len(openapi.DefaultPaths)},
+		// Every path is tried once, for public-maps too (ADR 0046); the first spec is used.
+		{"default path", "", map[string]string{"/v3/api-docs": testSpec, "/api/openapi.json": testSpec}, report.ExitClean, report.Ran, "OpenAPI spec http://localhost:3000/v3/api-docs", len(publicmaps.Paths())},
+		{"swagger ui", "", map[string]string{openapi.SwaggerUIInitPath: "var options = {\n  \"swaggerDoc\": " + testSpec + "\n};"}, report.ExitClean, report.Ran,
+			"OpenAPI spec http://localhost:3000/api-docs/swagger-ui-init.js (the spec in the Swagger UI setup script)", len(publicmaps.Paths())},
+		{"none found", "", map[string]string{}, report.ExitIncomplete, report.Skipped, "none was found at /openapi.json, /openapi.yaml", len(publicmaps.Paths())},
 		{"other origin", "http://localhost:3001/spec.json", nil, exitInvalid, "", "is not on the target's origin", 0},
 		// F7 of the full project check (ADR 0042): refused here, not later by the proxy.
 		{"double slash", "http://localhost:3000//x/openapi.json", nil, exitInvalid, "", "--openapi must have a path that starts with a single /", 0},
@@ -619,12 +643,12 @@ func TestScanURLProfile(t *testing.T) {
 	useData(t)
 	var out, errb bytes.Buffer
 	code := run([]string{"scan", "--no-save", "--profile", "quick", "http://localhost:3000/"}, &out, &errb)
-	if code != report.ExitClean && code != report.ExitFindings || len(f.specs) != 3 || strings.Contains(out.String(), "Type yes") || len(f.got) != 0 {
+	if code != report.ExitClean && code != report.ExitFindings || len(f.specs) != 3 || strings.Contains(out.String(), "Type yes") || len(f.got) != len(publicmaps.Paths()) {
 		t.Fatalf("exit %d, %d runs, spec requests %v\n%s%s", code, len(f.specs), f.got, out.String(), errb.String())
 	}
 	b, err := os.ReadFile(filepath.Join("siegekit-report", "report.json"))
 	var r report.Run
-	if err != nil || json.Unmarshal(b, &r) != nil || len(r.Plugins) != 12 {
+	if err != nil || json.Unmarshal(b, &r) != nil || len(r.Plugins) != 13 {
 		t.Fatalf("report %+v %v", r.Plugins, err)
 	}
 	for _, p := range r.Plugins {
@@ -634,7 +658,7 @@ func TestScanURLProfile(t *testing.T) {
 			}
 			continue
 		}
-		quick := p.ID == "ffuf" || p.ID == "nuclei" || p.ID == "zap" || p.ID == "served-secrets"
+		quick := p.ID == "ffuf" || p.ID == "nuclei" || p.ID == "zap" || p.ID == "served-secrets" || p.ID == "public-maps"
 		if quick && p.Status != report.Ran || !quick && (p.Status != report.Skipped || !strings.Contains(p.Reason, "--profile quick")) {
 			t.Errorf("plugin %+v", p)
 		}

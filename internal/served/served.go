@@ -5,12 +5,15 @@
 package served
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 	"time"
@@ -54,6 +57,8 @@ type File struct {
 	Name string // file name in the scanned directory
 	URL  string // origin and path, without the query
 	Kind Kind
+	// Map is true for a source map whose content is one (IsSourceMap).
+	Map bool
 }
 
 // Result is what Collect fetched and left out.
@@ -65,6 +70,10 @@ type Result struct {
 	Failed      int // answered with a status other than 200, did not answer, or redirected elsewhere
 	TooLarge    int // answers larger than MaxFileSize
 	OverLimit   int // links not fetched because MaxRequests was reached
+	// Probed counts the "<file>.map" GETs sent for scripts and styles
+	// that name no source map (ADR 0046); NotMap those whose answer was
+	// not a source map, which are left out.
+	Probed, NotMap int
 }
 
 // Summary says what was scanned in one line, for reports.
@@ -97,6 +106,9 @@ func (r Result) Summary() string {
 	}
 	if len(left) > 0 {
 		s += "; not scanned: " + strings.Join(left, ", ")
+	}
+	if r.Probed > 0 {
+		s += fmt.Sprintf("; tried <file>.map for %d file(s) naming no source map, %d not one", r.Probed, r.NotMap)
 	}
 	return s
 }
@@ -165,11 +177,12 @@ func Collect(ctx context.Context, cfg egress.Config, rate float64, dir string) (
 		return c.res, err
 	}
 	type item struct {
-		u    *url.URL
-		kind Kind
+		u     *url.URL
+		kind  Kind
+		probe bool // a guessed "<file>.map", kept only if it is a source map
 	}
 	var queue []item
-	add := func(base *url.URL, ref string, kind Kind) {
+	add := func(base *url.URL, ref string, kind Kind, probe bool) {
 		u, ok := c.resolve(base, ref)
 		if !ok {
 			return
@@ -177,12 +190,15 @@ func Collect(ctx context.Context, cfg egress.Config, rate float64, dir string) (
 		key := requestPath(u)
 		if !c.seen[key] {
 			c.seen[key] = true
-			queue = append(queue, item{u, kind})
+			queue = append(queue, item{u, kind, probe})
+			if probe {
+				c.res.Probed++
+			}
 		}
 	}
 	c.seen[requestPath(page)] = true
 	for _, l := range Links(a.Body) {
-		add(page, l.Ref, l.Kind)
+		add(page, l.Ref, l.Kind, false)
 	}
 	for i := 0; i < len(queue); i++ {
 		it := queue[i]
@@ -195,6 +211,12 @@ func Collect(ctx context.Context, cfg egress.Config, rate float64, dir string) (
 			return c.res, nil
 		case errors.Is(err, egress.ErrTooLarge):
 			c.res.TooLarge++
+			continue
+		case it.probe && (err != nil || a.Status != http.StatusOK || !IsSourceMap(a.Body)):
+			// Most sites answer a missing file with an error or their
+			// start page (Juice Shop answers 200 with HTML, measured
+			// 2026-11-21): no source map is served there.
+			c.res.NotMap++
 			continue
 		case err != nil || a.Status != http.StatusOK:
 			c.res.Failed++
@@ -213,7 +235,12 @@ func Collect(ctx context.Context, cfg egress.Config, rate float64, dir string) (
 				ref = SourceMapRef(a.Body)
 			}
 			if ref != "" {
-				add(u, ref, SourceMap)
+				add(u, ref, SourceMap, false)
+			} else if u.RawQuery == "" && !strings.HasSuffix(u.Path, "/") {
+				// Build tools can write a map without naming it in the
+				// file (webpack's hidden-source-map), next to it with
+				// ".map" added (ADR 0046).
+				add(u, (&url.URL{Path: path.Base(u.Path) + ".map"}).String(), SourceMap, true)
 			}
 		}
 	}
@@ -308,7 +335,7 @@ func (c *collector) save(u *url.URL, k Kind, body []byte) error {
 	if err := os.WriteFile(filepath.Join(c.dir, name), body, 0o644); err != nil {
 		return err
 	}
-	c.res.Files = append(c.res.Files, File{Name: name, URL: c.cfg.Target.Origin() + u.EscapedPath(), Kind: k})
+	c.res.Files = append(c.res.Files, File{Name: name, URL: c.cfg.Target.Origin() + u.EscapedPath(), Kind: k, Map: k == SourceMap && IsSourceMap(body)})
 	return nil
 }
 
@@ -335,4 +362,24 @@ func Findings(fs []findings.Finding, r Result) []findings.Finding {
 		out = append(out, f)
 	}
 	return out
+}
+
+// IsSourceMap reports whether b is a source map: a JSON object with
+// "version": 3 and a "mappings" string, or an index map with a "sections"
+// array (ECMA-426, Source map format specification). The ")]}'" line that
+// the specification lets servers put first is skipped.
+func IsSourceMap(b []byte) bool {
+	b = bytes.TrimPrefix(b, []byte("\xef\xbb\xbf"))
+	if bytes.HasPrefix(b, []byte(")]}'")) {
+		_, b, _ = bytes.Cut(b, []byte("\n"))
+	}
+	var m struct {
+		Version  json.RawMessage `json:"version"`
+		Mappings json.RawMessage `json:"mappings"`
+		Sections json.RawMessage `json:"sections"`
+	}
+	if json.Unmarshal(b, &m) != nil || string(m.Version) != "3" {
+		return false
+	}
+	return bytes.HasPrefix(m.Mappings, []byte(`"`)) || bytes.HasPrefix(m.Sections, []byte("["))
 }
