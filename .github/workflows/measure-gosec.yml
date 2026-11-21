@@ -1,0 +1,85 @@
+name: Measure gosec G7xx (temporary, fix F)
+
+# Fix F of the full project check of 2026-11-21: 20 scans of go-chi/chi per
+# engine and per gosec concurrency, keeping gosec's stderr, to find why
+# gosec 2.30.0's G7xx findings vary between identical CI runs. Removed from
+# the pull request before it merges; the results go into the record.
+on:
+  pull_request:
+    paths:
+      - .github/workflows/measure-gosec.yml
+
+permissions:
+  contents: read
+
+env:
+  GO_VERSION: "1.27.4"
+  REPO: go-chi/chi
+
+jobs:
+  measure:
+    name: gosec x20 (${{ matrix.engine }}, concurrency ${{ matrix.concurrency }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        engine: [podman, docker]
+        concurrency: [default, "1"]
+    env:
+      SIEGEKIT_ENGINE: ${{ matrix.engine }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: false
+      - name: Keep gosec's stderr (measurement build only, not committed)
+        env:
+          CONC: ${{ matrix.concurrency }}
+        run: |
+          # Write each tool's stderr to $STDERR_DIR after it runs.
+          python3 - <<'PY'
+          p = "internal/runner/runner.go"
+          s = open(p).read()
+          a = "\tswitch {\n\tcase err != nil:\n\t\treturn fail(report.Failed, \"%v\", err)\n\tcase res.Status == sandbox.TimedOut:"
+          assert s.count(a) == 1
+          s = s.replace(a, "\tif d := os.Getenv(\"STDERR_DIR\"); d != \"\" && res != nil {\n\t\t_ = os.WriteFile(filepath.Join(d, fmt.Sprintf(\"%s-%d.stderr\", m.ID, time.Now().UnixNano())), []byte(res.Stderr), 0o644)\n\t}\n" + a)
+          open(p, "w").write(s)
+          PY
+          if [ "$CONC" != default ]; then
+            jq --arg c "$CONC" '.run.args = ["-concurrency", $c] + .run.args' plugins/gosec/plugin.json > /tmp/p.json && mv /tmp/p.json plugins/gosec/plugin.json
+          fi
+          jq -c .run.args plugins/gosec/plugin.json
+          go build -o "$RUNNER_TEMP/siegekit" ./cmd/siegekit
+      - name: Fetch target at pinned commit
+        run: |
+          answers="testdata/known-answers/${REPO//\//__}.json"
+          SHA="$(jq -r '.fixture | split("@")[1]' "$answers")"
+          dir="$RUNNER_TEMP/target"
+          git init -q "$dir"
+          git -C "$dir" fetch -q --depth 1 "https://github.com/$REPO.git" "$SHA"
+          git -C "$dir" -c advice.detachedHead=false checkout -q FETCH_HEAD
+      - name: Scan 20 times
+        run: |
+          mkdir -p "$RUNNER_TEMP/out"
+          export STDERR_DIR="$RUNNER_TEMP/out"
+          for i in $(seq 1 20); do
+            set +e
+            "$RUNNER_TEMP/siegekit" scan --yes --update --only gosec --no-save --fail-on critical --report-dir "$RUNNER_TEMP/r$i" "$RUNNER_TEMP/target" > "$RUNNER_TEMP/out/run$i.log" 2>&1
+            code=$?
+            set -e
+            g7=$(jq -r '[.findings[] | select(.ruleId | startswith("G7")) | "\(.ruleId) \(.location.uri):\(.location.startLine)"] | sort | join("; ")' "$RUNNER_TEMP/r$i/report.json")
+            total=$(jq '.findings | length' "$RUNNER_TEMP/r$i/report.json")
+            echo "run $i exit $code findings $total G7xx: $g7" | tee -a "$RUNNER_TEMP/out/summary.txt"
+          done
+          echo "== environment"
+          jq -c .environment "$RUNNER_TEMP/r1/report.json"
+          echo "== analyzer errors in gosec stderr, by run file"
+          grep -c "Error running analyzer" "$RUNNER_TEMP"/out/gosec-*.stderr || true
+          echo "== distinct analyzer error lines"
+          grep -h "Error running analyzer\|panic\|SSA" "$RUNNER_TEMP"/out/gosec-*.stderr | sed 's/[0-9]\{2,\}/N/g' | sort | uniq -c | head -40 || true
+          echo "== G7xx count per run"
+          awk '{n=gsub(/G7[0-9][0-9]/,"&"); print n}' "$RUNNER_TEMP/out/summary.txt" | sort | uniq -c
