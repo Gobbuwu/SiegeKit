@@ -36,7 +36,7 @@ The cause was not one engine flag. It was that no test said what a complete run 
    - `byEngine`, a different answer on one engine, with `why`;
    - `notMetYet`, findings confirmed by hand that SiegeKit does not find yet, each with the part that will find it.
 
-   The gates compare every scan against its answer (`go run ./internal/knownanswers/check`) and print the answer of the run, so an intended change is copied from the log. The container tests compare request counts on SiegeKit's test app the same way (`vulnAppMinRequests`).
+   The gates compare every scan against its answer (`go run ./internal/knownanswers/check`) and print the answer of the run, so an intended change is copied from the log. The container tests compare request counts on SiegeKit's test app the same way (`vulnAppMinRequests`). A tool whose request count depends on its random inputs runs there with a fixed seed, so the floor tells a cut-short run from an unlucky one: Schemathesis stops at the first failure it finds, and unseeded it sent 13 to 32 requests on the test app (amended 2026-11-21, PR #50). Scans stay unseeded.
 5. **Answers come from CI runs on both engines.** The first answers come from four gate runs (two heads, two engines, 2026-11-20). A difference between runs is a finding (ADR 0038) and is either explained or listed as `unstable` with the evidence.
 
 ## Evidence

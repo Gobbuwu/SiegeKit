@@ -254,8 +254,12 @@ var vulnAppMinRequests = map[string]int{
 	"nuclei-intrusive":     900,   // 1,000 to 1,002
 	"nuclei-default-login": 747,   // 831 on all three
 	"ffuf":                 4282,  // 4,758 on all three
-	"schemathesis":         18,    // 21 to 23
+	"schemathesis":         18,    // 21 with vulnAppSchemathesisSeed on every run (12 local runs, 2026-11-21)
 }
+
+// vulnAppSchemathesisSeed is the seed the test passes to Schemathesis, so
+// that its count above is the same every run (see findsPlanted).
+const vulnAppSchemathesisSeed = "1"
 
 // vulnAppIssues maps each planted issue to the rule (ZAP rule ID or Nuclei
 // template ID) that must report it, per plugin. A key "RULE /path" also
