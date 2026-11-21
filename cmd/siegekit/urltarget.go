@@ -28,6 +28,7 @@ import (
 	"github.com/Gobbuwu/SiegeKit/internal/login"
 	"github.com/Gobbuwu/SiegeKit/internal/manifest"
 	"github.com/Gobbuwu/SiegeKit/internal/openapi"
+	"github.com/Gobbuwu/SiegeKit/internal/publicmaps"
 	"github.com/Gobbuwu/SiegeKit/internal/ratelimit"
 	"github.com/Gobbuwu/SiegeKit/internal/report"
 	"github.com/Gobbuwu/SiegeKit/internal/runner"
@@ -344,11 +345,11 @@ func openAPISource(arg string, u *target.URL) (specSource, error) {
 
 // findSpec returns the spec for plugins that use one (ADR 0025 item 4,
 // ADR 0028): the --openapi file, the --openapi URL, the first spec in
-// --source (ADR 0037), or on local targets the first valid spec at
-// openapi.DefaultPaths. It returns nil and the reason
+// --source (ADR 0037), or on local targets the first valid spec that probe
+// finds at publicmaps.Paths (ADR 0046). It returns nil and the reason
 // when there is none; failed is true when the spec the user named could
 // not be used.
-func findSpec(ctx context.Context, cfg egress.Config, src specSource, deployed bool) (spec *openapi.Spec, reason string, failed bool) {
+func findSpec(ctx context.Context, cfg egress.Config, src specSource, deployed bool, probe func() (publicmaps.Probe, error)) (spec *openapi.Spec, reason string, failed bool) {
 	if src.spec != nil {
 		return src.spec, "", false
 	}
@@ -379,15 +380,14 @@ func findSpec(ctx context.Context, cfg egress.Config, src specSource, deployed b
 	if deployed {
 		return nil, "no OpenAPI spec was given with --openapi (SiegeKit looks for one only on local targets)", false
 	}
-	for _, p := range openapi.DefaultPaths {
-		if err := ctx.Err(); err != nil {
-			return nil, err.Error(), true
-		}
-		if s, err := fetch(p); err == nil {
-			return s, "", false
-		}
+	p, err := probe()
+	if err != nil {
+		return nil, err.Error(), true
 	}
-	return nil, fmt.Sprintf("no OpenAPI spec was given with --openapi and none was found at %s", strings.Join(openapi.DefaultPaths, ", ")), false
+	if s := p.First(); s != nil {
+		return s, "", false
+	}
+	return nil, fmt.Sprintf("no OpenAPI spec was given with --openapi and none was found at %s", strings.Join(publicmaps.Paths(), ", ")), false
 }
 
 // runURL selects the active plugins, asks before installing their images
@@ -408,6 +408,7 @@ func runURL(ctx context.Context, u *target.URL, addrs []netip.Addr, mode target.
 		{ID: login.ID, Name: login.Name, Family: login.Family, Targets: []string{"url"}},
 		{ID: ratelimit.ID, Name: ratelimit.Name, Family: ratelimit.Family, Targets: []string{"url"}},
 		{ID: served.ID, Name: served.Name, Family: served.Family, Targets: []string{"url"}},
+		{ID: publicmaps.ID, Name: publicmaps.Name, Family: publicmaps.Family, Targets: []string{"url"}},
 		{ID: backend.ID, Name: backend.Name, Family: backend.Family, Targets: []string{"url"}},
 		{ID: authz.ID, Name: authz.Name, Family: authz.Family, Targets: []string{"url"}},
 	}, "url", o.only, o.skip)
@@ -418,7 +419,7 @@ func runURL(ctx context.Context, u *target.URL, addrs []netip.Addr, mode target.
 		return slices.ContainsFunc(own, func(c checks.Check) bool { return c.ID == id })
 	}
 	loginSelected, servedSelected, authzSelected := ownSelected(login.ID), ownSelected(served.ID), ownSelected(authz.ID)
-	rateSelected, backendSelected := ownSelected(ratelimit.ID), ownSelected(backend.ID)
+	rateSelected, backendSelected, mapsSelected := ownSelected(ratelimit.ID), ownSelected(backend.ID), ownSelected(publicmaps.ID)
 	// The served-secrets check runs Gitleaks over the files it fetched
 	// (ADR 0032).
 	var gitleaks *manifest.Manifest
@@ -463,6 +464,9 @@ func runURL(ctx context.Context, u *target.URL, addrs []netip.Addr, mode target.
 	}
 	if servedSelected && hostOS != "linux" {
 		unavailable[served.ID] = runner.Fail(report.CausePlatform, "active tests run only on Linux for now (ADR 0018)")
+	}
+	if mapsSelected && hostOS != "linux" {
+		unavailable[publicmaps.ID] = runner.Fail(report.CausePlatform, "active tests run only on Linux for now (ADR 0018)")
 	}
 	// Active plugins need no tool data, but some need pinned files. The
 	// served-secrets check needs the Gitleaks image.
@@ -571,6 +575,15 @@ func runURL(ctx context.Context, u *target.URL, addrs []netip.Addr, mode target.
 			planned = append(planned, served.ID)
 			fmt.Fprintf(stdout, "  %-20s %s %s: GET the start page and up to %d same-origin scripts, styles, JSON files and source maps it links, then scan them for secrets\n",
 				served.ID, gitleaks.Tool.Name, gitleaks.Tool.Version, served.MaxRequests-1)
+		}
+	}
+	if mapsSelected {
+		if r, ok := unavailable[publicmaps.ID]; ok {
+			fmt.Fprintf(stdout, "  %-20s not run - %s\n", publicmaps.ID, r.Reason)
+		} else {
+			planned = append(planned, publicmaps.ID)
+			fmt.Fprintf(stdout, "  %-20s siegekit %s: GET %d paths where API specs are often served, and the source maps of the start page's scripts and styles; report each one served\n",
+				publicmaps.ID, version, len(publicmaps.Paths()))
 		}
 	}
 	if backendSelected {
@@ -713,6 +726,17 @@ func runURL(ctx context.Context, u *target.URL, addrs []netip.Addr, mode target.
 			fmt.Fprintf(stdout, "  %-20s not run - %s\n", authz.ID, reason)
 		}
 	}
+	// The spec paths are probed once, for the checks that use a spec
+	// and for public-maps (ADR 0046).
+	var probe *publicmaps.Probe
+	var probeErr error
+	probeSpecs := func() (publicmaps.Probe, error) {
+		if probe == nil {
+			p, err := publicmaps.ProbeSpecs(ctx, specGet, egress.Config{Target: u, Addrs: addrs, VerifyTLS: o.deployed, Version: version, ReadOnly: true}, limits.Rate)
+			probe, probeErr = &p, err
+		}
+		return *probe, probeErr
+	}
 	if len(planned) > 0 {
 		if err := audit.Append(filepath.Join(dir, "audit.log"), audit.Entry{
 			Time: time.Now().UTC(), Version: version, Target: u.String(), Addresses: addrStrings(addrs),
@@ -740,7 +764,7 @@ func runURL(ctx context.Context, u *target.URL, addrs []netip.Addr, mode target.
 		// The access-control check adds the spec's routes when there is
 		// one (ADR 0035), but runs without.
 		if needSpec || slices.Contains(planned, authz.ID) {
-			s, reason, failed := findSpec(ctx, cfg, src, o.deployed)
+			s, reason, failed := findSpec(ctx, cfg, src, o.deployed, probeSpecs)
 			switch {
 			case s != nil:
 				spec = s
@@ -812,12 +836,13 @@ func runURL(ctx context.Context, u *target.URL, addrs []netip.Addr, mode target.
 		rateResult = &pr
 	}
 	// The start page and the files it links are fetched once, for the
-	// served-secrets and backend-live checks.
+	// served-secrets, backend-live and public-maps checks.
 	_, servedOff := unavailable[served.ID]
 	_, backendOff := unavailable[backend.ID]
-	servedRuns, backendRuns := servedSelected && !servedOff, backendSelected && !backendOff
+	_, mapsOff := unavailable[publicmaps.ID]
+	servedRuns, backendRuns, mapsRuns := servedSelected && !servedOff, backendSelected && !backendOff, mapsSelected && !mapsOff
 	var col *collected
-	if servedRuns || backendRuns {
+	if servedRuns || backendRuns || mapsRuns {
 		col = collect(ctx, egress.Config{Target: u, Addrs: addrs, VerifyTLS: o.deployed, Version: version, ReadOnly: true}, limits.Rate)
 		defer col.cleanup()
 		if ctx.Err() != nil {
@@ -839,6 +864,9 @@ func runURL(ctx context.Context, u *target.URL, addrs []netip.Addr, mode target.
 		}
 		servedResult = &pr
 	}
+	// The fetches count once, as requests of the first check that ran
+	// that used them.
+	collectCounted := servedRuns
 	var backendResult *report.PluginResult
 	var backendFindings []findings.Finding
 	if backendSelected {
@@ -851,6 +879,7 @@ func runURL(ctx context.Context, u *target.URL, addrs []netip.Addr, mode target.
 			if !servedRuns {
 				extra = col.res.Requests
 			}
+			collectCounted = true
 			fmt.Fprintf(stdout, "%s: reading %s.\n", backend.ID, o.backend)
 			pr, backendFindings = runBackend(ctx, bp, col, o.repo, extra, pr)
 			if ctx.Err() != nil {
@@ -858,6 +887,36 @@ func runURL(ctx context.Context, u *target.URL, addrs []netip.Addr, mode target.
 			}
 		}
 		backendResult = &pr
+	}
+	var mapsResult *report.PluginResult
+	var mapsFindings []findings.Finding
+	if mapsSelected {
+		pr := report.PluginResult{ID: publicmaps.ID, Family: publicmaps.Family, Tool: "siegekit", Version: version}
+		if r, ok := unavailable[publicmaps.ID]; ok {
+			pr.Status, pr.Cause, pr.Reason = r.Status, r.Cause, r.Reason
+		} else {
+			fmt.Fprintf(stdout, "%s: looking for served API specs and source maps.\n", publicmaps.ID)
+			p, err := probeSpecs()
+			if ctx.Err() != nil {
+				return fail(errors.New("interrupted; no report written"))
+			}
+			pr.Input = fmt.Sprintf("%d spec path(s) on %s, and the source maps of the files the start page %s links", len(publicmaps.Paths()), u.Origin(), u)
+			pr.Requests = p.Requests
+			if !collectCounted {
+				pr.Requests += col.res.Requests
+				collectCounted = true
+			}
+			switch {
+			case err != nil:
+				pr.Status, pr.Reason = report.Failed, err.Error()
+			case col.err != nil:
+				pr.Status, pr.Reason = report.Failed, "source maps not checked: "+col.err.Error()
+			default:
+				mapsFindings = publicmaps.Findings(p, col.res)
+				pr.Status, pr.Result, pr.Findings = report.Ran, publicmaps.Summary(p, col.res), len(mapsFindings)
+			}
+		}
+		mapsResult = &pr
 	}
 	var authzResult *report.PluginResult
 	var authzFindings []findings.Finding
@@ -915,7 +974,7 @@ func runURL(ctx context.Context, u *target.URL, addrs []netip.Addr, mode target.
 		return fail(err)
 	}
 	var first []report.PluginResult
-	for _, pr := range []*report.PluginResult{loginResult, rateResult, servedResult, backendResult, authzResult} {
+	for _, pr := range []*report.PluginResult{loginResult, rateResult, servedResult, backendResult, mapsResult, authzResult} {
 		if pr != nil {
 			first = append(first, *pr)
 		}
@@ -923,7 +982,7 @@ func runURL(ctx context.Context, u *target.URL, addrs []netip.Addr, mode target.
 	if len(first) > 0 {
 		run.Started = started
 		run.Plugins = append(first, run.Plugins...)
-		if run.Findings = findings.Dedupe(slices.Concat(loginFindings, rateFindings, servedFindings, backendFindings, authzFindings, run.Findings)); run.Findings == nil {
+		if run.Findings = findings.Dedupe(slices.Concat(loginFindings, rateFindings, servedFindings, backendFindings, mapsFindings, authzFindings, run.Findings)); run.Findings == nil {
 			run.Findings = []findings.Finding{}
 		}
 	}

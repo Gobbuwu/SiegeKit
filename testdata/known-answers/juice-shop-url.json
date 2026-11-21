@@ -1,6 +1,6 @@
 {
   "fixture": "juice-shop v20.4.0 by URL (docker.io/bkimminich/juice-shop@sha256:9bbaecc41791f00b002bc65931cc5ff355fbdb941fa72b06558c18dace43197b)",
-  "measured": "CI gate runs 44834908813 and 44836476025 on 2026-11-20 (ubuntu-latest), each on podman 5.7.0 rootless, cgroup v2, and docker 29.4.2 rootful, cgroup v2: four runs. Minimum requests are 90% of the fewest of the four",
+  "measured": "CI gate runs 44834908813 and 44836476025 on 2026-11-20 (ubuntu-latest), each on podman 5.7.0 rootless, cgroup v2, and docker 29.4.2 rootful, cgroup v2: four runs. Minimum requests are 90% of the fewest of the four; public-maps and schemathesis (and served-secrets' higher minimum) from 3 local runs on 2026-11-21 (docker 29.10.0 rootful, cgroup v1: 11, 4 and 17 requests on each run), confirmed by the gate of #56 (ADR 0046)",
   "checks": {
     "access-control": {
       "status": "ran",
@@ -85,6 +85,14 @@
       "status": "ran",
       "minRequests": 891
     },
+    "public-maps": {
+      "status": "ran",
+      "match": "exact",
+      "findings": [
+        "public-api-spec /api-docs/swagger-ui-init.js"
+      ],
+      "minRequests": 9
+    },
     "rate-limit": {
       "status": "ran",
       "match": "exact",
@@ -94,13 +102,16 @@
       "minRequests": 18
     },
     "schemathesis": {
-      "status": "skipped",
-      "reason": "none was found at /openapi.json",
-      "cause": "no-input"
+      "status": "ran",
+      "match": "exact",
+      "findings": [
+        "ST103 /b2b/v2/orders"
+      ],
+      "minRequests": 3
     },
     "served-secrets": {
       "status": "ran",
-      "minRequests": 8
+      "minRequests": 15
     },
     "zap": {
       "status": "ran",

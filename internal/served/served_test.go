@@ -74,6 +74,7 @@ func FuzzLinks(f *testing.F) {
 		if r := SourceMapRef(b); len(r) > maxRef || strings.ContainsAny(r, " \t\r\n") {
 			t.Fatalf("bad source map ref %q", r)
 		}
+		IsSourceMap(b) // never panics
 	})
 }
 
@@ -129,9 +130,15 @@ func TestCollect(t *testing.T) {
 		"/app/": page(`<script src="app.js"></script><script src="https://cdn.example.com/x.js"></script>
 <script src="//other.example/y.js"></script><link rel=stylesheet href="/s.css"><script src="/app/app.js#frag"></script>
 <script src="/gone.js"></script><script src="/big.js"></script><script src="/down.js"></script>
-<script src="data:text/javascript,alert(1)"></script><script src="http://app.test:8080//x.js"></script><link rel=manifest href="/r"><script src="/off"></script>`),
+<script src="data:text/javascript,alert(1)"></script><script src="http://app.test:8080//x.js"></script><link rel=manifest href="/r"><script src="/off"></script>
+<script src="/hidden.js"></script><script src="/spa.js"></script><script src="/q.js?v=2"></script>`),
 		"/app/app.js":     js,
-		"/app/app.js.map": page(`{"sources":[]}`),
+		"/app/app.js.map": page(`{"version":3,"sources":[],"mappings":""}`),
+		"/hidden.js":      page("var h;"),
+		"/hidden.js.map":  page(")]}'\n{\"version\":3,\"sections\":[]}"),
+		"/spa.js":         page("var s;"),
+		"/spa.js.map":     page("<!doctype html><html></html>"),
+		"/q.js?v=2":       page("var q;"),
 		"/s.css":          css,
 		"/maps/s.css.map": page("{}"),
 		"/big.js":         {Status: -1},
@@ -145,27 +152,34 @@ func TestCollect(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	wantPaths := []string{"/app/", "/app/app.js", "/s.css", "/gone.js", "/big.js", "/down.js", "/r", "/manifest.json", "/off", "/app/app.js.map", "/maps/s.css.map"}
+	wantPaths := []string{"/app/", "/app/app.js", "/s.css", "/gone.js", "/big.js", "/down.js", "/r", "/manifest.json", "/off", "/hidden.js", "/spa.js", "/q.js?v=2",
+		"/app/app.js.map", "/maps/s.css.map", "/hidden.js.map", "/spa.js.map"}
 	if !slices.Equal(*got, wantPaths) {
 		t.Errorf("requests\n%v\nwant\n%v", *got, wantPaths)
 	}
-	var names, urls []string
+	var names, urls, maps []string
 	for _, f := range r.Files {
 		names, urls = append(names, f.Name), append(urls, f.URL)
+		if f.Map {
+			maps = append(maps, f.URL)
+		}
 		if _, err := os.Stat(filepath.Join(dir, f.Name)); err != nil {
 			t.Error(err)
 		}
 	}
-	if want := []string{"001-page.html", "002-script.js", "003-style.css", "004-JSON.json", "005-source-map.map", "006-source-map.map"}; !slices.Equal(names, want) {
+	if want := []string{"http://app.test:8080/app/app.js.map", "http://app.test:8080/hidden.js.map"}; !slices.Equal(maps, want) {
+		t.Errorf("source maps %v, want %v", maps, want)
+	}
+	if want := []string{"001-page.html", "002-script.js", "003-style.css", "004-JSON.json", "005-script.js", "006-script.js", "007-script.js", "008-source-map.map", "009-source-map.map", "010-source-map.map"}; !slices.Equal(names, want) {
 		t.Errorf("files %v, want %v", names, want)
 	}
 	if urls[3] != "http://app.test:8080/manifest.json" || urls[0] != "http://app.test:8080/app/" {
 		t.Errorf("urls %v", urls)
 	}
-	if r.Requests != 10 || r.OtherOrigin != 2 || r.BadPath != 1 || r.Failed != 3 || r.TooLarge != 1 || r.OverLimit != 0 {
+	if r.Requests != 15 || r.OtherOrigin != 2 || r.BadPath != 1 || r.Failed != 3 || r.TooLarge != 1 || r.OverLimit != 0 || r.Probed != 2 || r.NotMap != 1 {
 		t.Errorf("result %+v", r)
 	}
-	want := "scanned 6 file(s): 1 page, 1 script, 1 style, 1 JSON, 2 source maps; not scanned: 2 on another origin, 1 with a path that does not start with a single /, 3 not answered with 200, 1 larger than 10 MiB"
+	want := "scanned 10 file(s): 1 page, 4 scripts, 1 style, 1 JSON, 3 source maps; not scanned: 2 on another origin, 1 with a path that does not start with a single /, 3 not answered with 200, 1 larger than 10 MiB; tried <file>.map for 2 file(s) naming no source map, 1 not one"
 	if s := r.Summary(); s != want {
 		t.Errorf("Summary =\n%s\nwant\n%s", s, want)
 	}
@@ -234,7 +248,8 @@ func TestCollectRate(t *testing.T) {
 	if _, err := Collect(context.Background(), cfgFor(t, "http://app.test/"), 10, t.TempDir()); err != nil {
 		t.Fatal(err)
 	}
-	if len(waits) != 2 {
+	// Two scripts, then a "<file>.map" for each (ADR 0046).
+	if len(waits) != 4 {
 		t.Fatalf("waits %v", waits)
 	}
 	for _, w := range waits {
@@ -257,7 +272,7 @@ func TestCollectCanceled(t *testing.T) {
 }
 
 func TestFindings(t *testing.T) {
-	r := Result{Files: []File{{"001-page.html", "http://app.test/", Page}, {"002-script.js", "http://app.test/app.js", Script}}}
+	r := Result{Files: []File{{"001-page.html", "http://app.test/", Page, false}, {"002-script.js", "http://app.test/app.js", Script, false}}}
 	in := []findings.Finding{
 		{RuleID: "github-pat", Message: "GitHub token", Severity: findings.High, Family: "secrets", Location: findings.Location{URI: "002-script.js", StartLine: 3}, Sources: []findings.Source{{Plugin: "gitleaks", RuleID: "github-pat"}}},
 		{RuleID: "x", Location: findings.Location{URI: "elsewhere.js"}},
@@ -277,5 +292,27 @@ func TestFindings(t *testing.T) {
 	}
 	if in[0].Sources[0].Plugin != "gitleaks" {
 		t.Error("input changed")
+	}
+}
+
+func TestIsSourceMap(t *testing.T) {
+	for in, want := range map[string]bool{
+		`{"version":3,"sources":["a.ts"],"mappings":"AAAA"}`: true,
+		`{"version":3,"mappings":""}`:                        true,
+		")]}'\n{\"version\":3,\"mappings\":\"\"}":            true,
+		`{"version":3,"sections":[]}`:                        true,
+		"\xef\xbb\xbf{\"version\":3,\"mappings\":\"\"}":      true,
+		`{"version":2,"mappings":""}`:                        false,
+		`{"version":"3","mappings":""}`:                      false,
+		`{"version":3}`:                                      false,
+		`{"version":3,"mappings":null}`:                      false,
+		`{"sources":[]}`:                                     false,
+		"<!doctype html><html></html>":                       false,
+		"":                                                   false,
+		`[{"version":3,"mappings":""}]`:                      false,
+	} {
+		if got := IsSourceMap([]byte(in)); got != want {
+			t.Errorf("IsSourceMap(%q) = %v", in, got)
+		}
 	}
 }

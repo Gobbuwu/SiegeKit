@@ -198,13 +198,18 @@ jobs:
         # reach the app, and the passive checks must report the issues seen
         # in every local run on 2026-11-19: no Content-Security-Policy (ZAP rule 10038) and
         # a permissive CORS header (10098). Juice Shop serves no OpenAPI spec
-        # at the default paths (it answers them with HTML, measured
-        # 2026-11-20), so schemathesis must be skipped for that reason (ADR 0028).
+        # at the 10 default paths (it answers them with HTML, measured
+        # 2026-11-20) but serves one in its Swagger UI setup script,
+        # /api-docs/swagger-ui-init.js (measured 2026-11-21): public-maps
+        # must send its 11 GETs and report that spec, and schemathesis must
+        # test it and report ST103 on POST /b2b/v2/orders (ADR 0046).
         # Juice Shop does not limit failed logins (20 logins for
         # jim@juice-sh.op all answered 401, measured 2026-11-20), so
         # login-throttle must send 20 logins and report login-not-limited
         # (ADR 0030). served-secrets must fetch the start page and the 8 files
-        # it links (9 requests, measured 2026-11-20; ADR 0032).
+        # it links (9 requests, measured 2026-11-20; ADR 0032), plus a
+        # <file>.map for each of the 8, none of them a source map (17
+        # requests, measured 2026-11-21; ADR 0046).
         # access-control must replay the 11 requests (33 sent), report
         # exactly 4 reads by B: A's basket and user record, the user list
         # and the complaints, and the password hashes /rest/memories/ gives
@@ -240,10 +245,12 @@ jobs:
           r="$RUNNER_TEMP/report/report.json"
           jq -e --arg e "$EXPECT_ENGINE" '.environment.engine | (.name + (if .rootless then " rootless" else " rootful" end)) == $e' "$r"
           jq '.plugins[] | {id, status, cause, reason, input, result, requests, refused, refusedTo, findings}' "$r"
-          jq -e '[.plugins[] | select(.status == "ran" and .requests > 0) | .id] | sort == ["access-control", "ffuf", "login-throttle", "nuclei", "nuclei-default-login", "nuclei-intrusive", "rate-limit", "served-secrets", "zap", "zap-active"]' "$r"
-          jq -e '[.plugins[] | select(.id == "schemathesis" and .status == "skipped" and .cause == "no-input" and (.reason | contains("none was found at /openapi.json")))] | length == 1' "$r"
+          jq -e '[.plugins[] | select(.status == "ran" and .requests > 0) | .id] | sort == ["access-control", "ffuf", "login-throttle", "nuclei", "nuclei-default-login", "nuclei-intrusive", "public-maps", "rate-limit", "schemathesis", "served-secrets", "zap", "zap-active"]' "$r"
+          jq -e '[.plugins[] | select(.id == "schemathesis" and .input == "OpenAPI spec http://127.0.0.1:3000/api-docs/swagger-ui-init.js (the spec in the Swagger UI setup script)")] | length == 1' "$r"
+          jq -e '[.plugins[] | select(.id == "public-maps" and .requests == 11 and .result == "found 1 API spec(s) at 11 path(s) tried, and 0 source map(s) for 8 script(s) and style(s)")] | length == 1' "$r"
+          jq -e '[.findings[] | select(.ruleId == "public-api-spec" and .severity == "low" and .location.uri == "http://127.0.0.1:3000/api-docs/swagger-ui-init.js")] | length == 1' "$r"
           jq -e '[.plugins[] | select(.id == "login-throttle" and .requests == 20)] | length == 1' "$r"
-          jq -e '[.plugins[] | select(.id == "served-secrets" and .requests >= 9 and (.result | startswith("scanned ")))] | length == 1' "$r"
+          jq -e '[.plugins[] | select(.id == "served-secrets" and .requests >= 9 and (.result | startswith("scanned ")) and (.result | contains("tried <file>.map for 8 file(s) naming no source map, 8 not one")))] | length == 1' "$r"
           jq -e '[.findings[] | select(.ruleId == "login-not-limited" and .location.uri == "http://127.0.0.1:3000/rest/user/login")] | length == 1' "$r"
           jq -e '[.plugins[] | select(.id == "access-control" and .requests == 33)] | length == 1' "$r"
           jq -e '[.plugins[] | select(.id == "rate-limit" and .requests == 20 and .input == "GET http://127.0.0.1:3000/rest/products/search?q=apple")] | length == 1' "$r"

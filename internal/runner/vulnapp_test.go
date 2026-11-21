@@ -42,7 +42,7 @@ func vulnApp() http.Handler {
 <a href="/item?id=1">Item 1</a>
 <a href="/file?name=terms.txt">Terms</a>
 <form action="/search" method="get"><input name="q" value="hat"><input type="submit"></form>
-<script src="/static/app.js"></script>`)
+<script src="/static/app.js"></script><script src="/static/vendor.js"></script>`)
 	})
 	// Keys in served files: a token in a script and a cloud key in its
 	// source map. They are assembled at run time so this repository never
@@ -54,6 +54,16 @@ func vulnApp() http.Handler {
 	mux.HandleFunc("/static/app.js.map", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		fmt.Fprintf(w, `{"version":3,"sources":["src/config.js"],"sourcesContent":["export const awsKey = '%s';"],"mappings":""}`, servedCloudKey)
+	})
+	// A source map that its script does not name, next to it with ".map"
+	// added, as webpack's hidden-source-map writes it (ADR 0046).
+	mux.HandleFunc("/static/vendor.js", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/javascript")
+		fmt.Fprint(w, "var vendor = 1;\n")
+	})
+	mux.HandleFunc("/static/vendor.js.map", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"version":3,"sources":["src/vendor.js"],"sourcesContent":["export const vendor = 1;"],"mappings":"AAAA"}`)
 	})
 	// Reflected cross-site scripting: the query is echoed unescaped.
 	mux.HandleFunc("/search", func(w http.ResponseWriter, r *http.Request) {
@@ -97,6 +107,12 @@ func vulnApp() http.Handler {
 	mux.HandleFunc("/openapi.json", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		fmt.Fprint(w, vulnAppSpec)
+	})
+	// The same spec in a Swagger UI page, as swagger-ui-express serves it
+	// when mounted at /api-docs (ADR 0046).
+	mux.HandleFunc("/api-docs/swagger-ui-init.js", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/javascript")
+		fmt.Fprint(w, "\nwindow.onload = function() {\n  var options = {\n  \"swaggerDoc\": "+vulnAppSpec+",\n  \"customOptions\": {}\n};\n}\n")
 	})
 	mux.HandleFunc("/api/items/{id}", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet && r.Method != http.MethodHead {
@@ -306,6 +322,13 @@ var vulnAppIssues = map[string]map[string]string{
 	},
 	"login-throttle": {
 		"login-not-limited /account/sign-in": "failed logins are not limited at POST /account/sign-in",
+	},
+	// public-maps runs in the test process (TestPublicMapsFindsPlantedIssues).
+	"public-maps": {
+		"public-api-spec /openapi.json":                "the API spec is served at /openapi.json",
+		"public-api-spec /api-docs/swagger-ui-init.js": "the API spec is served in a Swagger UI page at /api-docs/",
+		"public-source-map /static/app.js.map":         "the source map that app.js names is served",
+		"public-source-map /static/vendor.js.map":      "a source map that vendor.js does not name is served",
 	},
 	// rate-limit runs in the test process (TestRateLimitFindsPlantedIssue).
 	"rate-limit": {

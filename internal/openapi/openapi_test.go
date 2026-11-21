@@ -1,6 +1,9 @@
 package openapi
 
 import (
+	"bytes"
+	"encoding/json"
+	"os"
 	"strings"
 	"testing"
 )
@@ -30,9 +33,15 @@ func TestCheck(t *testing.T) {
 func FuzzCheck(f *testing.F) {
 	f.Add([]byte(`{"openapi":"3.0.3","paths":{}}`))
 	f.Add([]byte("openapi: 3.0.0\npaths:\n"))
+	f.Add([]byte("var options = {\n  \"swaggerDoc\": {\"openapi\":\"3.0.0\",\"paths\":{}},\n  \"x\": function() {}\n};"))
 	f.Fuzz(func(t *testing.T, b []byte) {
 		if got, err := Check(b); err == nil && got != "json" && got != "yaml" {
 			t.Fatalf("format %q", got)
+		}
+		// The setup script of ADR 0046: what it returns is one JSON value
+		// taken from b.
+		if spec, err := FromSwaggerUIInit(b); err == nil && (!json.Valid(spec) || !bytes.Contains(b, spec)) {
+			t.Fatalf("spec %q from %q", spec, b)
 		}
 	})
 }
@@ -84,4 +93,39 @@ func FuzzBasePath(f *testing.F) {
 			t.Fatalf("%q %v", p, ok)
 		}
 	})
+}
+
+// The setup script that Juice Shop v20.4.0 serves at /api-docs/
+// swagger-ui-init.js (swagger-ui-express 5.0.1), saved on 2026-11-21.
+func TestFromSwaggerUIInit(t *testing.T) {
+	b, err := os.ReadFile("testdata/swagger-ui-init-juice-shop.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	spec, err := FromSwaggerUIInit(b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if f, err := Check(spec); err != nil || f != "json" {
+		t.Fatalf("Check = %q, %v", f, err)
+	}
+	if base, ok := BasePath(spec, "json"); !ok || base != "/b2b/v2" {
+		t.Errorf("BasePath = %q, %v", base, ok)
+	}
+	for _, tc := range []struct{ name, in string }{
+		{"html", "<!doctype html><html></html>"},
+		{"no options", "window.onload = function() {}"},
+		{"url only", "var options = {\n  \"customOptions\": {},\n  \"swaggerUrl\": \"/spec.json\"\n};"},
+		{"broken", "var options = {\n  \"swaggerDoc\": {\"openapi\": \"3.0.0\",\n"},
+	} {
+		if _, err := FromSwaggerUIInit([]byte(tc.in)); err == nil {
+			t.Errorf("%s: no error", tc.name)
+		}
+	}
+	// Functions in later options do not matter.
+	in := "var options = {\n  \"swaggerDoc\": {\"openapi\": \"3.0.1\", \"paths\": {}},\n  \"customOptions\": {\"f\": function() {}}\n};"
+	spec, err = FromSwaggerUIInit([]byte(in))
+	if err != nil || string(spec) != `{"openapi": "3.0.1", "paths": {}}` {
+		t.Errorf("got %q, %v", spec, err)
+	}
 }
