@@ -99,6 +99,9 @@ type HAR struct {
 	// SweepNoID counts sweep routes dropped because no ID from A's
 	// recording fit a required path or ID-named query parameter.
 	SweepNoID int
+	// SweepURL counts sweep routes dropped because a required parameter
+	// asks for an address the app would fetch (asksURL).
+	SweepURL int
 	// SweepOverLimit counts filled sweep routes past MaxSweep.
 	SweepOverLimit int
 	ids            *idSet // ID-shaped tokens harvested from A's recording
@@ -750,6 +753,7 @@ func (r Result) Summary(h *HAR, loginName string, c Counts) string {
 			{h.Action, "naming an action that can change data, such as change, save or delete (ADR 0048)" + actionList(h)},
 			{h.Duplicate, "duplicates"}, {h.OverLimit, fmt.Sprintf("over the %d-request limit", MaxRequests)},
 			{h.SweepNoID, "spec routes needing an object ID the HAR file never showed (the sweep does not guess IDs)"},
+			{h.SweepURL, "spec routes needing an address the app would fetch (the sweep does not make the target contact other sites)"},
 			{h.SweepOverLimit, fmt.Sprintf("spec routes over the route sweep's %d-request limit", MaxSweep)},
 		} {
 			if x.n > 0 {

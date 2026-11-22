@@ -247,6 +247,15 @@ func (p SpecParam) fillValue() string {
 	return ""
 }
 
+// asksURL reports whether a parameter, filled with v, asks the app for an
+// address to fetch: a URL format, or a value with a scheme or starting
+// with "//".
+func (p SpecParam) asksURL(v string) bool {
+	f := strings.ToLower(p.Format)
+	return f == "uri" || f == "url" || f == "uri-reference" || f == "iri" ||
+		strings.Contains(v, "://") || strings.HasPrefix(v, "//")
+}
+
 // isIDParam reports whether a parameter asks for an object ID.
 func (p SpecParam) isIDParam() bool {
 	nk := normKey(p.Name)
@@ -360,7 +369,16 @@ func (h *HAR) fillRoute(rt SpecRoute, base string) []string {
 			idQuery = append(idQuery, seg{pm.Name, vals})
 			continue
 		}
-		q.Set(pm.Name, pm.fillValue())
+		v := pm.fillValue()
+		if pm.asksURL(v) {
+			// The app would fetch that address itself, often another
+			// site (Rocket.Chat's chat.getURLPreview example is on
+			// w3schools.com): a read of the target must not make it
+			// contact others.
+			h.SweepURL++
+			return nil
+		}
+		q.Set(pm.Name, v)
 	}
 	// Expand the path and ID-query parameters over their candidates,
 	// capped so one route cannot flood the sweep.

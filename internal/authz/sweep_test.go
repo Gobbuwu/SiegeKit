@@ -269,3 +269,33 @@ func TestSweepRoutesSwagger2Ref(t *testing.T) {
 		t.Fatalf("Swagger 2.0 $ref not resolved: %+v", routes)
 	}
 }
+
+func TestAddSweepRoutesSkipsAddressParams(t *testing.T) {
+	tu, _ := target.Parse("http://localhost:3000/")
+	har := []byte(`{"log":{"entries":[{"request":{"method":"GET","url":"http://localhost:3000/api/v1/rooms.get?roomId=6b0281133568ca9b5b817585","headers":[{"name":"X-Auth-Token","value":"tok"}]},"response":{"content":{"text":"{}"}}}]}}`)
+	h, err := ParseHAR(har, tu)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Rocket.Chat's chat.getURLPreview: its example makes the app fetch
+	// another site. A uri-format parameter with no example is dropped too.
+	spec := `{"openapi":"3.0.0","paths":{
+	 "/api/v1/chat.getURLPreview":{"get":{"parameters":[
+	  {"name":"roomId","in":"query","required":true,"schema":{"type":"string"}},
+	  {"name":"url","in":"query","required":true,"schema":{"type":"string"},"example":"http://www.w3schools.com/tags/movie.mp4"}]}},
+	 "/api/v1/hook":{"get":{"parameters":[{"name":"target","in":"query","required":true,"schema":{"type":"string","format":"uri"}}]}},
+	 "/api/v1/proxy":{"get":{"parameters":[{"name":"src","in":"query","required":true,"schema":{"type":"string"},"example":"//cdn.example/x"}]}},
+	 "/api/v1/rooms.info":{"get":{"parameters":[{"name":"roomId","in":"query","required":true,"schema":{"type":"string"}}]}}}}`
+	h.AddSweepRoutes(SweepRoutes([]byte(spec), "json"), "")
+	for _, r := range h.Requests {
+		if strings.Contains(r.Path, "getURLPreview") || strings.Contains(r.Path, "/hook") || strings.Contains(r.Path, "/proxy") {
+			t.Errorf("sent a route whose parameter is an address: %s", r.Path)
+		}
+	}
+	if h.SweepURL != 3 {
+		t.Errorf("SweepURL = %d, want 3", h.SweepURL)
+	}
+	if h.FromSweep != 1 {
+		t.Errorf("FromSweep = %d, want 1 (rooms.info)", h.FromSweep)
+	}
+}
