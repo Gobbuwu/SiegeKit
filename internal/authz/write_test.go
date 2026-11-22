@@ -563,6 +563,46 @@ func TestWriteCheckMedium(t *testing.T) {
 	}
 }
 
+// TestWriteCheckNoActionGET: a write whose URL names an action is not read
+// back with a GET (ADR 0048: such a GET may run the action), so it can reach
+// medium only; the CSRF token comes from the start page, not a form page
+// whose URL names an action.
+func TestWriteCheckNoActionGET(t *testing.T) {
+	var got []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got = append(got, r.Method+" "+r.URL.Path)
+		if r.Method == "GET" {
+			fmt.Fprint(w, `<meta name="_csrf" content="tok-`+r.Header.Get("Authorization")+`">`)
+			return
+		}
+		fmt.Fprint(w, `{}`)
+	}))
+	defer srv.Close()
+	noSleep(t)
+	cfg := egress.Config{Target: mustTarget(t, srv.URL+"/"), Addrs: []netip.Addr{netip.MustParseAddr("127.0.0.1")}, Version: "test"}
+	ws := []Write{
+		{Method: "PUT", Path: "/api/orders/7/approve", Header: http.Header{"Authorization": {"Bearer A"}}},
+		{Method: "POST", Path: "/orders/7/edit", CSRF: true, Header: http.Header{"Authorization": {"Bearer A"}, "Referer": {srv.URL + "/orders/7/cancel"}, "Content-Type": {"application/x-www-form-urlencoded"}}, Body: []byte("_csrf=old&x=1")},
+	}
+	res, err := WriteCheck(context.Background(), cfg, ws, http.Header{"Authorization": {"Bearer B"}}, "alice", 10, target.Local)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, g := range got {
+		if strings.HasPrefix(g, "GET ") && g != "GET /" {
+			t.Errorf("sent %s", g)
+		}
+	}
+	for _, f := range WriteFindings(srv.URL, res) {
+		if f.Severity != findings.Medium {
+			t.Errorf("%+v", f)
+		}
+	}
+	if !slices.Contains(got, "GET /") {
+		t.Errorf("no token page: %v", got)
+	}
+}
+
 func TestWriteCheckRefuses(t *testing.T) {
 	tu := mustTarget(t, "http://127.0.0.1:1/")
 	ws := []Write{{Method: "DELETE", Path: "/x"}}

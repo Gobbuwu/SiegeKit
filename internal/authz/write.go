@@ -870,6 +870,11 @@ func WriteCheck(ctx context.Context, cfg egress.Config, ws []Write, b http.Heade
 				readHeader = w.ParentHeader.Clone()
 				readHeader.Del("Content-Type")
 			}
+			if rp.Read && ActionReason(rp.ReadPath) != "" {
+				// A GET whose URL names an action is never sent (ADR 0048),
+				// so this replay can reach medium only.
+				rp.Read = false
+			}
 			var err error
 			if rp.Read {
 				if rp.Before, err = do(http.MethodGet, rp.ReadPath, readHeader, nil); err != nil {
@@ -893,7 +898,10 @@ func WriteCheck(ctx context.Context, cfg egress.Config, ws []Write, b http.Heade
 			if w.CSRF {
 				if old := csrfValue(sw); old != "" {
 					page := "/"
-					if ref, err := url.Parse(sw.Header.Get("Referer")); err == nil && ref.Path != "" && target.SendablePath(ref.EscapedPath()) {
+					// The form's page, unless its URL names an action (ADR
+					// 0048): then the start page, which carries the token on
+					// apps that keep it in a meta tag or cookie.
+					if ref, err := url.Parse(sw.Header.Get("Referer")); err == nil && ref.Path != "" && target.SendablePath(ref.EscapedPath()) && ActionReason(ref.EscapedPath()) == "" {
 						page = ref.EscapedPath()
 					}
 					ph := h.Clone()
