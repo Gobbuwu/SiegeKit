@@ -42,6 +42,8 @@ Measured with the built code, a fresh app and a fresh recording or HAR for each 
 | Mattermost 12.0.2 (`mattermost/mattermost-preview:12.0.2`, `71fe954345f0`), HAR written from alice's API requests as the web client sends them (Bearer token, `X-Requested-With`), with the real answers; alice's archive of the private channel added last without sending it, with Mattermost's answer `200 {"status":"OK"}` | not measured | reads: 9 **low** (the channels, posts, pinned posts and the posts alice made), 48 req; writes: B's 2 posts, the channel header and **the archive of alice's private channel low** (Mattermost lets members do it by design; the state check shows the channel archived by bob); C refused (403) on every one; 30 req | reads 8 high and 1 medium, writes 1 high (the archive) and 3 medium, both results say C's session may have expired |
 | Juice Shop v20.4.0, the CI gate's accounts and hand-written HAR (12 GETs) | 4 `cross-account-read`, 36 req | the same 4, now C's (B got the same answers), 48 req; result "4 readable by account C or B, 0 only by account B (low)"; every gate check of `access-control` passes | not measured |
 
+The Rocket.Chat, Gitea and Mattermost runs (B and C, and expired C) were repeated on rootless Podman 4.9.3 (cgroup v1, netavark, slirp4netns; the same image digests, pulled as an unprivileged user) with identical findings, severities and request counts on all six runs, and the same database and state changes.
+
 So on Rocket.Chat and Gitea the 10 findings allowed by design moved to low and the 4 older false alarms stayed at medium, exactly as the record's option B table computed. The Mattermost by-design member powers found in Part 4 show as low.
 
 ## Consequences
@@ -49,7 +51,7 @@ So on Rocket.Chat and Gitea the 10 findings allowed by design moved to low and t
 - Every run with C tests an outsider on what the recording reached, and the noise from a member B moves out of high and medium without being hidden.
 - People give one more test account; the plan says when C is missing.
 - **Not covered:** routes the recording did not reach (Rocket.Chat's `chat.getDeletedMessages` leak is found only by the route sweep, pull request 2); IDs the recording did not hold (guessing Rocket.Chat room IDs is a separate item); live streams and socket methods; reads sent as POST (option D, covered by the sweep). A role or group only B has that the app trusts wrongly is reported as low, not high: the person must read the low findings. An app that answers an expired session differently from no session (not 401 and not a redirect) would pass item 4's check; none of the four measured apps does.
-- Measured on Docker rootful only; the CI gate runs the Juice Shop part on rootless Podman and rootful Docker.
+- Measured on rootful Docker 29.10.0 and rootless Podman 4.9.3, both cgroup v1; the CI gate runs the Juice Shop part on rootless Podman 5.7.0 and rootful Docker, cgroup v2.
 
 ## Alternatives considered
 
