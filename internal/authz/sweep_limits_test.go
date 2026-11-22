@@ -46,9 +46,9 @@ func TestSweepRateLimitAndNotes(t *testing.T) {
 	for _, want := range []string{
 		"1 from the route sweep",
 		"1 answer(s) were 429 (rate limited)",
-		"2 spec routes needing an object ID",
-		"3 spec routes needing an address the app would fetch",
-		"4 spec routes over the route sweep's 500-request limit",
+		"2 swept routes needing an object ID",
+		"3 swept routes needing an address the app would fetch",
+		"4 swept routes over the route sweep's 500-request limit",
 		"5 spec routes with a parameter the spec does not describe",
 	} {
 		if !strings.Contains(s, want) {

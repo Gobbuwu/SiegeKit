@@ -96,6 +96,9 @@ type HAR struct {
 	OverLimit   int // past MaxRequests
 	FromSpec    int // added from the OpenAPI spec by AddSpecRoutes
 	FromSweep   int // added by the route sweep (AddSweepRoutes, ADR 0052)
+	// FromCodeSweep counts the swept requests whose route was read from
+	// the app's server code (ADR 0053); they are part of FromSweep.
+	FromCodeSweep int
 	// SweepNoID counts sweep routes dropped because no ID from A's
 	// recording fit a required path or ID-named query parameter.
 	SweepNoID int
@@ -716,6 +719,9 @@ func (r Result) Summary(h *HAR, loginName string, c Counts) string {
 		s = fmt.Sprintf("replayed %d request(s) (%d from the HAR file, %d from the OpenAPI spec", r.ATried, r.ATried-h.FromSpec-h.FromSweep, h.FromSpec)
 		if h.FromSweep > 0 {
 			s += fmt.Sprintf(", %d from the route sweep", h.FromSweep)
+			if h.FromCodeSweep > 0 {
+				s += fmt.Sprintf(" (%d of them on routes read from the server code)", h.FromCodeSweep)
+			}
 		}
 		s += ")"
 	}
@@ -756,10 +762,10 @@ func (r Result) Summary(h *HAR, loginName string, c Counts) string {
 			{h.Static, "static files"}, {h.OtherMethod, "not GET or HEAD"}, {h.OtherOrigin, "on another origin"}, {h.BadPath, "with a path that does not start with a single /"},
 			{h.Action, "naming an action that can change data, such as change, save or delete (ADR 0048)" + actionList(h)},
 			{h.Duplicate, "duplicates"}, {h.OverLimit, fmt.Sprintf("over the %d-request limit", MaxRequests)},
-			{h.SweepNoID, "spec routes needing an object ID the HAR file never showed (the sweep does not guess IDs)"},
-			{h.SweepURL, "spec routes needing an address the app would fetch (the sweep does not make the target contact other sites)"},
+			{h.SweepNoID, "swept routes needing an object ID the HAR file never showed (the sweep does not guess IDs)"},
+			{h.SweepURL, "swept routes needing an address the app would fetch (the sweep does not make the target contact other sites)"},
 			{h.SweepUnreadable, "spec routes with a parameter the spec does not describe (a $ref to another file, or a {name} in the path no parameter declares)"},
-			{h.SweepOverLimit, fmt.Sprintf("spec routes over the route sweep's %d-request limit", MaxSweep)},
+			{h.SweepOverLimit, fmt.Sprintf("swept routes over the route sweep's %d-request limit", MaxSweep)},
 		} {
 			if x.n > 0 {
 				notes = append(notes, fmt.Sprintf("%d %s not replayed", x.n, x.what))
