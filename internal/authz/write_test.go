@@ -356,7 +356,7 @@ func TestEchoed(t *testing.T) {
 func TestWithID(t *testing.T) {
 	w := Write{Method: "PATCH", Path: "/api/items/7/notes?item=7&q=7x", Header: http.Header{"Content-Type": {"application/json"}},
 		Body: []byte(`{"id":7,"BasketId":"7","quantity":7,"note":"7","nested":{"item_id":7}}`)}
-	got := w.withID("7", "12")
+	got := w.withID("7", "12", "")
 	if got.Path != "/api/items/12/notes?item=12&q=7x" {
 		t.Errorf("path %q", got.Path)
 	}
@@ -369,7 +369,7 @@ func TestWithID(t *testing.T) {
 		t.Error("the recorded write changed")
 	}
 	f := Write{Method: "POST", Path: "/x", Header: http.Header{"Content-Type": {"application/x-www-form-urlencoded"}}, Body: []byte("item_id=7&count=7")}
-	if got := string(f.withID("7", "9").Body); got != "count=7&item_id=9" {
+	if got := string(f.withID("7", "9", "").Body); got != "count=7&item_id=9" {
 		t.Errorf("form %q", got)
 	}
 }
@@ -634,7 +634,7 @@ func FuzzParseWrites(f *testing.F) {
 				t.Fatalf("%+v", x)
 			}
 			if x.Create != nil {
-				_ = x.withID(x.Create.OldID, "1")
+				_ = x.withID(x.Create.OldID, "1", createNoun(*x.Create))
 			}
 		}
 	})
@@ -922,5 +922,172 @@ func TestParseWritesGraphQLBatch(t *testing.T) {
 	}
 	if id, ok := newID(Answer{Status: 200, Body: []byte(`[{"data":{"pages":{"create":{"page":{"id":9}}}}}]`)}, upd.Create.Field, false); !ok || id != "9" {
 		t.Errorf("newID %q %v", id, ok)
+	}
+}
+
+// TestNounOf: the kind of object a key or path segment names (ADR 0054).
+func TestNounOf(t *testing.T) {
+	for in, want := range map[string]string{
+		"BasketId": "basket", "Baskets": "baskets", "addressId": "address", "Addresss": "addresss",
+		"BasketItems": "items", "task_id": "task", "createTask": "task", "chat.sendMessage": "message",
+		"category_id": "category", "id": "", "_id": "", "number": "", "item_ids": "item",
+	} {
+		if got := nounOf(in); got != want {
+			t.Errorf("nounOf(%q) = %q, want %q", in, got, want)
+		}
+	}
+	for _, p := range [][2]string{{"basket", "baskets"}, {"address", "addresss"}, {"address", "addresses"}, {"addresses", "addresss"},
+		{"category", "categories"}, {"type", "types"}, {"box", "boxes"}, {"status", "statuses"}, {"item", "items"}} {
+		if !nounsMatch(p[0], p[1]) || !nounsMatch(p[1], p[0]) {
+			t.Errorf("nounsMatch(%q, %q) false", p[0], p[1])
+		}
+	}
+	for _, p := range [][2]string{{"basket", "address"}, {"payment", "card"}, {"product", "basket"}, {"", ""}, {"msg", "message"}} {
+		if nounsMatch(p[0], p[1]) {
+			t.Errorf("nounsMatch(%q, %q) true", p[0], p[1])
+		}
+	}
+	if got := createNoun(Create{Path: "/api/Addresss/"}); got != "addresss" {
+		t.Errorf("createNoun path %q", got)
+	}
+	if got := createNoun(Create{Path: "/api/v1/repos/alice/r/issues/7/comments"}); got != "comments" {
+		t.Errorf("createNoun nested %q", got)
+	}
+	if got := createNoun(Create{Path: "/jsonrpc.php", RPCMethod: "createTask"}); got != "task" {
+		t.Errorf("createNoun rpc %q", got)
+	}
+}
+
+// TestWithIDByPlace: a copy's ID replaces only the places that name the
+// create's kind of object when one does; otherwise every place, as before
+// (ADR 0054).
+func TestWithIDByPlace(t *testing.T) {
+	json := http.Header{"Content-Type": {"application/json"}}
+	checkout := Write{Method: "POST", Path: "/rest/basket/8/checkout", Header: json,
+		Body: []byte(`{"orderDetails":{"addressId":"8","paymentId":"8"}}`)}
+	got := checkout.withID("8", "15", "addresss")
+	if got.Path != "/rest/basket/8/checkout" || string(got.Body) != `{"orderDetails":{"addressId":"15","paymentId":"8"}}` {
+		t.Errorf("collision: %s %s", got.Path, got.Body)
+	}
+	if got := checkout.withID("8", "15", ""); got.Path != "/rest/basket/15/checkout" || string(got.Body) != `{"orderDetails":{"addressId":"15","paymentId":"15"}}` {
+		t.Errorf("no noun: %s %s", got.Path, got.Body)
+	}
+	// The path names the object and the body's "id" has no noun: both.
+	put := Write{Method: "PUT", Path: "/api/Addresss/7?id=7", Header: json, Body: []byte(`{"id":7,"UserId":7}`)}
+	if got := put.withID("7", "12", "addresss"); got.Path != "/api/Addresss/12?id=12" || string(got.Body) != `{"UserId":7,"id":12}` {
+		t.Errorf("put: %s %s", got.Path, got.Body)
+	}
+	// No place has the create's noun ("msgId" for chat.sendMessage's
+	// "message"): every place, as before.
+	upd := Write{Method: "POST", Path: "/api/v1/chat.update", Header: json, Body: []byte(`{"msgId":"x1","roomId":"GENERAL"}`)}
+	if got := upd.withID("x1", "x2", "message"); string(got.Body) != `{"msgId":"x2","roomId":"GENERAL"}` {
+		t.Errorf("abbreviated: %s", got.Body)
+	}
+	form := Write{Method: "POST", Path: "/basket/3/pay", Header: http.Header{"Content-Type": {"application/x-www-form-urlencoded"}}, Body: []byte("address_id=3&basket_id=3")}
+	if got := form.withID("3", "4", "addresses"); got.Path != "/basket/3/pay" || string(got.Body) != "address_id=4&basket_id=3" {
+		t.Errorf("form: %s %s", got.Path, got.Body)
+	}
+}
+
+// TestWriteCheckIDCollision: A's basket and A's new address are both 5,
+// as in a Chromium recording on Juice Shop (basket 8, address 8, measured
+// 2026-11-22). The checkout is linked to the address create; its copy
+// replaces the address only, the basket's earlier step is found (not the
+// wish naming product 5), and B's checkout of A's basket is found high
+// (ADR 0054). Before, B was sent to /rest/basket/<copy>/checkout.
+func TestWriteCheckIDCollision(t *testing.T) {
+	var mu sync.Mutex
+	// Copies get 6 and up, so a copy never takes the recorded 5.
+	addrs, basket, next := map[int]string{}, []int{}, 5
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		defer mu.Unlock()
+		u := map[string]string{"Bearer A": "alice", "Bearer B": "bob"}[r.Header.Get("Authorization")]
+		if u == "" {
+			http.Error(w, "log in", http.StatusUnauthorized)
+			return
+		}
+		var id int
+		switch {
+		case r.Method == "POST" && r.URL.Path == "/api/addresses/":
+			next++
+			addrs[next] = u
+			fmt.Fprintf(w, `{"data":{"id":%d}}`, next)
+		case r.Method == "POST" && r.URL.Path == "/api/cards/":
+			next++
+			fmt.Fprintf(w, `{"data":{"id":%d}}`, next)
+		case r.Method == "DELETE" && sscan(r.URL.Path, "/api/addresses/%d", &id):
+			if addrs[id] != u {
+				http.NotFound(w, r)
+				return
+			}
+			delete(addrs, id)
+		case r.Method == "POST" && (r.URL.Path == "/api/basketitems/" || r.URL.Path == "/api/wishes/"):
+			if u != "alice" {
+				http.Error(w, "not yours", http.StatusForbidden)
+				return
+			}
+			if r.URL.Path == "/api/basketitems/" {
+				basket = append(basket, 1)
+			}
+			fmt.Fprint(w, `{"ok":true}`)
+		case r.Method == "GET" && r.URL.Path == "/rest/basket/5":
+			fmt.Fprintf(w, `{"items":%d}`, len(basket))
+		case r.Method == "POST" && sscan(r.URL.Path, "/rest/basket/%d/checkout", &id): // no owner check
+			if id != 5 {
+				http.Error(w, "no such basket", http.StatusNotFound)
+				return
+			}
+			basket = nil
+			fmt.Fprint(w, `{"ok":true}`)
+		default:
+			http.Error(w, "no", http.StatusMethodNotAllowed)
+		}
+	}))
+	defer srv.Close()
+	noSleep(t)
+	a := map[string]string{"Authorization": "Bearer A"}
+	u := srv.URL
+	har := writeHAR(t, []writeEntry{
+		{method: "POST", url: u + "/api/basketitems/", headers: a, mime: "application/json", body: `{"ProductId":2,"BasketId":"5"}`, status: 200, answer: `{"ok":true}`},
+		{method: "POST", url: u + "/api/wishes/", headers: a, mime: "application/json", body: `{"ProductId":"5"}`, status: 200, answer: `{"ok":true}`},
+		{method: "POST", url: u + "/api/addresses/", headers: a, mime: "application/json", body: `{"city":"x"}`, status: 201, answer: `{"data":{"id":5}}`},
+		// A later create that only shares the number: the address wins
+		// because "addressId" names its kind.
+		{method: "POST", url: u + "/api/cards/", headers: a, mime: "application/json", body: `{"num":"4111"}`, status: 201, answer: `{"data":{"id":5}}`},
+		{method: "GET", url: u + "/rest/basket/5", headers: a, status: 200, answer: `{"items":1}`},
+		{method: "POST", url: u + "/rest/basket/5/checkout", headers: a, mime: "application/json", body: `{"addressId":"5"}`, status: 200, answer: `{"ok":true}`},
+	})
+	tu := mustTarget(t, u+"/")
+	ws, err := ParseWrites(har, tu)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var co *Write
+	for i := range ws.Writes {
+		if ws.Writes[i].Path == "/rest/basket/5/checkout" {
+			co = &ws.Writes[i]
+		}
+	}
+	if co == nil || co.Create == nil || co.Create.Path != "/api/addresses/" || len(co.Steps) != 1 || co.Steps[0].Path != "/api/basketitems/" || co.Parent != "/rest/basket/5" {
+		t.Fatalf("checkout %+v", co)
+	}
+	cfg := egress.Config{Target: tu, Addrs: []netip.Addr{netip.MustParseAddr("127.0.0.1")}, Version: "test"}
+	res, err := WriteCheck(context.Background(), cfg, ws.Writes, Accounts{B: http.Header{"Authorization": {"Bearer B"}}}, "alice", 10, target.Local)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, r := range res.Replays {
+		if r.Path == "/rest/basket/5/checkout" && r.Who == AsB {
+			sev, ok := r.Severity()
+			found = r.Sent == "/rest/basket/5/checkout" && r.Recreated && ok && sev == findings.High
+			if !found {
+				t.Errorf("B's checkout sent %s, recreated %v, %v %v", r.Sent, r.Recreated, sev, ok)
+			}
+		}
+	}
+	if !found {
+		t.Error("no high for B's checkout")
 	}
 }

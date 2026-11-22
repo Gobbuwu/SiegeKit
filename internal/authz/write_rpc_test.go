@@ -118,14 +118,14 @@ func TestEnvelopeRefused(t *testing.T) {
 
 func TestWithIDRPC(t *testing.T) {
 	w := Write{Method: "POST", Path: "/api/v1/method.call/updateMessage", Header: http.Header{}, Body: []byte(ddpBody("7", "updateMessage", `[{"_id":"7","rid":"GENERAL","msg":"x"}]`))}
-	got := w.withID("7", "NEW")
+	got := w.withID("7", "NEW", "")
 	inner, _, ok := ddpMessage(got.Body)
 	if !ok || inner["id"] != "7" || inner["params"].([]any)[0].(map[string]any)["_id"] != "NEW" {
 		t.Errorf("DDP: %s", got.Body)
 	}
 	j := Write{Method: "POST", Path: "/rpc", Header: http.Header{}, Body: []byte(`{"jsonrpc":"2.0","method":"note.update","params":{"id":7},"id":7}`)}
 	var m map[string]any
-	if json.Unmarshal(j.withID("7", "9").Body, &m) != nil || m["id"] != float64(7) || m["params"].(map[string]any)["id"] != float64(9) {
+	if json.Unmarshal(j.withID("7", "9", "").Body, &m) != nil || m["id"] != float64(7) || m["params"].(map[string]any)["id"] != float64(9) {
 		t.Errorf("JSON-RPC: %v", m)
 	}
 	// The envelope's own ids are not object IDs.
