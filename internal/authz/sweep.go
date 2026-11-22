@@ -286,6 +286,7 @@ func (h *HAR) AddSweepRoutes(routes []SpecRoute, base string) {
 		seen[r.Method+" "+r.Path] = true
 	}
 	for _, rt := range routes {
+		filled := rt.takesID()
 		for _, full := range h.fillRoute(rt, base) {
 			if seen["GET "+full] {
 				continue
@@ -299,7 +300,7 @@ func (h *HAR) AddSweepRoutes(routes []SpecRoute, base string) {
 				h.SweepOverLimit++
 				continue
 			}
-			h.Requests = append(h.Requests, Request{Method: http.MethodGet, Path: full, Header: session.Clone()})
+			h.Requests = append(h.Requests, Request{Method: http.MethodGet, Path: full, Header: session.Clone(), SweptID: filled})
 			h.FromSweep++
 		}
 	}
@@ -321,6 +322,18 @@ func (h *HAR) lastSession() http.Header {
 		}
 	}
 	return nil
+}
+
+// takesID reports whether the route has a path parameter or a required
+// ID-named query parameter: the ones fillRoute fills only with IDs from
+// A's recording.
+func (rt SpecRoute) takesID() bool {
+	for _, pm := range rt.Params {
+		if pm.In == "path" || (pm.In == "query" && pm.Required && pm.isIDParam()) {
+			return true
+		}
+	}
+	return false
 }
 
 // fillRoute turns one spec route into the full paths to send: the path

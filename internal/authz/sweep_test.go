@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Gobbuwu/SiegeKit/internal/findings"
 	"github.com/Gobbuwu/SiegeKit/internal/target"
 )
 
@@ -297,5 +298,53 @@ func TestAddSweepRoutesSkipsAddressParams(t *testing.T) {
 	}
 	if h.FromSweep != 1 {
 		t.Errorf("FromSweep = %d, want 1 (rooms.info)", h.FromSweep)
+	}
+}
+
+// A swept route filled with an ID from A's recording is high when C gets
+// A's answer, even when the ID has a shape hasID does not know (Rocket.Chat's
+// DM room ID is two 17-character user IDs); the same URL not from the sweep
+// stays medium (ADR 0052).
+func TestFindingsSweptIDIsHigh(t *testing.T) {
+	body := []byte(`{"messages":[{"_id":"ZxnoNFTvvbEjqtfYM"}],"count":1}`)
+	ok := Answer{Status: 200, Body: body}
+	path := "/api/v1/chat.getDeletedMessages?roomId=7eZfMP4MYKJqj9mkeYKxeC4LoBxGTkc3iW&since=2018-12-12T00%3A11%3A22.345Z"
+	if hasID(path) {
+		t.Fatal("test needs a path hasID does not see as holding an ID")
+	}
+	for _, swept := range []bool{true, false} {
+		res := Result{CTested: true, Replays: []Replay{{
+			Request: Request{Method: "GET", Path: path, SweptID: swept},
+			A:       ok, C: ok, None: Answer{Status: 401}, CTested: true,
+		}}}
+		fs := Findings("http://localhost:3000", res, "alice")
+		if len(fs) != 1 {
+			t.Fatalf("swept=%v: %d findings", swept, len(fs))
+		}
+		want, cwe := findings.Medium, "CWE-862"
+		if swept {
+			want, cwe = findings.High, "CWE-639"
+		}
+		if fs[0].Severity != want || fs[0].CWEs[0] != cwe {
+			t.Errorf("swept=%v: %s %v, want %s %s", swept, fs[0].Severity, fs[0].CWEs, want, cwe)
+		}
+	}
+}
+
+func TestAddSweepRoutesMarksFilledIDs(t *testing.T) {
+	tu, _ := target.Parse("http://localhost:3000/")
+	har := []byte(`{"log":{"entries":[{"request":{"method":"GET","url":"http://localhost:3000/api/v1/x","headers":[{"name":"X-Auth-Token","value":"tok"}]},"response":{"content":{"text":"{\"rid\":\"6b0281133568ca9b5b817585\"}"}}}]}}`)
+	h, err := ParseHAR(har, tu)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.AddSweepRoutes(SweepRoutes([]byte(openapiLeak), "json"), "")
+	for _, r := range h.Requests[1:] {
+		if want := strings.Contains(r.Path, "roomId=") || strings.Contains(r.Path, "/users/"); r.SweptID != want {
+			t.Errorf("%s: SweptID %v, want %v", r.Path, r.SweptID, want)
+		}
+	}
+	if h.Requests[0].SweptID {
+		t.Error("a recorded request marked as swept")
 	}
 }
