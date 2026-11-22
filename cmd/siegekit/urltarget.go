@@ -1041,13 +1041,13 @@ func runURL(ctx context.Context, u *target.URL, addrs []netip.Addr, mode target.
 		if r, ok := unavailable[authz.ID]; ok {
 			pr.Status, pr.Cause, pr.Reason = r.Status, r.Cause, r.Reason
 		} else {
-			if spec != nil {
-				base, _ := openapi.BasePath(spec.Data, spec.Format)
-				o.harRequests.AddSpecRoutes(authz.SpecRoutes(spec.Data, spec.Format), base)
-			}
-			pr.Input = fmt.Sprintf("%s, %d request(s) recorded as account A", filepath.Base(o.har), len(o.harRequests.Requests)-o.harRequests.FromSpec)
+			addSpecRequests(o.harRequests, spec, o.deployed)
+			pr.Input = fmt.Sprintf("%s, %d request(s) recorded as account A", filepath.Base(o.har), len(o.harRequests.Requests)-o.harRequests.FromSpec-o.harRequests.FromSweep)
 			if o.harRequests.FromSpec > 0 {
 				pr.Input += fmt.Sprintf("; %d route(s) from the OpenAPI spec %s", o.harRequests.FromSpec, spec.Source)
+			}
+			if o.harRequests.FromSweep > 0 {
+				pr.Input += fmt.Sprintf("; %d route(s) swept from the OpenAPI spec %s with IDs from the HAR file", o.harRequests.FromSweep, spec.Source)
 			}
 			pr.Input += o.accountsInput()
 			fmt.Fprintf(stdout, "%s: replaying %d request(s).\n", authz.ID, len(o.harRequests.Requests))
@@ -1273,4 +1273,19 @@ func joinAddrs(d target.Decision) string {
 		s[i] = a.String()
 	}
 	return strings.Join(s, ", ")
+}
+
+// addSpecRequests adds the spec's routes to the requests access-control
+// replays: its GET routes without parameters on every target (ADR 0035),
+// and on local targets the route sweep, every GET route filled from the
+// IDs A's recording showed (ADR 0052).
+func addSpecRequests(h *authz.HAR, spec *openapi.Spec, deployed bool) {
+	if spec == nil {
+		return
+	}
+	base, _ := openapi.BasePath(spec.Data, spec.Format)
+	h.AddSpecRoutes(authz.SpecRoutes(spec.Data, spec.Format), base)
+	if !deployed {
+		h.AddSweepRoutes(authz.SweepRoutes(spec.Data, spec.Format), base)
+	}
 }

@@ -95,6 +95,13 @@ type HAR struct {
 	Duplicate   int
 	OverLimit   int // past MaxRequests
 	FromSpec    int // added from the OpenAPI spec by AddSpecRoutes
+	FromSweep   int // added by the route sweep (AddSweepRoutes, ADR 0052)
+	// SweepNoID counts sweep routes dropped because no ID from A's
+	// recording fit a required path or ID-named query parameter.
+	SweepNoID int
+	// SweepOverLimit counts filled sweep routes past MaxSweep.
+	SweepOverLimit int
+	ids            *idSet // ID-shaped tokens harvested from A's recording
 	// Action counts GETs and HEADs not replayed because their URL names an
 	// action (ADR 0048); ActionPaths holds the first few, without query.
 	Action      int
@@ -138,6 +145,11 @@ type harEntry struct {
 		Headers  []harHeader  `json:"headers"`
 		PostData *harPostData `json:"postData"`
 	} `json:"request"`
+	Response struct {
+		Content struct {
+			Text string `json:"text"`
+		} `json:"content"`
+	} `json:"response"`
 }
 
 type harHeader struct {
@@ -165,7 +177,7 @@ func ParseHAR(data []byte, t *target.URL) (*HAR, error) {
 	if len(f.Log.Entries) == 0 {
 		return nil, errors.New("the HAR file holds no requests")
 	}
-	h := &HAR{}
+	h := &HAR{ids: newIDSet()}
 	seen, seenRec := map[string]bool{}, map[string]bool{}
 	for _, e := range f.Log.Entries {
 		r := e.Request
@@ -188,6 +200,11 @@ func ParseHAR(data []byte, t *target.URL) (*HAR, error) {
 			h.Static++
 			continue
 		}
+		// Harvest ID-shaped tokens from A's own traffic for the sweep
+		// (ADR 0052): the query, the request body and the answer. The
+		// answer is where a room or object ID A never put in a URL
+		// appears (Rocket.Chat reads rooms over method calls).
+		h.ids.harvest(u.RawQuery, r.PostData, e.Response.Content.Text)
 		p := u.EscapedPath()
 		if p == "" {
 			p = "/"
@@ -405,8 +422,12 @@ type Result struct {
 	ATried   int // requests replayed as A
 	AFailed  int // A's replay did not answer 2xx: B, C and no login not sent
 	BRefused int // B's replay refused with 401 or 403
-	BTested  bool
-	CTested  bool
+	// Rate429 counts answers with status 429 (rate limited): they say
+	// nothing about access, so a route answered 429 for C or B is not
+	// compared, and the summary says coverage may be incomplete (ADR 0052).
+	Rate429 int
+	BTested bool
+	CTested bool
 }
 
 // send and sleep are replaced in tests.
@@ -464,6 +485,9 @@ func Check(ctx context.Context, cfg egress.Config, reqs []Request, acc Accounts,
 			return Answer{Err: errString(err)}, nil
 		}
 		res.Requests++
+		if a.Status == http.StatusTooManyRequests {
+			res.Rate429++
+		}
 		if err != nil {
 			return Answer{Status: a.Status, Err: errString(err)}, nil
 		}
@@ -690,8 +714,12 @@ func holds(v any, depth int) bool {
 // Summary says what was replayed in one line, for reports.
 func (r Result) Summary(h *HAR, loginName string, c Counts) string {
 	s := fmt.Sprintf("replayed %d request(s) from the HAR file", r.ATried)
-	if h != nil && h.FromSpec > 0 {
-		s = fmt.Sprintf("replayed %d request(s) (%d from the HAR file, %d from the OpenAPI spec)", r.ATried, r.ATried-h.FromSpec, h.FromSpec)
+	if h != nil && (h.FromSpec > 0 || h.FromSweep > 0) {
+		s = fmt.Sprintf("replayed %d request(s) (%d from the HAR file, %d from the OpenAPI spec", r.ATried, r.ATried-h.FromSpec-h.FromSweep, h.FromSpec)
+		if h.FromSweep > 0 {
+			s += fmt.Sprintf(", %d from the route sweep", h.FromSweep)
+		}
+		s += ")"
 	}
 	switch {
 	case r.BTested && r.CTested:
@@ -716,6 +744,9 @@ func (r Result) Summary(h *HAR, loginName string, c Counts) string {
 	if r.BTested && r.BRefused > 0 && r.BRefused == r.ATried-r.AFailed {
 		notes = append(notes, "account B was refused on every request: check that its session in "+SessionEnv+" is still valid")
 	}
+	if r.Rate429 > 0 {
+		notes = append(notes, fmt.Sprintf("%d answer(s) were 429 (rate limited) and say nothing about access, so coverage may be incomplete: lower the request rate and run again", r.Rate429))
+	}
 	if r.cSent() && !r.CWorks() {
 		notes = append(notes, "account C got the same status as a request with no login on every request, so its session may have expired (check "+SessionEnvC+"); no finding of account B's was lowered")
 	}
@@ -727,6 +758,8 @@ func (r Result) Summary(h *HAR, loginName string, c Counts) string {
 			{h.Static, "static files"}, {h.OtherMethod, "not GET or HEAD"}, {h.OtherOrigin, "on another origin"}, {h.BadPath, "with a path that does not start with a single /"},
 			{h.Action, "naming an action that can change data, such as change, save or delete (ADR 0048)" + actionList(h)},
 			{h.Duplicate, "duplicates"}, {h.OverLimit, fmt.Sprintf("over the %d-request limit", MaxRequests)},
+			{h.SweepNoID, "spec routes needing an object ID the HAR file never showed (the sweep does not guess IDs)"},
+			{h.SweepOverLimit, fmt.Sprintf("spec routes over the route sweep's %d-request limit", MaxSweep)},
 		} {
 			if x.n > 0 {
 				notes = append(notes, fmt.Sprintf("%d %s not replayed", x.n, x.what))
