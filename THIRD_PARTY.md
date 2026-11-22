@@ -4,6 +4,14 @@ SiegeKit runs these tools as separate processes inside containers. It does not i
 
 Versions are the latest published versions checked on 2026-11-18. Rows marked "Pinned" are used by a built-in plugin at exactly that version; the others are **not yet pinned**. Licenses were read from each project's LICENSE file on that date.
 
+## Go libraries compiled into SiegeKit
+
+SiegeKit's own binary includes one library, vendored in `vendor/` so a build needs no download (owner's choice, 2026-11-22; [ADR 0052](docs/adr/0052-route-sweep.md)). Its LICENSE and NOTICE files are kept in `vendor/`.
+
+| Library | Version | Used for | License |
+| --- | --- | --- | --- |
+| `go.yaml.in/yaml/v3` (maintained by the YAML organization, per its README; a fork of go-yaml) | v3.0.6 (checksums in `go.sum`) | Reading YAML OpenAPI specs for the route sweep of `access-control` | MIT (the files ported from libyaml) and Apache-2.0 (the rest), per its LICENSE and NOTICE |
+
 ## Pinned images
 
 These are the publishers' official images on Docker Hub or the GitHub Container Registry. Each tag was resolved to its multi-architecture index digest with `docker buildx imagetools inspect` on 2026-11-19 (linux/amd64 and linux/arm64), and the plugin manifest refers to the image only by that digest. Publisher image signatures are not verified yet. ADR 0008 asks for this where a publisher signs its images; it was planned for M1 but not done, and is now an open item (re-check of 2026-11-19).

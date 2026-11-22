@@ -1,0 +1,127 @@
+package authz
+
+import (
+	"context"
+	"net/http"
+	"net/http/httptest"
+	"net/netip"
+	"strings"
+	"testing"
+
+	"github.com/Gobbuwu/SiegeKit/internal/egress"
+)
+
+// A 429 says nothing about access: it is counted, the route is not
+// compared, and the summary says coverage may be incomplete. The
+// summary also names every reason a swept route was not sent (ADR 0052).
+func TestSweepRateLimitAndNotes(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Header.Get("Authorization") {
+		case "Bearer A":
+			w.Write([]byte(`{"messages":[{"_id":"m1"}]}`))
+		case "Bearer C":
+			w.WriteHeader(http.StatusTooManyRequests)
+		default:
+			w.WriteHeader(http.StatusUnauthorized)
+		}
+	}))
+	defer srv.Close()
+	noSleep(t)
+	tu := mustTarget(t, srv.URL+"/")
+	cfg := egress.Config{Target: tu, Addrs: []netip.Addr{netip.MustParseAddr("127.0.0.1")}, Version: "test", ReadOnly: true}
+	reqs := []Request{{Method: "GET", Path: "/api/v1/chat.getDeletedMessages?roomId=r1", Header: http.Header{"Authorization": {"Bearer A"}}}}
+	res, err := Check(context.Background(), cfg, reqs, Accounts{C: http.Header{"Authorization": {"Bearer C"}}}, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Rate429 != 1 {
+		t.Errorf("Rate429 = %d, want 1", res.Rate429)
+	}
+	if fs := Findings(srv.URL, res, ""); len(fs) != 0 {
+		t.Errorf("a 429 for C was reported: %+v", fs)
+	}
+	h := &HAR{FromSweep: 1, SweepNoID: 2, SweepURL: 3, SweepOverLimit: 4}
+	s := res.Summary(h, "", Count(res, ""))
+	for _, want := range []string{
+		"1 from the route sweep",
+		"1 answer(s) were 429 (rate limited)",
+		"2 spec routes needing an object ID",
+		"3 spec routes needing an address the app would fetch",
+		"4 spec routes over the route sweep's 500-request limit",
+	} {
+		if !strings.Contains(s, want) {
+			t.Errorf("summary lacks %q: %s", want, s)
+		}
+	}
+}
+
+// YAML specs (Rocket.Chat and Mattermost publish only YAML): $ref
+// parameters resolve, and a date example stays a string.
+func TestSweepRoutesYAML(t *testing.T) {
+	spec := `openapi: 3.0.0
+paths:
+  /api/v1/chat.getDeletedMessages:
+    get:
+      parameters:
+        - $ref: '#/components/parameters/RoomId'
+        - name: since
+          in: query
+          required: true
+          schema: {type: string}
+          example: 2018-12-12T00:11:22.345Z
+components:
+  parameters:
+    RoomId: {name: roomId, in: query, required: true, schema: {type: string}}
+`
+	routes := SweepRoutes([]byte(spec), "yaml")
+	if len(routes) != 1 || len(routes[0].Params) != 2 {
+		t.Fatalf("%+v", routes)
+	}
+	for _, p := range routes[0].Params {
+		if p.Name == "since" && p.Example != "2018-12-12T00:11:22.345Z" {
+			t.Errorf("date example became %q", p.Example)
+		}
+		if p.Name == "roomId" && !p.Required {
+			t.Error("$ref parameter not resolved")
+		}
+	}
+}
+
+// A YAML spec built to expand through aliases is refused, not expanded.
+func TestSweepRoutesYAMLAliasBomb(t *testing.T) {
+	var b strings.Builder
+	b.WriteString("a0: &a0 [x, x, x, x, x, x, x, x, x, x]\n")
+	for i := 1; i < 9; i++ {
+		b.WriteString("a" + string(rune('0'+i)) + ": &a" + string(rune('0'+i)) + " [")
+		for j := 0; j < 10; j++ {
+			if j > 0 {
+				b.WriteString(", ")
+			}
+			b.WriteString("*a" + string(rune('0'+i-1)))
+		}
+		b.WriteString("]\n")
+	}
+	b.WriteString("paths: {/x: {get: {}}}\n") // 10^9 nodes if expanded
+	if _, err := yamlToJSON([]byte(b.String())); err != errYAMLTooBig {
+		t.Errorf("alias bomb: err %v, want errYAMLTooBig", err)
+	}
+	if r := SweepRoutes([]byte(b.String()), "yaml"); r != nil {
+		t.Errorf("alias bomb gave routes: %v", r)
+	}
+}
+
+func FuzzSweepRoutes(f *testing.F) {
+	f.Add([]byte("openapi: 3.0.0\npaths: {/a/{id}: {get: {parameters: [{name: id, in: path, required: true}]}}}\n"), true)
+	f.Add([]byte(`{"swagger":"2.0","paths":{"/a":{"get":{"parameters":[{"$ref":"#/parameters/x"}]}}},"parameters":{"x":{"name":"q","in":"query","required":true}}}`), false)
+	f.Fuzz(func(t *testing.T, data []byte, yamlFormat bool) {
+		format := "json"
+		if yamlFormat {
+			format = "yaml"
+		}
+		for _, r := range SweepRoutes(data, format) {
+			if !strings.HasPrefix(r.Path, "/") || strings.HasPrefix(r.Path, "//") {
+				t.Fatalf("route %q", r.Path)
+			}
+		}
+	})
+}
