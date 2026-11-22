@@ -55,6 +55,7 @@ Each significant design decision is recorded as a short ADR before code is writt
 | [0049](0049-write-replay.md) | Replaying recorded writes as another account (amends 0035) | Accepted |
 | [0050](0050-method-calls-sent-as-post.md) | Method calls sent as POST in the write replay (amends 0049) | Accepted |
 | [0051](0051-outsider-account-c.md) | Account C: an outsider to the spaces A shares (amends 0035, 0049) | Accepted |
+| [0052](0052-route-sweep.md) | Route sweep: every GET route of the API spec, as outsider C (amends 0035, 0051) | Accepted |
 
 ADRs 0002 to 0011 were accepted at the M0 design sign-off on 2026-11-18.
 

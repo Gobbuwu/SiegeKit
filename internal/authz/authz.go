@@ -303,9 +303,10 @@ func (h *HAR) addRecorded(method, u string, headers []harHeader, pd *harPostData
 }
 
 // SpecRoutes returns the GET paths of a JSON OpenAPI or Swagger spec that
-// take no path parameter, sorted. A YAML spec gives none: SiegeKit has no
-// YAML reader (ADR 0035). Paths with a parameter are left out because no
-// value for it is known.
+// take no path parameter, sorted. A YAML spec gives none here (ADR 0035):
+// YAML specs are read only by the route sweep, on local targets (ADR
+// 0052). Paths with a parameter are left out because no value for it is
+// known.
 func SpecRoutes(data []byte, format string) []string {
 	if format != "json" {
 		return nil
