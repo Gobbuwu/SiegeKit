@@ -99,9 +99,10 @@ Flags:
                     missing input or the target's files do not count
   --openapi FILE_OR_URL
                     the API's OpenAPI or Swagger 2.0 spec (JSON or YAML) for
-                    Schemathesis; a URL must be on the target's origin.
-                    Without it, SiegeKit looks at common spec paths on
-                    local targets (one GET each)
+                    Schemathesis and access-control (on local targets every
+                    GET route, filled with IDs from --har); a URL must be on
+                    the target's origin. Without it, SiegeKit looks at
+                    common spec paths on local targets (one GET each)
   --login-url URL   the app's login endpoint, on the target's origin, for
                     the login throttling check (local targets only)
   --login-user NAME a test account you own; the check may lock it

@@ -410,8 +410,14 @@ func TestSpecRoutes(t *testing.T) {
 		{Method: "GET", Path: "/", Header: http.Header{"Accept": {"x"}}},
 	}}
 	h.AddSpecRoutes([]string{"/me", "/users"}, "/api")
-	if len(h.Requests) != 4 || h.FromSpec != 1 || h.Requests[3].Path != "/api/users" || h.Requests[3].Header.Get("Cookie") != "s=A" || len(h.Requests[3].Header) != 1 {
+	if len(h.Requests) != 4 || h.FromSpec != 1 || h.Requests[3].Path != "/api/users" || h.Requests[3].Header.Get("Cookie") != "s=A" || h.Requests[3].Header.Get("Accept") != "x" || len(h.Requests[3].Header) != 2 {
 		t.Errorf("%+v", h)
+	}
+	// Every header of A's last session request goes with it, not only the
+	// session ones, as a copy (ADR 0052).
+	h.Requests[3].Header.Set("Accept", "changed")
+	if h.Requests[1].Header.Get("Accept") != "x" {
+		t.Error("spec route shares A's header map")
 	}
 	none := &HAR{Requests: []Request{{Method: "GET", Path: "/", Header: http.Header{"Accept": {"x"}}}}}
 	if none.AddSpecRoutes([]string{"/users"}, ""); len(none.Requests) != 1 || none.FromSpec != 0 {
