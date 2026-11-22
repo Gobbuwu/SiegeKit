@@ -24,7 +24,8 @@ jobs:
       fail-fast: false
       matrix:
         engine: [docker, podman]
-        app: [rc6, rc8, mm, gt]
+        app: [gt]
+        rep: [1, 2]
     env:
       SW: ${{ github.workspace }}/../sw
     steps:
@@ -76,3 +77,5 @@ jobs:
           echo "== setup"; cat x-setup.txt 2>/dev/null || true
           for f in x-*.txt; do echo "== $f"; grep -E "PARSED|RSUMMARY|RFINDING|FAIL|panic|setup failed" "$f" || true; done
           echo "== replays with C or no login answering 2xx"; grep -h RREPLAY x-*.txt | grep -E 'C=2|N=2' | cut -c1-260 || true
+          echo "== recording"; jq -r '.log.entries[] | "HAR \(.request.method) \(.request.url) \(.response.status) \(.response.content.size) \(.response.content.mimeType)"' x.har | cut -c1-200 || true
+          echo "== all replays"; grep -h RREPLAY x-*.txt | cut -c1-200 || true
