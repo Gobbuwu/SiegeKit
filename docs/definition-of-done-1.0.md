@@ -31,8 +31,10 @@ M2 work, then the M2 milestone check and bug fixing, then M3, then M4 with the s
 | 15 | ARM Linux CI job on `ubuntu-24.04-arm` (owner 2026-11-22), built after the current build thread | Pulls SiegeKit's pinned tool images and runs the real scans on arm64; every pinned image has an arm64 build or the gap is listed; planted issues found as on amd64. Only the latest tags of ZAP, Nuclei, Trivy, gosec and Schemathesis were checked for arm64 so far; the pinned versions and the other tools are unverified. | Open |
 | 16 | Opt-in ZAP browser flag for DOM XSS, rule 40026 (owner 2026-11-22) | Merged; with the flag, the planted DOM XSS in the test app is found on both engines; without it, reports list DOM XSS as not tested; the looser sandbox settings (executable `/tmp`, more processes, 4 GiB) apply only with the flag (test). The 2026-11-20 costs (Juice Shop 3 to 7 min, 4 GiB) are measured again on current `main`. | Open |
 | 17 | Approved follow-ups: image signature checks (after checking which publishers sign); update containers restricted to publisher hosts | Merged with tests. | Open |
+| 18 | Outsider reads sent as POST (owner 2026-11-22, before 1.0): read-named method calls replayed as B, C and with no login, local targets only, under the write check's confirmation | Design approved; Rocket.Chat's `loadHistory`, `getRoomByTypeAndName` and `getRoomRoles` for a private room are refused for C in the measured setup, and a planted outsider POST-read leak in the test app is found. | Open |
+| 19 | ID guessing as an outsider (owner 2026-11-22, before 1.0), for example predictable room IDs | Design approved with a measured request cap; a planted guessable-ID leak in the test app is found; local targets only (negative test). | Open |
 
-Items 11 to 14 are placed in M2, before its milestone check. Each gets a measured design for the owner first, then its own pull request.
+Items 11 to 14, 18 and 19 are placed in M2, before its milestone check. Each gets a measured design for the owner first, then its own pull request.
 
 ## 2. M2 milestone check and bug fixing
 
