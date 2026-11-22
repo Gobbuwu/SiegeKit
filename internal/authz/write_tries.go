@@ -124,7 +124,7 @@ func triesFor(ws []Write, reads []recordedRead, creates []recordedCreate) ([]Wri
 		objs = append(objs, o)
 	}
 	for _, c := range creates {
-		if _, _, _, gql := graphQLOp(c.c.Body); gql || len(c.ids) == 0 || len(c.ids[0].field) == 0 {
+		if _, _, _, gql := graphQLOp(c.c.Body); gql || c.c.RPC || len(c.ids) == 0 || len(c.ids[0].field) == 0 {
 			continue
 		}
 		cc := c.c
@@ -207,9 +207,8 @@ func stepsFor(w Write, index int, earlier []pending, reads []recordedRead) ([]St
 			continue
 		}
 		var hit string
-		var v any
-		if json.Unmarshal(e.w.Body, &v) == nil {
-			walkIDKeys(v, 0, func(_ map[string]any, _ string, s string) {
+		if scope, _, ok := idScope(e.w.Body); ok {
+			walkIDKeys(scope, 0, func(_ map[string]any, _ string, s string) {
 				if ids[s] {
 					hit = s
 				}

@@ -920,7 +920,7 @@ func TestParseWritesGraphQLBatch(t *testing.T) {
 	if upd == nil || upd.Create == nil || strings.Join(upd.Create.Field, ".") != "data.pages.create.page.id" || upd.Create.OldID != "1" {
 		t.Fatalf("%+v", ws.Writes)
 	}
-	if id, ok := newID(Answer{Status: 200, Body: []byte(`[{"data":{"pages":{"create":{"page":{"id":9}}}}}]`)}, upd.Create.Field); !ok || id != "9" {
+	if id, ok := newID(Answer{Status: 200, Body: []byte(`[{"data":{"pages":{"create":{"page":{"id":9}}}}}]`)}, upd.Create.Field, false); !ok || id != "9" {
 		t.Errorf("newID %q %v", id, ok)
 	}
 }
