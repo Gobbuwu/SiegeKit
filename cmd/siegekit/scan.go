@@ -149,8 +149,11 @@ Flags:
                     terminal; no flag skips that
   --source DIR      the app's repository: table names from its Supabase
                     migrations, paths from database.rules.json, and an
-                    OpenAPI file for Schemathesis when the app serves none
-                    (read locally, nothing is sent)
+                    OpenAPI file for Schemathesis when the app serves none,
+                    and on local targets the GET routes of its server code
+                    (Go routers, Rocket.Chat REST API, Express) for the
+                    access-control route sweep (read locally, nothing is
+                    sent but the swept requests to the target)
 
 Before installing a missing dependency (a tool's container image or its
 data), SiegeKit lists it with its size and the tests that need it and asks.

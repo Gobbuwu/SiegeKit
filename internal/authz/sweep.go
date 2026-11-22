@@ -232,6 +232,11 @@ type SpecParam struct {
 	Type     string // schema type, e.g. "string", "integer", "boolean"
 	Format   string // schema format, e.g. "date-time"
 	Example  string // the spec's example value, if any
+	// Fill is set on an optional ID-named query parameter read from
+	// server code (ADR 0053): it is filled with A's IDs when the
+	// recording showed one that fits, else left out, and never drops the
+	// route. The code does not say whether it is required.
+	Fill bool
 }
 
 // SpecRoute is one GET route of a spec with its path and query parameters.
@@ -243,6 +248,9 @@ type SpecRoute struct {
 	// template name ({id}) no path parameter declares. Such a route is
 	// counted in SweepUnreadable and not sent, never sent half filled.
 	Unreadable bool
+	// FromCode is set for a route read from the app's server code
+	// (internal/coderoutes, ADR 0053) rather than its spec.
+	FromCode bool
 }
 
 // reDateName matches a parameter name that asks for a date or time, so a
@@ -278,6 +286,9 @@ func (p SpecParam) asksURL(v string) bool {
 	return f == "uri" || f == "url" || f == "uri-reference" || f == "iri" ||
 		strings.Contains(v, "://") || strings.HasPrefix(v, "//")
 }
+
+// IsIDParam reports whether a parameter asks for an object ID.
+func (p SpecParam) IsIDParam() bool { return p.isIDParam() }
 
 // isIDParam reports whether a parameter asks for an object ID.
 func (p SpecParam) isIDParam() bool {
@@ -324,6 +335,9 @@ func (h *HAR) AddSweepRoutes(routes []SpecRoute, base string) {
 			}
 			h.Requests = append(h.Requests, Request{Method: http.MethodGet, Path: full, Header: session.Clone()})
 			h.FromSweep++
+			if rt.FromCode {
+				h.FromCodeSweep++
+			}
 		}
 	}
 }
@@ -334,16 +348,42 @@ func (h *HAR) AddSweepRoutes(routes []SpecRoute, base string) {
 // without X-User-Id (ADR 0052). Recorded headers are already limited to
 // those a replay may send (replayHeaders). With none, nothing is added,
 // because A's answer would be the same as no login (ADR 0035).
+//
+// A request has a session when it carries one of the usual session
+// headers, or every header account B or C sets: an app's own session
+// header (Gotify's X-Gotify-Key) is named only by those (ADR 0053).
 func (h *HAR) lastSession() http.Header {
 	for i := len(h.Requests) - 1; i >= 0; i-- {
 		hd := h.Requests[i].Header
-		for _, k := range sessionHeaders {
-			if len(hd.Values(k)) > 0 {
-				return hd.Clone()
-			}
+		if hasSession(hd, h.Sessions) {
+			return hd.Clone()
 		}
 	}
 	return nil
+}
+
+func hasSession(hd http.Header, accounts []http.Header) bool {
+	for _, k := range sessionHeaders {
+		if len(hd.Values(k)) > 0 {
+			return true
+		}
+	}
+	for _, s := range accounts {
+		if len(s) == 0 {
+			continue
+		}
+		all := true
+		for k := range s {
+			if len(hd.Values(k)) == 0 {
+				all = false
+				break
+			}
+		}
+		if all {
+			return true
+		}
+	}
+	return false
 }
 
 // fillRoute turns one spec route into the full paths to send: the path
@@ -383,16 +423,21 @@ func (h *HAR) fillRoute(rt SpecRoute, base string) []string {
 		}
 		pathParams = append(pathParams, seg{pm.Name, vals})
 	}
-	// Query parameters: required ones only. ID-named ones need a
-	// candidate (else drop the route); others are filled from the spec.
+	// Query parameters: required ones, and optional ID-named ones from
+	// server code (Fill) when A's recording has an ID for them. Required
+	// ID-named ones need a candidate (else drop the route); others are
+	// filled from the spec.
 	q := url.Values{}
 	var idQuery []seg
 	for _, pm := range rt.Params {
-		if pm.In != "query" || !pm.Required {
+		if pm.In != "query" || !pm.Required && !pm.Fill {
 			continue
 		}
 		if pm.isIDParam() {
 			vals := h.ids.candidates(pm.Name)
+			if len(vals) == 0 && !pm.Required {
+				continue
+			}
 			if len(vals) == 0 {
 				h.SweepNoID++
 				return nil

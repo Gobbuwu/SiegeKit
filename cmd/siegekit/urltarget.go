@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"slices"
 	"strings"
@@ -22,6 +23,7 @@ import (
 	"github.com/Gobbuwu/SiegeKit/internal/authz"
 	"github.com/Gobbuwu/SiegeKit/internal/backend"
 	"github.com/Gobbuwu/SiegeKit/internal/checks"
+	"github.com/Gobbuwu/SiegeKit/internal/coderoutes"
 	"github.com/Gobbuwu/SiegeKit/internal/deps"
 	"github.com/Gobbuwu/SiegeKit/internal/egress"
 	"github.com/Gobbuwu/SiegeKit/internal/findings"
@@ -111,6 +113,10 @@ type urlScan struct {
 	// Read from --backend-url and --source before any request.
 	backend *backend.Backend
 	repo    *checks.Source
+	// Read from --source on local targets: the routes of the app's
+	// server code, for the route sweep (ADR 0053).
+	code    *coderoutes.Result
+	codeErr error
 	// in reads every typed answer, so one prompt cannot swallow the next.
 	in *bufio.Reader
 }
@@ -222,6 +228,10 @@ func scanURL(raw string, o urlScan, stdout, stderr io.Writer) int {
 			return refuse("--source: %v", err)
 		}
 		spec.repo = repoSpec
+		if !o.deployed {
+			r, err := coderoutes.FromPath(o.source)
+			o.code, o.codeErr = &r, err
+		}
 	}
 	// So are the HAR file and account B's session (ADR 0035).
 	if o.har != "" {
@@ -657,6 +667,10 @@ func runURL(ctx context.Context, u *target.URL, addrs []netip.Addr, mode target.
 			if !o.deployed {
 				fmt.Fprintf(stdout, "  %-20s and every GET route of the OpenAPI spec, if one is given or found, filled with IDs from %s (at most %d, ADR 0052)\n",
 					"", filepath.Base(o.har), authz.MaxSweep)
+				if routes := o.codeRoutes(); len(routes) > 0 {
+					fmt.Fprintf(stdout, "  %-20s and the %d GET route(s) found in the server code in %s, filled the same way (ADR 0053)\n",
+						"", len(routes), o.source)
+				}
 			}
 		}
 	}
@@ -1045,14 +1059,16 @@ func runURL(ctx context.Context, u *target.URL, addrs []netip.Addr, mode target.
 		if r, ok := unavailable[authz.ID]; ok {
 			pr.Status, pr.Cause, pr.Reason = r.Status, r.Cause, r.Reason
 		} else {
-			addSpecRequests(o.harRequests, spec, o.deployed)
+			o.harRequests.Sessions = []http.Header{o.sessionB, o.sessionC}
+			inSpec := addSpecRequests(o.harRequests, spec, o.codeRoutes(), o.deployed)
 			pr.Input = fmt.Sprintf("%s, %d request(s) recorded as account A", filepath.Base(o.har), len(o.harRequests.Requests)-o.harRequests.FromSpec-o.harRequests.FromSweep)
 			if o.harRequests.FromSpec > 0 {
 				pr.Input += fmt.Sprintf("; %d route(s) from the OpenAPI spec %s", o.harRequests.FromSpec, spec.Source)
 			}
-			if o.harRequests.FromSweep > 0 {
-				pr.Input += fmt.Sprintf("; %d route(s) swept from the OpenAPI spec %s with IDs from the HAR file", o.harRequests.FromSweep, spec.Source)
+			if n := o.harRequests.FromSweep - o.harRequests.FromCodeSweep; n > 0 {
+				pr.Input += fmt.Sprintf("; %d route(s) swept from the OpenAPI spec %s with IDs from the HAR file", n, spec.Source)
 			}
+			pr.Input += o.codeInput(inSpec)
 			pr.Input += o.accountsInput()
 			fmt.Fprintf(stdout, "%s: replaying %d request(s).\n", authz.ID, len(o.harRequests.Requests))
 			res, err := authzCheck(ctx, egress.Config{Target: u, Addrs: addrs, VerifyTLS: o.deployed, Version: version, ReadOnly: true}, o.harRequests.Requests, authz.Accounts{B: o.sessionB, C: o.sessionC}, limits.Rate)
@@ -1283,13 +1299,99 @@ func joinAddrs(d target.Decision) string {
 // replays: its GET routes without parameters on every target (ADR 0035),
 // and on local targets the route sweep, every GET route filled from the
 // IDs A's recording showed (ADR 0052).
-func addSpecRequests(h *authz.HAR, spec *openapi.Spec, deployed bool) {
-	if spec == nil {
-		return
+//
+// On local targets it then sweeps the routes read from the server code
+// (ADR 0053), filled the same way, leaving out those the spec already
+// has: the spec says which parameters are required, the code does not.
+// It returns how many code routes the spec already had.
+func addSpecRequests(h *authz.HAR, spec *openapi.Spec, code []authz.SpecRoute, deployed bool) (inSpec int) {
+	specPaths := map[string]bool{}
+	if spec != nil {
+		base, _ := openapi.BasePath(spec.Data, spec.Format)
+		h.AddSpecRoutes(authz.SpecRoutes(spec.Data, spec.Format), base)
+		if !deployed {
+			sw := authz.SweepRoutes(spec.Data, spec.Format)
+			for _, rt := range sw {
+				specPaths[routeShape(base+rt.Path)] = true
+			}
+			h.AddSweepRoutes(sw, base)
+		}
 	}
-	base, _ := openapi.BasePath(spec.Data, spec.Format)
-	h.AddSpecRoutes(authz.SpecRoutes(spec.Data, spec.Format), base)
-	if !deployed {
-		h.AddSweepRoutes(authz.SweepRoutes(spec.Data, spec.Format), base)
+	if deployed || len(code) == 0 {
+		return 0
 	}
+	var rest []authz.SpecRoute
+	for _, rt := range code {
+		if specPaths[routeShape(rt.Path)] {
+			inSpec++
+			continue
+		}
+		rest = append(rest, rt)
+	}
+	h.AddSweepRoutes(rest, "")
+	return inSpec
+}
+
+var rePathName = regexp.MustCompile(`\{[^{}/]*\}`)
+
+// routeShape is a route path with its parameter names left out and no
+// trailing slash, so /rooms/{rid} in the code and /rooms/{roomId} in the
+// spec are the same route.
+func routeShape(p string) string {
+	p = rePathName.ReplaceAllString(p, "{}")
+	if len(p) > 1 {
+		p = strings.TrimSuffix(p, "/")
+	}
+	return p
+}
+
+// codeRoutes returns the routes read from --source, or nil.
+func (o *urlScan) codeRoutes() []authz.SpecRoute {
+	if o.code == nil || o.codeErr != nil {
+		return nil
+	}
+	return o.code.Routes
+}
+
+// codeInput describes what was read from the server code, for the
+// report's input line.
+func (o *urlScan) codeInput(inSpec int) string {
+	if o.code == nil {
+		return ""
+	}
+	if o.codeErr != nil {
+		return fmt.Sprintf("; no routes read from the server code in %s (%v)", o.source, o.codeErr)
+	}
+	c := o.code
+	var kinds []string
+	for _, k := range []string{coderoutes.KindGo, coderoutes.KindRocketChat, coderoutes.KindExpress} {
+		if c.Found[k] > 0 {
+			kinds = append(kinds, fmt.Sprintf("%s %d", k, c.Found[k]))
+		}
+	}
+	s := fmt.Sprintf("; server code in %s: %d file(s) read, %d GET route(s) found", o.source, c.Files, len(c.Routes))
+	if len(kinds) > 0 {
+		s += " (" + strings.Join(kinds, ", ") + ")"
+	}
+	if inSpec > 0 {
+		s += fmt.Sprintf(", %d of them also in the OpenAPI spec and swept from it", inSpec)
+	}
+	s += fmt.Sprintf(", %d request(s) swept from them with IDs from the HAR file", o.harRequests.FromCodeSweep)
+	var left []string
+	if c.Unresolved > 0 {
+		left = append(left, fmt.Sprintf("%d route(s) whose path the code builds at run time, as a wildcard or by mounting a router (not swept)", c.Unresolved))
+	}
+	if c.TooBig > 0 {
+		left = append(left, fmt.Sprintf("%d file(s) over the size or count limits (not read)", c.TooBig))
+	}
+	if c.Unparsed > 0 {
+		left = append(left, fmt.Sprintf("%d Go file(s) that did not parse", c.Unparsed))
+	}
+	if c.Truncated {
+		left = append(left, "the Go code was too large to follow to the end, so routes may be missing")
+	}
+	if len(left) > 0 {
+		s += "; " + strings.Join(left, "; ")
+	}
+	return s
 }
