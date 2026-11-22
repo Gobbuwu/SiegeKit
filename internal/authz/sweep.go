@@ -26,7 +26,7 @@ import (
 // HAR file's requests and the spec's parameterless routes (MaxRequests).
 // Each is sent up to four times (A, C, B, no login). Set from the measured
 // sizes of real specs (ADR 0052).
-const MaxSweep = 300
+const MaxSweep = 500
 
 // Sweep caps keep the sweep bounded.
 const (
@@ -340,7 +340,11 @@ func (h *HAR) fillRoute(rt SpecRoute, base string) []string {
 			continue
 		}
 		vals := h.ids.candidates(pm.Name)
-		if len(vals) == 0 {
+		if len(vals) == 0 && pm.isIDParam() {
+			// An ID-named parameter no alias matches ({file_id}) may
+			// take any of A's IDs. A name that is not an ID ({owner},
+			// {repo}) gets none: an ID there only earns a 404 (Gitea,
+			// 877 of 1,026 swept routes before this rule).
 			vals = h.ids.all
 			if len(vals) > maxFillPerRoute {
 				vals = vals[:maxFillPerRoute]

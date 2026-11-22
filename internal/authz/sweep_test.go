@@ -299,3 +299,29 @@ func TestAddSweepRoutesSkipsAddressParams(t *testing.T) {
 		t.Errorf("FromSweep = %d, want 1 (rooms.info)", h.FromSweep)
 	}
 }
+
+// A path parameter whose name is not an ID ({owner}, {repo}) is not filled
+// with A's IDs: on Gitea that only earned 404s. An ID-named one no alias
+// matches still takes any of A's IDs (ADR 0052).
+func TestAddSweepRoutesPathNamesNotIDs(t *testing.T) {
+	tu, _ := target.Parse("http://localhost:3000/")
+	har := []byte(`{"log":{"entries":[{"request":{"method":"GET","url":"http://localhost:3000/api/x","headers":[{"name":"Cookie","value":"s=A"}]},"response":{"content":{"text":"{\"rid\":\"6b0281133568ca9b5b817585\"}"}}}]}}`)
+	h, err := ParseHAR(har, tu)
+	if err != nil {
+		t.Fatal(err)
+	}
+	spec := `{"openapi":"3.0.0","paths":{
+	 "/repos/{owner}/{repo}":{"get":{"parameters":[{"name":"owner","in":"path","required":true},{"name":"repo","in":"path","required":true}]}},
+	 "/files/{file_id}":{"get":{"parameters":[{"name":"file_id","in":"path","required":true}]}}}}`
+	h.AddSweepRoutes(SweepRoutes([]byte(spec), "json"), "")
+	var paths []string
+	for _, r := range h.Requests[1:] {
+		paths = append(paths, r.Path)
+	}
+	if len(paths) != 1 || paths[0] != "/files/6b0281133568ca9b5b817585" {
+		t.Errorf("swept %v, want only /files/<A's ID>", paths)
+	}
+	if h.SweepNoID != 1 {
+		t.Errorf("SweepNoID = %d, want 1 (the {owner}/{repo} route)", h.SweepNoID)
+	}
+}
