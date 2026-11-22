@@ -1,6 +1,6 @@
 # 0054. Known answers for the write replay in CI, and IDs replaced by their place
 
-- Status: Accepted (CI known answers: M2 queue item, coordinator 2026-11-22; the CI options card: see Decision 4)
+- Status: Accepted (CI known answers: M2 queue item, coordinator 2026-11-22; how CI records account A: owner's choice pending, recommended a real Chromium recording)
 - Date: 2026-11-22
 - Amends: [0049](0049-write-replay.md) (item 2a: where a copy's ID replaces the recorded one; item 2d: which earlier writes name the object), [0039](0039-known-answers-and-engine-parity.md) (a run that starts no container has no engine)
 
@@ -33,8 +33,8 @@ The same rule changed Kanboard's `moveTaskPosition`: `project_id`, `column_id` a
 | Other apps' links do not change, except the collisions | Offline, the same recordings parsed by `main` (811fc1a) and by this branch, every write's create, sent path, body and steps compared: Gitea web (12 writes), DVGA (2), Rocket.Chat 6.13.1 (3, `updateMessage` on `sendMessage`), Mattermost 12.0.2 (5) identical; Juice Shop: only the colliding checkout; Kanboard: only `moveTaskPosition` (above). The Wiki.js 2 recording lost the create's answer body (the known Playwright HAR issue of ADR 0050's record), so it has no link to compare; GraphQL creates take the noun `graphql`, which no place has, so they keep the old rule (`TestWriteCheckGraphQL`, `TestParseWritesGraphQLBatch`). |
 | The Chromium recording gives the same answer every time | 10 fresh Juice Shop containers in the gate's account order (Docker 29.10.0 rootful, cgroup v1): every run 14 recorded writes, 17 tried, 295 requests, the same 9 findings (10 before merging), 75 to 76 s per recording. Gitea: 36 requests and the same 3 low findings on every run. |
 | A scripted HAR would give the same Juice Shop answer | A HAR written with curl from the same API requests and their answers (no browser): the same findings and 295 requests, in 3 s. It has no Socket.IO polling entry, the browser's headers or its extra reads. |
-| Rootless Podman | Podman 4.9.3 rootless (cgroup v1, netavark) running the app: see the record. |
-| CI | The gate of this PR: see the record. |
+| Rootless Podman | The app on Podman 4.9.3 rootless (cgroup v1, netavark), the committed recorders and the CLI: Juice Shop 2 runs, Gitea 2 runs, each the known answer (295 and 36 requests). |
+| CI | Gate run 45068030471: all four `writes` jobs met their answers (app on podman 5.7.0 rootless and docker 29.4.2 rootful, cgroup v2). Juice Shop job about 2 minutes: Playwright and its Chromium build installed in 7 s (303 MiB), recording 75 s, scan 3 s; Gitea job about 1 minute. They run beside the web job (about 20 minutes), so the gate takes no longer. |
 
 Labels ("real", "allowed by design") are Claude's, from ADR 0049's and ADR 0051's checks against each app's database; nobody else checked them.
 
@@ -47,6 +47,6 @@ Labels ("real", "allowed by design") are Claude's, from ADR 0049's and ADR 0051'
 
 ## Alternatives considered
 
-- **A scripted HAR instead of a browser recording**: same Juice Shop answer, 3 s instead of about 75 s and no npm package; it does not test what only real recordings hold (Socket.IO polling, browser headers, the reads the browser makes, which drive the tries of item 2c). See Decision 4 for the owner's choice.
+- **A scripted HAR instead of a browser recording**: same Juice Shop answer, 3 s instead of about 75 s and no npm package; it does not test what only real recordings hold (Socket.IO polling, browser headers, the reads the browser makes, which drive the tries of item 2c). Put to the owner as a decision card (2026-11-22) with both measured; recommended the Chromium recording.
 - **Writes added to the web job's hand-made HAR**: zap-active also attacks the recording's requests (ADR 0047), so its known answer would change and its attacks on A's writes would run after the write replay in the same job; a separate job keeps each answer about one check.
 - **Value replacement with a closer path match only** (the fix for the address and card both being 7, ADR 0049): it cannot tell the basket in the path from the address in the body.
