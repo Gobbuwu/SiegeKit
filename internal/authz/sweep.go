@@ -265,7 +265,8 @@ func (p SpecParam) isIDParam() bool {
 // ID-named query parameter, has no ID from A's recording to fill it: the
 // sweep does not guess object IDs here (that is a separate item). Routes
 // whose path names an action are left out (ADR 0048). The added routes
-// carry A's session headers, like AddSpecRoutes.
+// carry every header of A's last session request (lastSession), like
+// AddSpecRoutes.
 func (h *HAR) AddSweepRoutes(routes []SpecRoute, base string) {
 	session := h.lastSession()
 	if session == nil {
@@ -295,22 +296,19 @@ func (h *HAR) AddSweepRoutes(routes []SpecRoute, base string) {
 	}
 }
 
-// lastSession returns A's session headers from the last recorded request
-// that has any, or nil. With none, nothing is swept, because A's answer
-// would be the same as no login (ADR 0035).
+// lastSession returns the headers of A's last recorded request that has a
+// session header, all of them, or nil. All of them, because an app may
+// need a header beside the session one: Rocket.Chat refuses X-Auth-Token
+// without X-User-Id (ADR 0052). Recorded headers are already limited to
+// those a replay may send (replayHeaders). With none, nothing is added,
+// because A's answer would be the same as no login (ADR 0035).
 func (h *HAR) lastSession() http.Header {
 	for i := len(h.Requests) - 1; i >= 0; i-- {
-		var session http.Header
+		hd := h.Requests[i].Header
 		for _, k := range sessionHeaders {
-			if vs := h.Requests[i].Header.Values(k); len(vs) > 0 {
-				if session == nil {
-					session = http.Header{}
-				}
-				session[k] = append([]string(nil), vs...)
+			if len(hd.Values(k)) > 0 {
+				return hd.Clone()
 			}
-		}
-		if session != nil {
-			return session
 		}
 	}
 	return nil

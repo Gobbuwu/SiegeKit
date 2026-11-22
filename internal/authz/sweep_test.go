@@ -185,10 +185,11 @@ func TestAddSweepRoutesFindsLeakRoute(t *testing.T) {
 	if !strings.Contains(leak, "roomId=6b0281133568ca9b5b817585") || !strings.Contains(leak, "since=") {
 		t.Errorf("leak route missing filled params: %s", leak)
 	}
-	// It carries A's session header, like AddSpecRoutes.
+	// It carries every header of A's session request, like AddSpecRoutes:
+	// Rocket.Chat refuses X-Auth-Token without X-User-Id (ADR 0052).
 	for _, r := range h.Requests {
-		if strings.Contains(r.Path, "getDeletedMessages") && r.Header.Get("X-Auth-Token") != "tok" {
-			t.Error("swept route did not carry A's session header")
+		if strings.Contains(r.Path, "getDeletedMessages") && (r.Header.Get("X-Auth-Token") != "tok" || r.Header.Get("X-User-Id") != "alice") {
+			t.Errorf("swept route did not carry A's headers: %v", r.Header)
 		}
 	}
 	if h.FromSweep == 0 {

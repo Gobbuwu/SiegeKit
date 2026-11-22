@@ -326,21 +326,12 @@ func SpecRoutes(data []byte, format string) []string {
 
 // AddSpecRoutes adds GET requests for the spec's routes under base (the
 // spec's base path, "" for the root) after the HAR's own requests, without
-// duplicates and within MaxRequests. They carry account A's session
-// headers from the last HAR request that has any; with none, nothing is
-// added, because A's answer would be the same as no login.
+// duplicates and within MaxRequests. They carry every header of the last
+// HAR request that has one of account A's session headers (lastSession,
+// ADR 0052); with none, nothing is added, because A's answer would be the
+// same as no login.
 func (h *HAR) AddSpecRoutes(routes []string, base string) {
-	var session http.Header
-	for i := len(h.Requests) - 1; i >= 0 && session == nil; i-- {
-		for _, k := range sessionHeaders {
-			if vs := h.Requests[i].Header.Values(k); len(vs) > 0 {
-				if session == nil {
-					session = http.Header{}
-				}
-				session[k] = append([]string(nil), vs...)
-			}
-		}
-	}
+	session := h.lastSession()
 	if session == nil {
 		return
 	}
