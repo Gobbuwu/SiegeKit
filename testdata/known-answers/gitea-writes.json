@@ -1,0 +1,18 @@
+{
+  "fixture": "gitea 1.24.6 web UI by URL (docker.io/gitea/gitea@sha256:2edc102cbb636ae1ddac5fa0c715aa5b03079dee13ac6800b2cef6d4e912e718), write replay from a Chromium recording (.github/gate/record-gitea.js)",
+  "measured": "4 local runs on 2026-11-22 on fresh containers (app on Docker 29.10.0 rootful and on rootless Podman 4.9.3, cgroup v1, Playwright 1.63.0): 36 requests and the same findings on every run; CI gate run 45068030471 (ubuntu-latest, cgroup v2), app on podman 5.7.0 rootless and on docker 29.4.2 rootful: the same answer, 36 requests. Minimum requests are 90% of the fewest",
+  "checks": {
+    "access-control-write": {
+      "status": "ran",
+      "match": "exact",
+      "why": "bob, a collaborator with write access, may open an issue, comment and rename it, so his accepted writes are low (ADR 0051); carol and no login are refused on all writes (checked in Gitea's database on 2026-11-22, ADR 0051)",
+      "findings": [
+        "b-only-write /alice/priv/issues/2/comments",
+        "b-only-write /alice/priv/issues/2/title",
+        "b-only-write /alice/priv/issues/new"
+      ],
+      "count": 3,
+      "minRequests": 32
+    }
+  }
+}

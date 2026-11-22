@@ -1,0 +1,9 @@
+{
+  "name": "siegekit-gate-recorders",
+  "private": true,
+  "description": "Browser recordings for the write-replay gate (ADR 0054). Not part of SiegeKit.",
+  "license": "Apache-2.0",
+  "dependencies": {
+    "playwright": "1.63.0"
+  }
+}

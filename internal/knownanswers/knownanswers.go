@@ -6,6 +6,7 @@ package knownanswers
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/url"
 	"os"
@@ -368,4 +369,24 @@ func AnswerFrom(fixture, measured string, r *report.Run, old *Answers) *Answers 
 		a.Checks[id] = c
 	}
 	return a
+}
+
+// EngineOf names the container engine a report's answers hold for (ADR
+// 0038). A run whose checks were all SiegeKit's own, in-process checks
+// started no container, so it has no engine and holds for every engine:
+// "" (a byEngine answer never applies). Any other run without an engine
+// is refused, since its answers cannot be compared (ADR 0054).
+func EngineOf(r *report.Run) (string, error) {
+	if r.Environment != nil && r.Environment.Engine != nil {
+		return r.Environment.Engine.Name, nil
+	}
+	if len(r.Plugins) == 0 {
+		return "", errors.New("the report names no container engine and no check, so its answers cannot be compared (ADR 0038)")
+	}
+	for _, p := range r.Plugins {
+		if p.Tool != "siegekit" {
+			return "", fmt.Errorf("the report names no container engine but %s ran with %s, so its answers cannot be compared (ADR 0038)", p.ID, p.Tool)
+		}
+	}
+	return "", nil
 }

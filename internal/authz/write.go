@@ -548,6 +548,12 @@ func findCreate(w Write, index int, creates []recordedCreate) *Create {
 				continue
 			}
 			s := commonSegments(c.c.Path, w.Path)
+			if w.namesAs(id.value, createNoun(c.c)) {
+				// A place in the write names the create's kind of object
+				// ("addressId" for POST /api/Addresss/): it wins over a
+				// create that only shares the number (ADR 0054).
+				s += 500
+			}
 			if w.RPC != "" && c.c.RPCMethod != "" && sameNoun(w, id.value, c.c.RPCMethod) {
 				// Method calls share one path: the create whose name has the
 				// noun of the key that holds the ID wins (ADR 0050).
@@ -629,14 +635,17 @@ func walkIDKeys(v any, depth int, fn func(obj map[string]any, key, value string)
 
 // withID is w with oldID replaced by newID in its path segments, query
 // values, and JSON (a method call's params only) or form body values at
-// ID-named keys.
-func (w Write) withID(oldID, newID string) Write {
+// ID-named keys, at the places that name an object of kind noun (replacer;
+// every place when noun is empty).
+func (w Write) withID(oldID, newID, noun string) Write {
 	out := w
 	out.Header = w.Header.Clone()
+	keep := w.replacer(oldID, noun)
 	p, q, hasQ := strings.Cut(w.Path, "?")
 	segs := strings.Split(p, "/")
+	nouns := segNouns(segs)
 	for i, seg := range segs {
-		if s, err := url.PathUnescape(seg); err == nil && s == oldID {
+		if s, err := url.PathUnescape(seg); err == nil && s == oldID && keep(nouns[i]) {
 			segs[i] = url.PathEscape(newID)
 		}
 	}
@@ -646,7 +655,7 @@ func (w Write) withID(oldID, newID string) Write {
 			changed := false
 			for k, vs := range vals {
 				for i, v := range vs {
-					if v == oldID {
+					if v == oldID && keep(nounOf(k)) {
 						vals[k][i], changed = newID, true
 					}
 				}
@@ -662,7 +671,7 @@ func (w Write) withID(oldID, newID string) Write {
 	switch {
 	case isJSON:
 		walkIDKeys(scope, 0, func(obj map[string]any, k, s string) {
-			if s != oldID {
+			if s != oldID || !keep(nounOf(k)) {
 				return
 			}
 			if _, isNum := obj[k].(float64); isNum {
@@ -680,7 +689,7 @@ func (w Write) withID(oldID, newID string) Write {
 		if vals, err := url.ParseQuery(string(w.Body)); err == nil {
 			for k, vs := range vals {
 				for i, x := range vs {
-					if idKey(k) && x == oldID {
+					if idKey(k) && x == oldID && keep(nounOf(k)) {
 						vals[k][i] = newID
 					}
 				}
@@ -974,14 +983,14 @@ func WriteCheck(ctx context.Context, cfg egress.Config, ws []Write, acc Accounts
 				if w.Create.ClientID {
 					// The create chose its object's ID: a fresh one, or the
 					// app ignores the copy (ADR 0050).
-					cw = cw.withID(w.Create.OldID, freshID(w.Create.OldID))
+					cw = cw.withID(w.Create.OldID, freshID(w.Create.OldID), "")
 				}
 				ca, err := do(http.MethodPost, cw.Path, cw.Header, cw.Body)
 				if err != nil {
 					return res, err
 				}
 				if id, ok := newID(ca, w.Create.Field, w.Create.RPC); ok {
-					sw = w.withID(w.Create.OldID, id)
+					sw = w.withID(w.Create.OldID, id, createNoun(*w.Create))
 					rp.Recreated, rp.Sent, copyID = true, sw.Path, id
 					res.Recreated++
 				} else {
@@ -989,7 +998,7 @@ func WriteCheck(ctx context.Context, cfg egress.Config, ws []Write, acc Accounts
 				}
 			}
 			if w.ClientID != "" && freshSelfID {
-				sw = sw.withID(w.ClientID, freshID(w.ClientID))
+				sw = sw.withID(w.ClientID, freshID(w.ClientID), "")
 				rp.Sent = sw.Path
 			}
 			if !rp.Recreated && onRecorded != "" {

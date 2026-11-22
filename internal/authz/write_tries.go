@@ -188,10 +188,22 @@ func plainJSONObject(b []byte) bool {
 // with the basket items sent again first, A's basket went from one item
 // to none (ADR 0049 item 2d).
 func stepsFor(w Write, index int, earlier []pending, reads []recordedRead) ([]Step, string, http.Header) {
-	ids := map[string]bool{}
-	for _, seg := range strings.Split(pathOf(w.Path), "/") {
-		if s, err := url.PathUnescape(seg); err == nil && reID.MatchString(s) && (w.Create == nil || s != w.Create.OldID) {
-			ids[s] = true
+	// The path's IDs the copy does not replace, each with its noun: in
+	// POST /rest/basket/8/checkout with the address copy's "addressId": "8",
+	// the basket 8 stays (ADR 0054).
+	ids := map[string]string{}
+	segs := strings.Split(pathOf(w.Path), "/")
+	nouns := segNouns(segs)
+	copied := func(string, string) bool { return false }
+	if w.Create != nil {
+		keep := w.replacer(w.Create.OldID, createNoun(*w.Create))
+		copied = func(s, noun string) bool { return s == w.Create.OldID && keep(noun) }
+	}
+	for i, seg := range segs {
+		if s, err := url.PathUnescape(seg); err == nil && reID.MatchString(s) && !copied(s, nouns[i]) {
+			if _, dup := ids[s]; !dup {
+				ids[s] = nouns[i]
+			}
 		}
 	}
 	// Only a POST: a PUT, PATCH or DELETE already reads its own URL, and
@@ -200,25 +212,54 @@ func stepsFor(w Write, index int, earlier []pending, reads []recordedRead) ([]St
 	if len(ids) == 0 || w.Method != http.MethodPost {
 		return nil, "", nil
 	}
-	var steps []Step
-	named := map[string]bool{}
+	// An earlier write names the object when its body holds one of those
+	// IDs at an ID-named key. When some earlier write holds it under the
+	// path segment's noun ("BasketId" for the basket), only those count, so
+	// that a "ProductId": "8" does not stand for basket 8 (ADR 0054).
+	type cand struct {
+		e    pending
+		hit  string
+		noun bool
+	}
+	var cands []cand
+	nounHit := map[string]bool{}
 	for _, e := range earlier {
 		if e.index >= index || e.w.Method == http.MethodDelete || e.w.GraphQL != "" {
 			continue
 		}
-		var hit string
+		var c cand
 		if scope, _, ok := idScope(e.w.Body); ok {
-			walkIDKeys(scope, 0, func(_ map[string]any, _ string, s string) {
-				if ids[s] {
-					hit = s
+			walkIDKeys(scope, 0, func(_ map[string]any, k string, s string) {
+				want, isID := ids[s]
+				if !isID {
+					return
+				}
+				kn := nounOf(k)
+				match := nounsMatch(kn, want)
+				// A noun match first, then the smallest ID: map order
+				// must not pick it.
+				if c.hit == "" || match && !c.noun || match == c.noun && s < c.hit {
+					c.hit, c.noun = s, match
 				}
 			})
 		}
-		if hit == "" || writeInPath(e.w.Path, hit) {
+		if c.hit == "" || writeInPath(e.w.Path, c.hit) {
 			continue
 		}
-		named[hit] = true
-		steps = append(steps, Step{Method: e.w.Method, Path: e.w.Path, Header: e.w.Header.Clone(), Body: e.w.Body})
+		c.e = e
+		cands = append(cands, c)
+		if c.noun {
+			nounHit[c.hit] = true
+		}
+	}
+	var steps []Step
+	named := map[string]bool{}
+	for _, c := range cands {
+		if nounHit[c.hit] && !c.noun {
+			continue
+		}
+		named[c.hit] = true
+		steps = append(steps, Step{Method: c.e.w.Method, Path: c.e.w.Path, Header: c.e.w.Header.Clone(), Body: c.e.w.Body})
 	}
 	if len(steps) > maxSteps {
 		steps = steps[len(steps)-maxSteps:]
