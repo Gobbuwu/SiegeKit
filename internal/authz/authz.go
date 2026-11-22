@@ -102,6 +102,9 @@ type HAR struct {
 	// SweepURL counts sweep routes dropped because a required parameter
 	// asks for an address the app would fetch (asksURL).
 	SweepURL int
+	// SweepUnreadable counts sweep routes dropped because the spec does
+	// not say what one of their parameters is (SpecRoute.Unreadable).
+	SweepUnreadable int
 	// SweepOverLimit counts filled sweep routes past MaxSweep.
 	SweepOverLimit int
 	ids            *idSet // ID-shaped tokens harvested from A's recording
@@ -755,6 +758,7 @@ func (r Result) Summary(h *HAR, loginName string, c Counts) string {
 			{h.Duplicate, "duplicates"}, {h.OverLimit, fmt.Sprintf("over the %d-request limit", MaxRequests)},
 			{h.SweepNoID, "spec routes needing an object ID the HAR file never showed (the sweep does not guess IDs)"},
 			{h.SweepURL, "spec routes needing an address the app would fetch (the sweep does not make the target contact other sites)"},
+			{h.SweepUnreadable, "spec routes with a parameter the spec does not describe (a $ref to another file, or a {name} in the path no parameter declares)"},
 			{h.SweepOverLimit, fmt.Sprintf("spec routes over the route sweep's %d-request limit", MaxSweep)},
 		} {
 			if x.n > 0 {

@@ -238,6 +238,11 @@ type SpecParam struct {
 type SpecRoute struct {
 	Path   string
 	Params []SpecParam
+	// Unreadable is set when the spec does not say what a parameter of
+	// the route is: a $ref that is not in the same document, or a path
+	// template name ({id}) no path parameter declares. Such a route is
+	// counted in SweepUnreadable and not sent, never sent half filled.
+	Unreadable bool
 }
 
 // reDateName matches a parameter name that asks for a date or time, so a
@@ -345,6 +350,10 @@ func (h *HAR) lastSession() http.Header {
 // parameters replaced and a query string built. It returns an empty slice
 // when a required path or ID-named query parameter cannot be filled.
 func (h *HAR) fillRoute(rt SpecRoute, base string) []string {
+	if rt.Unreadable {
+		h.SweepUnreadable++
+		return nil
+	}
 	p := base + rt.Path
 	// Path parameters: each needs an ID; the first few candidates are
 	// tried. A required path parameter with no candidate drops the route.
@@ -491,8 +500,11 @@ func SweepRoutes(data []byte, format string) []SpecRoute {
 		if json.Unmarshal(get, &op) != nil {
 			continue
 		}
-		params := doc.resolveParams(append(common, op.Parameters...))
-		out = append(out, SpecRoute{Path: p, Params: params})
+		params, unreadable := doc.resolveParams(append(common, op.Parameters...))
+		if !unreadable {
+			unreadable = undeclaredPathParam(p, params)
+		}
+		out = append(out, SpecRoute{Path: p, Params: params, Unreadable: unreadable})
 	}
 	sortRoutes(out)
 	return out
@@ -526,13 +538,18 @@ type rawParam struct {
 }
 
 // resolveParams resolves $ref parameters and keeps the path and query
-// ones, dropping duplicates by name and location.
-func (d rawDoc) resolveParams(in []rawParam) []SpecParam {
-	var out []SpecParam
+// ones, dropping duplicates by name and location. unreadable is true when
+// a $ref does not resolve inside the document (an external file, or a
+// name the document lacks): what that parameter asks for is unknown.
+func (d rawDoc) resolveParams(in []rawParam) (out []SpecParam, unreadable bool) {
 	seen := map[string]bool{}
 	for _, rp := range in {
 		if rp.Ref != "" {
 			rp = d.deref(rp.Ref)
+			if rp.Name == "" {
+				unreadable = true
+				continue
+			}
 		}
 		if rp.Name == "" || (rp.In != "path" && rp.In != "query") {
 			continue
@@ -556,7 +573,28 @@ func (d rawDoc) resolveParams(in []rawParam) []SpecParam {
 		}
 		out = append(out, sp)
 	}
-	return out
+	return out, unreadable
+}
+
+var rePathTemplate = regexp.MustCompile(`\{([^{}/]+)\}`)
+
+// undeclaredPathParam reports whether the path template names a parameter
+// ({id}) that no path parameter declares: the route would otherwise be
+// sent with the literal braces.
+func undeclaredPathParam(path string, params []SpecParam) bool {
+	for _, m := range rePathTemplate.FindAllStringSubmatch(path, -1) {
+		found := false
+		for _, p := range params {
+			if p.In == "path" && p.Name == m[1] {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return true
+		}
+	}
+	return false
 }
 
 // deref resolves a local parameter $ref ("#/components/parameters/Name" or
@@ -665,6 +703,7 @@ func yamlValue(n *yaml.Node, depth int, budget *int) (any, error) {
 		return out, nil
 	case yaml.MappingNode:
 		out := make(map[string]any, len(n.Content)/2)
+		var merged []any
 		for i := 0; i+1 < len(n.Content); i += 2 {
 			k := n.Content[i]
 			if k.Kind == yaml.AliasNode && k.Alias != nil {
@@ -674,7 +713,31 @@ func yamlValue(n *yaml.Node, depth int, budget *int) (any, error) {
 			if err != nil {
 				return nil, err
 			}
+			if k.Kind == yaml.ScalarNode && k.ShortTag() == "!!merge" {
+				// A merge key ("<<: *base") copies the keys of the
+				// mapping, or mappings, it names (YAML 1.1, as yaml.v3
+				// itself decodes it); kept as a key, the route or
+				// parameter it carries was lost.
+				if l, ok := v.([]any); ok {
+					merged = append(merged, l...)
+				} else {
+					merged = append(merged, v)
+				}
+				continue
+			}
 			out[k.Value] = v
+		}
+		// Keys written in the mapping win, then earlier merged mappings.
+		for _, m := range merged {
+			mm, ok := m.(map[string]any)
+			if !ok {
+				continue
+			}
+			for _, k := range sortedKeys(mm) {
+				if _, ok := out[k]; !ok {
+					out[k] = mm[k]
+				}
+			}
 		}
 		return out, nil
 	case yaml.ScalarNode:

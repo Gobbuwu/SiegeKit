@@ -41,7 +41,7 @@ func TestSweepRateLimitAndNotes(t *testing.T) {
 	if fs := Findings(srv.URL, res, ""); len(fs) != 0 {
 		t.Errorf("a 429 for C was reported: %+v", fs)
 	}
-	h := &HAR{FromSweep: 1, SweepNoID: 2, SweepURL: 3, SweepOverLimit: 4}
+	h := &HAR{FromSweep: 1, SweepNoID: 2, SweepURL: 3, SweepOverLimit: 4, SweepUnreadable: 5}
 	s := res.Summary(h, "", Count(res, ""))
 	for _, want := range []string{
 		"1 from the route sweep",
@@ -49,6 +49,7 @@ func TestSweepRateLimitAndNotes(t *testing.T) {
 		"2 spec routes needing an object ID",
 		"3 spec routes needing an address the app would fetch",
 		"4 spec routes over the route sweep's 500-request limit",
+		"5 spec routes with a parameter the spec does not describe",
 	} {
 		if !strings.Contains(s, want) {
 			t.Errorf("summary lacks %q: %s", want, s)
@@ -85,6 +86,71 @@ components:
 		if p.Name == "roomId" && !p.Required {
 			t.Error("$ref parameter not resolved")
 		}
+	}
+}
+
+// YAML merge keys ("<<: *base") are followed, as yaml.v3 decodes them:
+// a route or parameter written through one is not lost, and keys written
+// in the mapping win over merged ones.
+func TestSweepRoutesYAMLMergeKey(t *testing.T) {
+	spec := `openapi: 3.0.0
+x-base: &room
+  name: roomId
+  in: query
+  required: false
+x-op: &op
+  parameters:
+    - <<: *room
+      required: true
+paths:
+  /api/v1/chat.getDeletedMessages:
+    get:
+      <<: *op
+  /api/v1/rooms.info:
+    <<: {get: {parameters: [{name: roomId, in: query, required: true}]}}
+`
+	routes := SweepRoutes([]byte(spec), "yaml")
+	if len(routes) != 2 {
+		t.Fatalf("routes %+v, want 2", routes)
+	}
+	for _, r := range routes {
+		if len(r.Params) != 1 || r.Params[0].Name != "roomId" || r.Params[0].In != "query" || !r.Params[0].Required {
+			t.Errorf("%s: params %+v, want required query roomId", r.Path, r.Params)
+		}
+	}
+	// A quoted "<<" is an ordinary key, not a merge.
+	j, err := yamlToJSON([]byte("a: {\"<<\": {b: 1}}\n"))
+	if err != nil || string(j) != `{"a":{"\u003c\u003c":{"b":1}}}` {
+		t.Errorf("quoted <<: %s %v", j, err)
+	}
+}
+
+// A route whose parameter the spec does not describe (a $ref to another
+// file or to a name the document lacks, or a {name} in the path no
+// parameter declares) is counted and not sent, rather than sent half
+// filled or with literal braces (ADR 0052).
+func TestAddSweepRoutesUnreadable(t *testing.T) {
+	tu := mustTarget(t, "http://localhost:3000/")
+	har := []byte(`{"log":{"entries":[{"request":{"method":"GET","url":"http://localhost:3000/api/x","headers":[{"name":"Cookie","value":"s=A"}]},"response":{"content":{"text":"{\"rid\":\"6b0281133568ca9b5b817585\"}"}}}]}}`)
+	h, err := ParseHAR(har, tu)
+	if err != nil {
+		t.Fatal(err)
+	}
+	spec := `{"openapi":"3.0.0","paths":{
+	 "/ext":{"get":{"parameters":[{"$ref":"params.yaml#/RoomId"}]}},
+	 "/missing":{"get":{"parameters":[{"$ref":"#/components/parameters/Nope"}]}},
+	 "/undeclared/{rid}":{"get":{}},
+	 "/ok/{rid}":{"get":{"parameters":[{"name":"rid","in":"path","required":true}]}}}}`
+	h.AddSweepRoutes(SweepRoutes([]byte(spec), "json"), "")
+	var paths []string
+	for _, r := range h.Requests[1:] {
+		paths = append(paths, r.Path)
+	}
+	if len(paths) != 1 || paths[0] != "/ok/6b0281133568ca9b5b817585" {
+		t.Errorf("swept %v, want only /ok/<A's ID>", paths)
+	}
+	if h.SweepUnreadable != 3 {
+		t.Errorf("SweepUnreadable = %d, want 3", h.SweepUnreadable)
 	}
 }
 
