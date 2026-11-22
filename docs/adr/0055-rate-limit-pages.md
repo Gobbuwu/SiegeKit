@@ -44,7 +44,7 @@ Environment for every local measurement: Claude's sandbox, 4 CPUs, Docker 29.10.
 | Spraying on a real app with a per-account lockout | Measured on Mattermost: `login-throttle` limited after 11 of 20 wrong passwords ("too many"), `login-spray` then 20 × 401 for invented names, `spray-not-limited`; the test account stayed locked (its right password answered 401); 29 s. |
 | Planted limits are seen and missing ones reported | `TestPagesFindPlantedIssues` (test app, real clock): resets with and without a limit, an unlimited sign-up, code pages with no limit, a limit of 5 and a limit of 100, and spraying past a per-account lock but not past a limit for everyone. It fails when the threshold or the invented names are broken (checked by changing each). |
 | Flags, confirmation, skips and report fields | `TestParsePage`, `TestCheckPage`, `TestPageFindings`, `TestLimitNumber`, `TestSpray`, `TestScanURLPages`, `TestScanURLSpray`. |
-| Templates stay valid and filled in | `FuzzPagesFromHAR` (60 s locally, about 657,000 runs, no failure; in CI's fuzz list). |
+| Templates stay valid and filled in | `FuzzPagesFromHAR` (in CI's fuzz list). CI's fuzzing found a recorded code field whose value was an escaped placeholder (`0000Code=%7Bwrong%7D`), so the code was sent as recorded; a placeholder is now looked for in the decoded body too, and the input is kept as a seed. Then 90 s locally, about 1.4 million runs, no failure. |
 
 ## Consequences
 

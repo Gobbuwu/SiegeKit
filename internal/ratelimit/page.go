@@ -456,8 +456,8 @@ func template(p Page, mime, body string) ([]byte, bool, string) {
 	switch {
 	case len(body) > maxBody:
 		return nil, false, fmt.Sprintf("its body is longer than %d bytes", maxBody)
-	case strings.Contains(body, wrongPH) || strings.Contains(body, newPH):
-		return nil, false, "its body already holds {wrong} or {new}"
+	case hasPH(body):
+		return nil, false, holdsPH
 	}
 	changed := 0
 	// value returns the template value of field k with string value v.
@@ -493,19 +493,22 @@ func template(p Page, mime, body string) ([]byte, bool, string) {
 		if err := d.Decode(&m); err != nil {
 			return nil, false, "its body is not a JSON object"
 		}
+		// A placeholder can hide behind an escape ("\u007bwrong}"): look
+		// for one in the decoded body, which the encoder writes as is.
+		if dec, err := encodeJSON(m); err != nil || hasPH(string(dec)) {
+			return nil, false, holdsPH
+		}
 		for k, v := range m {
 			m[k] = walk(k, v, value)
 		}
 		if changed == 0 && p != Reset {
 			return nil, false, nothingToChange(p)
 		}
-		var b bytes.Buffer
-		enc := json.NewEncoder(&b)
-		enc.SetEscapeHTML(false)
-		if err := enc.Encode(m); err != nil {
+		b, err := encodeJSON(m)
+		if err != nil {
 			return nil, false, err.Error()
 		}
-		return bytes.TrimSpace(b.Bytes()), true, ""
+		return b, true, ""
 	}
 	if !strings.Contains(strings.ToLower(mime), "x-www-form-urlencoded") {
 		return nil, false, fmt.Sprintf("its body is %q, not JSON or a form", mime)
@@ -518,6 +521,9 @@ func template(p Page, mime, body string) ([]byte, bool, string) {
 		rawK, rawV, _ := strings.Cut(kv, "=")
 		k, _ := url.QueryUnescape(rawK)
 		v, _ := url.QueryUnescape(rawV)
+		if hasPH(k) || hasPH(v) { // escaped, as "%7Bwrong%7D"
+			return nil, false, holdsPH
+		}
 		if nv := value(k, v); nv != v {
 			// The placeholders are filled in escaped, so the rest of
 			// the value is escaped now.
@@ -530,6 +536,22 @@ func template(p Page, mime, body string) ([]byte, bool, string) {
 		return nil, false, nothingToChange(p)
 	}
 	return []byte(strings.Join(parts, "&")), false, ""
+}
+
+const holdsPH = "its body already holds {wrong} or {new}"
+
+func hasPH(s string) bool { return strings.Contains(s, wrongPH) || strings.Contains(s, newPH) }
+
+// encodeJSON writes v as compact JSON with "<", ">" and "&" kept as they
+// are.
+func encodeJSON(v any) ([]byte, error) {
+	var b bytes.Buffer
+	enc := json.NewEncoder(&b)
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(v); err != nil {
+		return nil, err
+	}
+	return bytes.TrimSpace(b.Bytes()), nil
 }
 
 func nothingToChange(p Page) string {
