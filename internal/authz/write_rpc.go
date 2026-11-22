@@ -48,7 +48,8 @@ var writeVerbs = func() map[string]bool {
 // readName reports whether a method name, or a path's last word, names a
 // read: the name is cut into parts at every character other than a letter
 // or digit (".", ":", "/", "_", "-"), a part's first word (split at
-// camelCase) is a read verb, and no word of the name is a write verb.
+// camelCase) is a read verb, and no part starts with a write verb and no
+// write verb follows "or" or "and".
 // "public-settings/get", "loadHistory", "license:isEnterprise" and
 // "eth_getBalance" read; "sendMessage", "updateMessage", "readMessages" and
 // "getOrCreateRoom" do not.
@@ -61,8 +62,12 @@ func readName(name string) bool {
 		if len(ws) > 0 && readVerbs[ws[0]] {
 			read = true
 		}
-		for _, w := range ws {
-			if writeVerbs[w] {
+		for i, w := range ws {
+			// A write verb vetoes when it acts: the first word of a part,
+			// or after "or"/"and" ("getOrCreateRoom"). As a noun later in
+			// the name it does not ("getImportProgress", "getRoomJoinCode":
+			// 5 Rocket.Chat reads, measured 2026-11-22).
+			if writeVerbs[w] && (i == 0 || ws[i-1] == "or" || ws[i-1] == "and") {
 				return false
 			}
 		}
@@ -383,3 +388,91 @@ const (
 	lower  = "abcdefghijklmnopqrstuvwxyz"
 	upper  = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
 )
+
+// resultField marks an ID that is a method call's whole result.
+const resultField = ""
+
+// createVerbs: a method whose name starts a part with one of these makes
+// an object. Kanboard's createTask and createComment answer with the new
+// ID as the whole result ({"result":1}, measured 2026-11-22).
+var createVerbs = setOf("create add new insert make")
+
+func createName(name string) bool {
+	for _, part := range strings.FieldsFunc(name, func(r rune) bool {
+		return !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9')
+	}) {
+		if ws := splitWords(part); len(ws) > 0 && createVerbs[ws[0]] {
+			return true
+		}
+	}
+	return false
+}
+
+// scalarID is v as an ID when it is a number or a string (not an object,
+// a list or a boolean).
+func scalarID(v any) (string, bool) {
+	switch v.(type) {
+	case float64, string:
+		return idValue(v)
+	}
+	return "", false
+}
+
+// sameNoun reports whether a method call w names the ID value under a key
+// whose noun is the last word of the create's method name: "task_id" or
+// updateTask's "id" against createTask. All of Kanboard's creates answer
+// 1 on a new project (project, task, comment), and closeTask's task_id
+// went to the latest, the comment, before this rule (measured
+// 2026-11-22).
+func sameNoun(w Write, value, createMethod string) bool {
+	cw := splitWords(createMethod)
+	if len(cw) < 2 {
+		return false
+	}
+	want := strings.TrimSuffix(cw[len(cw)-1], "s")
+	scope, _, ok := idScope(w.Body)
+	if !ok {
+		return false
+	}
+	found := false
+	walkIDKeys(scope, 0, func(_ map[string]any, k, v string) {
+		if v != value || found {
+			return
+		}
+		nouns := splitWords(k)
+		if l := strings.ToLower(k); l == "id" || l == "_id" {
+			nouns = splitWords(w.RPC)
+			if len(nouns) > 0 {
+				nouns = nouns[1:]
+			}
+		}
+		for _, n := range nouns {
+			if n != "id" && n != "ids" && strings.TrimSuffix(n, "s") == want {
+				found = true
+			}
+		}
+	})
+	return found
+}
+
+// sockJSParts are the last path segments of SockJS's fallback transports
+// (/<prefix>/<server>/<session>/xhr_send and so on).
+var sockJSParts = setOf("xhr xhr_send xhr_streaming jsonp jsonp_send eventsource htmlfile")
+
+// socketTransport reports whether a request is a WebSocket fallback
+// transport: SockJS (Rocket.Chat's DDP fell back to /sockjs/<server>/
+// <session>/xhr_send when its WebSocket failed, carrying connect, sub, a
+// resume login and method calls, measured 2026-11-22) or Engine.IO polling
+// (Socket.IO, ?EIO=4&transport=polling on Juice Shop). The session ID in
+// the URL is what lets a request in, not the account's session, so a
+// replay as B or with no login tests nothing about access control.
+func socketTransport(p string) bool {
+	pathPart, query, _ := strings.Cut(p, "?")
+	segs := strings.Split(strings.Trim(pathPart, "/"), "/")
+	if n := len(segs); n >= 3 && sockJSParts[segs[n-1]] && segs[n-2] != "" && segs[n-3] != "" &&
+		!strings.Contains(segs[n-2], ".") && !strings.Contains(segs[n-3], ".") {
+		return true
+	}
+	q, err := url.ParseQuery(query)
+	return err == nil && q.Get("EIO") != "" && q.Get("transport") == "polling"
+}

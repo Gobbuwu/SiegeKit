@@ -108,7 +108,9 @@ type Create struct {
 	Field  []string // keys leading to the ID in the create's JSON answer
 	OldID  string   // the ID in the recorded answer
 	// RPC: a method call; Field is read in the call's result (ADR 0050).
-	RPC bool
+	// RPCMethod is its method's name.
+	RPC       bool
+	RPCMethod string
 	// ClientID: the create's body chose OldID; A sends it with a fresh ID.
 	ClientID bool
 }
@@ -132,6 +134,10 @@ type Writes struct {
 	// are not replayed. ReadNames names the first maxReadNames of them.
 	RPCReads, ReadPOSTs int
 	ReadNames           []string
+	// Transport counts SockJS and Socket.IO polling requests: they carry
+	// a socket session's messages, bound to that session's ID in the URL,
+	// so they are not replayed (ADR 0050).
+	Transport int
 	// TriesOverLimit counts tries left out past MaxTries.
 	TriesOverLimit int
 }
@@ -253,6 +259,10 @@ func ParseWrites(data []byte, t *target.URL) (*Writes, error) {
 			}
 			continue
 		}
+		if socketTransport(p) {
+			w.Transport++
+			continue
+		}
 		var body []byte
 		hd := replayHeaders(r.Headers)
 		if pd := r.PostData; pd != nil {
@@ -328,7 +338,7 @@ func ParseWrites(data []byte, t *target.URL) (*Writes, error) {
 					depth = 5
 				}
 			}
-			if ids := answerIDs(e.Response.Status, e.Response.Content.Text, e.Response.Content.Encoding, depth, wr.RPC != ""); len(ids) > 0 {
+			if ids := answerIDs(e.Response.Status, e.Response.Content.Text, e.Response.Content.Encoding, depth, wr.RPC); len(ids) > 0 {
 				client := clientIDs(body, ids)
 				for v := range client {
 					// An ID seen earlier in the recording names an object
@@ -343,7 +353,7 @@ func ParseWrites(data []byte, t *target.URL) (*Writes, error) {
 						break
 					}
 				}
-				creates = append(creates, recordedCreate{index: i, c: Create{Path: p, Header: hd.Clone(), Body: body, RPC: wr.RPC != ""}, ids: ids, client: client})
+				creates = append(creates, recordedCreate{index: i, c: Create{Path: p, Header: hd.Clone(), Body: body, RPC: wr.RPC != "", RPCMethod: wr.RPC}, ids: ids, client: client})
 			}
 		}
 		key := method + " " + p + " " + string(body)
@@ -427,8 +437,9 @@ func idRank(key string) int {
 // idNames whose value is a whole number or a short string without "/" or
 // spaces, in objects at most maxDepth deep (3, or 4 for GraphQL; not
 // inside arrays), nearest first and by idNames order. For a method call
-// (rpc) they are read in the call's result (ADR 0050).
-func answerIDs(status int, text, encoding string, maxDepth int, rpc bool) []idField {
+// (rpcMethod, its name) they are read in the call's result, and a call
+// named as a create whose result is the ID itself gives that ID (ADR 0050).
+func answerIDs(status int, text, encoding string, maxDepth int, rpcMethod string) []idField {
 	if status < 200 || status >= 300 || text == "" {
 		return nil
 	}
@@ -445,8 +456,11 @@ func answerIDs(status int, text, encoding string, maxDepth int, rpc bool) []idFi
 		return nil
 	}
 	v = unbatch(v)
-	if rpc {
+	if rpcMethod != "" {
 		v = rpcResult(v)
+		if id, ok := scalarID(v); ok && createName(rpcMethod) {
+			return []idField{{field: []string{resultField}, value: id}}
+		}
 	}
 	var out []idField
 	level := []struct {
@@ -532,7 +546,13 @@ func findCreate(w Write, index int, creates []recordedCreate) *Create {
 			if !uses[id.value] {
 				continue
 			}
-			if s := commonSegments(c.c.Path, w.Path); s > bestScore {
+			s := commonSegments(c.c.Path, w.Path)
+			if w.RPC != "" && c.c.RPCMethod != "" && sameNoun(w, id.value, c.c.RPCMethod) {
+				// Method calls share one path: the create whose name has the
+				// noun of the key that holds the ID wins (ADR 0050).
+				s += 1000
+			}
+			if s > bestScore {
 				cc := c.c
 				cc.Field, cc.OldID, cc.ClientID = id.field, id.value, c.client[id.value]
 				best, bestScore = &cc, s
@@ -1093,6 +1113,9 @@ func newID(a Answer, field []string, rpc bool) (string, bool) {
 	v = unbatch(v)
 	if rpc {
 		v = rpcResult(v)
+		if len(field) == 1 && field[0] == resultField {
+			return scalarID(v)
+		}
 	}
 	for _, k := range field {
 		m, ok := v.(map[string]any)
@@ -1302,7 +1325,7 @@ func (r WriteResult) WriteSummary(w *Writes) string {
 		for _, x := range []struct {
 			n    int
 			what string
-		}{{w.NoBody, "with form fields but no body text in the HAR file"}, {w.GraphQLReads, "GraphQL queries or subscriptions (reads)"}, {w.RPCReads, "method calls sent as POST whose method name reads"}, {w.ReadPOSTs, "POSTs whose path ends in a read word"}, {w.Duplicate, "duplicates"}, {w.OverLimit, fmt.Sprintf("over the %d-write limit", MaxWrites)}, {w.TriesOverLimit, fmt.Sprintf("tries on A's objects over the %d-try limit", MaxTries)}} {
+		}{{w.NoBody, "with form fields but no body text in the HAR file"}, {w.GraphQLReads, "GraphQL queries or subscriptions (reads)"}, {w.RPCReads, "method calls sent as POST whose method name reads"}, {w.ReadPOSTs, "POSTs whose path ends in a read word"}, {w.Transport, "SockJS or Socket.IO polling requests (a socket session's messages)"}, {w.Duplicate, "duplicates"}, {w.OverLimit, fmt.Sprintf("over the %d-write limit", MaxWrites)}, {w.TriesOverLimit, fmt.Sprintf("tries on A's objects over the %d-try limit", MaxTries)}} {
 			if x.n > 0 {
 				notes = append(notes, fmt.Sprintf("%d %s not replayed", x.n, x.what))
 			}

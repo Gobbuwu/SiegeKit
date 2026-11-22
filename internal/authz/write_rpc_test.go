@@ -25,6 +25,7 @@ func TestReadName(t *testing.T) {
 		"readMessages": false, "setReaction": false,
 		// Other shapes.
 		"eth_getBalance": true, "user.get": true, "get_user_info": true, "users.list": true,
+		"getImportProgress": true, "getRoomJoinCode": true, "getSetupWizardParameters": true, "rooms:delete": false, "users.update": false,
 		"getOrCreateRoom": false, "fetchAndUpdate": false, "issue": false, "targetList": false, "": false,
 	} {
 		if got := readName(name); got != want {
@@ -308,5 +309,99 @@ func TestWriteCheckRPC(t *testing.T) {
 	}
 	if msgs["KP4XXmrG3gs9RoAt5"] != "alice" {
 		t.Error("A's recorded message changed")
+	}
+}
+
+func TestSocketTransport(t *testing.T) {
+	for p, want := range map[string]bool{
+		"/sockjs/679/j1gpttky/xhr_send?t=1":             true,
+		"/sockjs/679/j1gpttky/xhr?t=1":                  true,
+		"/socket.io/?EIO=4&transport=polling&t=a&sid=x": true,
+		"/socket.io/?EIO=4&transport=websocket":         false,
+		"/api/v1/method.call/sendMessage":               false,
+		"/xhr_send":                                     false,
+		"/api/Feedbacks/":                               false,
+	} {
+		if got := socketTransport(p); got != want {
+			t.Errorf("socketTransport(%q) = %v", p, got)
+		}
+	}
+}
+
+// TestParseWritesRPCBareResult: Kanboard-shaped JSON-RPC, where every
+// create answers with the new ID as its whole result and a fresh project
+// gives 1 to the project, the task and the comment alike. closeTask's
+// task_id belongs to createTask, not to the later createComment.
+func TestParseWritesRPCBareResult(t *testing.T) {
+	u := "http://127.0.0.1:3000"
+	rpc := func(id int, method, params, result string) writeEntry {
+		return writeEntry{method: "POST", url: u + "/jsonrpc.php", mime: "application/json",
+			body:   fmt.Sprintf(`{"jsonrpc":"2.0","method":%q,"id":%d,"params":%s}`, method, id, params),
+			status: 200, answer: fmt.Sprintf(`{"jsonrpc":"2.0","id":%d,"result":%s}`, id, result)}
+	}
+	har := writeHAR(t, []writeEntry{
+		rpc(101, "createProject", `{"name":"p"}`, `1`),
+		rpc(102, "createTask", `{"project_id":1,"title":"t"}`, `1`),
+		rpc(103, "getTask", `{"task_id":1}`, `{"id":"1"}`),
+		rpc(104, "createComment", `{"task_id":1,"user_id":2,"content":"c"}`, `1`),
+		rpc(105, "updateTask", `{"id":1,"title":"t2"}`, `true`),
+		rpc(106, "closeTask", `{"task_id":1}`, `true`),
+		rpc(107, "removeComment", `{"comment_id":1}`, `true`),
+		rpc(108, "setTaskTags", `{"project_id":1,"task_id":1,"tags":["x"]}`, `true`),
+	})
+	ws, err := ParseWrites(har, mustTarget(t, u+"/"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ws.RPCReads != 1 {
+		t.Errorf("getTask is a read: %+v", ws)
+	}
+	byRPC := map[string]Write{}
+	for _, w := range ws.Writes {
+		byRPC[w.RPC] = w
+	}
+	for method, want := range map[string]string{
+		"createTask":    "createProject",
+		"createComment": "createTask",
+		"updateTask":    "createTask",
+		"closeTask":     "createTask",
+		"removeComment": "createComment",
+	} {
+		c := byRPC[method].Create
+		if c == nil || c.RPCMethod != want || c.OldID != "1" || len(c.Field) != 1 || c.Field[0] != resultField {
+			t.Errorf("%s: create %+v, want the bare result of %s", method, c, want)
+		}
+	}
+	// project_id and task_id both name a create of the same noun; either
+	// is right, the comment is not.
+	if c := byRPC["setTaskTags"].Create; c == nil || (c.RPCMethod != "createProject" && c.RPCMethod != "createTask") {
+		t.Errorf("setTaskTags: %+v", c)
+	}
+	// A bare result of a method that does not create is not an ID.
+	if c := byRPC["createProject"].Create; c != nil {
+		t.Errorf("createProject names nothing made earlier: %+v", c)
+	}
+}
+
+func TestSameNoun(t *testing.T) {
+	w := func(method, params string) Write {
+		return Write{RPC: method, RPCKind: rpcJSONRPC, Body: []byte(fmt.Sprintf(`{"jsonrpc":"2.0","method":%q,"id":9,"params":%s}`, method, params))}
+	}
+	for _, c := range []struct {
+		w      Write
+		create string
+		want   bool
+	}{
+		{w("closeTask", `{"task_id":1}`), "createTask", true},
+		{w("closeTask", `{"task_id":1}`), "createComment", false},
+		{w("updateTask", `{"id":1}`), "createTask", true},
+		{w("updateTask", `{"id":1}`), "createComment", false},
+		{w("removeComment", `{"comment_id":1}`), "createComment", true},
+		{w("closeTask", `{"task_id":2}`), "createTask", false},
+		{w("closeTask", `{"task_id":1}`), "create", false},
+	} {
+		if got := sameNoun(c.w, "1", c.create); got != c.want {
+			t.Errorf("sameNoun(%s, %s) = %v", c.w.Body, c.create, got)
+		}
 	}
 }
