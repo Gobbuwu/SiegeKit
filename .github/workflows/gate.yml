@@ -167,22 +167,23 @@ jobs:
           docker logs juice-shop
           exit 1
       - name: Accounts for the access-control check
-        # Two new accounts (ADR 0035). The HAR is written by hand from 12 GET
+        # Three new accounts (ADR 0035; C, ADR 0051). The HAR is written by hand from 12 GET
         # requests A can make, with A's token as header and cookie, as a
         # browser recording would hold it, and A's JSON login (ADR 0047:
         # access-control replays only the GETs, zap-active attacks all 13);
-        # B's session goes in a file read by the next step.
+        # B's and C's sessions go in files read by the next step. Juice Shop
+        # has no space A shares with B, so C reads what B reads.
         run: |
           set -euo pipefail
           base=http://127.0.0.1:3000
           pw='Gate-access-control-1'
-          for who in a b; do
+          for who in a b c; do
             curl -sf -o /dev/null -H 'Content-Type: application/json' \
               -d "{\"email\":\"gate-$who@siegekit.test\",\"password\":\"$pw\",\"passwordRepeat\":\"$pw\",\"securityQuestion\":{\"id\":1},\"securityAnswer\":\"x\"}" "$base/api/Users"
           done
           login() { curl -sf -H 'Content-Type: application/json' -d "{\"email\":\"gate-$1@siegekit.test\",\"password\":\"$pw\"}" "$base/rest/user/login"; }
-          la=$(login a); lb=$(login b)
-          ta=$(jq -r .authentication.token <<<"$la"); bid=$(jq -r .authentication.bid <<<"$la"); tb=$(jq -r .authentication.token <<<"$lb")
+          la=$(login a); lb=$(login b); lc=$(login c)
+          ta=$(jq -r .authentication.token <<<"$la"); bid=$(jq -r .authentication.bid <<<"$la"); tb=$(jq -r .authentication.token <<<"$lb"); tc=$(jq -r .authentication.token <<<"$lc")
           uid=$(curl -sf -H "Cookie: token=$ta" "$base/rest/user/whoami" | jq -r .user.id)
           jq -n --arg base "$base" --arg t "$ta" --arg bid "$bid" --arg uid "$uid" --arg pw "$pw" '{log: {entries: (([
             "/rest/basket/\($bid)", "/api/Users/\($uid)", "/api/Users", "/api/Complaints", "/api/Cards", "/api/Addresss",
@@ -192,6 +193,7 @@ jobs:
             + [{request: {method: "POST", url: ($base + "/rest/user/login"), headers: [{name: "Content-Type", value: "application/json"}],
                 postData: {mimeType: "application/json", text: ({email: "gate-a@siegekit.test", password: $pw} | tojson)}}}])}}' > "$RUNNER_TEMP/a.har"
           printf 'Authorization: Bearer %s\nCookie: token=%s\n' "$tb" "$tb" > "$RUNNER_TEMP/session-b"
+          printf 'Authorization: Bearer %s\nCookie: token=%s\n' "$tc" "$tc" > "$RUNNER_TEMP/session-c"
           echo "A: user $uid, basket $bid"
           echo "A_USER=$uid" >> "$GITHUB_ENV"
           echo "A_BASKET=$bid" >> "$GITHUB_ENV"
@@ -214,10 +216,11 @@ jobs:
         # it links (9 requests, measured 2026-11-20; ADR 0032), plus a
         # <file>.map for each of the 8, none of them a source map (17
         # requests, measured 2026-11-21; ADR 0046).
-        # access-control must replay the 12 GET requests (36 sent), report
-        # exactly 4 reads by B: A's basket and user record, the user list
-        # and the complaints, and the password hashes /rest/memories/ gives
-        # anyone (measured 2026-11-20; ADR 0035).
+        # access-control must replay the 12 GET requests (48 sent: A, C, B
+        # and no login), report exactly 4 reads by C, which B gets too: A's
+        # basket and user record, the user list and the complaints, and the
+        # password hashes /rest/memories/ gives anyone (measured 2026-11-20,
+        # ADR 0035; with C 2026-11-22, ADR 0051).
         # Juice Shop's product search has no rate limit (20 requests all
         # answered 200 with no rate-limit header, measured 2026-11-20), so
         # rate-limit must send 20 requests and report rate-not-limited
@@ -227,8 +230,8 @@ jobs:
         # both confirmed by hand (2 of 2 local runs, 2026-11-21; ADR 0047).
         run: |
           # access-control asks a person at a terminal to type that accounts
-          # A and B are test accounts (ADR 0035 item 11). The gate created
-          # both accounts above, so it types the answer through a
+          # A, B and C are test accounts (ADR 0035 item 11). The gate created
+          # the accounts above, so it types the answer through a
           # pseudo-terminal (script), standing for the owner's confirmation
           # as --authorized-host does (ADR 0044, owner 2026-11-21).
           cat > "$RUNNER_TEMP/gate-scan.sh" <<'SH'
@@ -241,14 +244,15 @@ jobs:
           SH
           chmod +x "$RUNNER_TEMP/gate-scan.sh"
           SIEGEKIT_SESSION_B="$(cat "$RUNNER_TEMP/session-b")"
-          export SIEGEKIT_SESSION_B
+          SIEGEKIT_SESSION_C="$(cat "$RUNNER_TEMP/session-c")"
+          export SIEGEKIT_SESSION_B SIEGEKIT_SESSION_C
           set +e
           printf 'test accounts\n' | script -qec "$RUNNER_TEMP/gate-scan.sh" "$RUNNER_TEMP/scan.log"
           code=$?
           set -e
           echo "exit code $code"
           if [ "$code" -ne 0 ] && [ "$code" -ne 3 ]; then exit 1; fi
-          grep -q 'Type "test accounts" to confirm' "$RUNNER_TEMP/scan.log"
+          grep -q 'B (SIEGEKIT_SESSION_B) and C (SIEGEKIT_SESSION_C). Type "test accounts" to confirm' "$RUNNER_TEMP/scan.log"
           r="$RUNNER_TEMP/report/report.json"
           jq -e --arg e "$EXPECT_ENGINE" '.environment.engine | (.name + (if .rootless then " rootless" else " rootful" end)) == $e' "$r"
           jq '.plugins[] | {id, status, cause, reason, input, result, requests, refused, refusedTo, findings}' "$r"
@@ -259,7 +263,7 @@ jobs:
           jq -e '[.plugins[] | select(.id == "login-throttle" and .requests == 20)] | length == 1' "$r"
           jq -e '[.plugins[] | select(.id == "served-secrets" and .requests >= 9 and (.result | startswith("scanned ")) and (.result | contains("tried <file>.map for 8 file(s) naming no source map, 8 not one")))] | length == 1' "$r"
           jq -e '[.findings[] | select(.ruleId == "login-not-limited" and .location.uri == "http://127.0.0.1:3000/rest/user/login")] | length == 1' "$r"
-          jq -e '[.plugins[] | select(.id == "access-control" and .requests == 36)] | length == 1' "$r"
+          jq -e '[.plugins[] | select(.id == "access-control" and .requests == 48 and (.result | contains(": 4 readable by account C or B, 0 only by account B (low),")))] | length == 1' "$r"
           jq -e '[.plugins[] | select(.id == "zap-active" and .input == "13 recorded request(s) from a.har")] | length == 1' "$r"
           for u in /rest/products/search /rest/user/login; do
             jq -e --arg u "http://127.0.0.1:3000$u" '[.findings[] | select(.ruleId == "40018" and .severity == "high" and (.location.uri | startswith($u)))] | length > 0' "$r" > /dev/null || { echo "zap-active: no 40018 on $u"; exit 1; }
@@ -267,6 +271,7 @@ jobs:
           jq -e '[.plugins[] | select(.id == "rate-limit" and .requests == 20 and .input == "GET http://127.0.0.1:3000/rest/products/search?q=apple")] | length == 1' "$r"
           jq -e '[.findings[] | select(.ruleId == "rate-not-limited" and .severity == "low" and .location.uri == "http://127.0.0.1:3000/rest/products/search")] | length == 1' "$r"
           jq -e --arg b "/rest/basket/$A_BASKET" --arg u "/api/Users/$A_USER" '[.findings[] | select(.ruleId == "cross-account-read") | .location.uri | ltrimstr("http://127.0.0.1:3000")] | sort == ([$b, $u, "/api/Users", "/api/Complaints"] | sort)' "$r"
+          jq -e '[.findings[] | select(.ruleId == "cross-account-read") | .message | contains("answered account C (SIEGEKIT_SESSION_C") and contains("Account B got the same answer.")] | all and length == 4' "$r"
           jq -e '[.findings[] | select(.ruleId == "no-login-secret") | .location.uri] == ["http://127.0.0.1:3000/rest/memories/"]' "$r"
           for rule in 10038 10098; do
             jq -e --arg rule "$rule" '[.findings[] | select(.ruleId == $rule)] | length > 0' "$r" > /dev/null || { echo "ZAP rule $rule not reported"; exit 1; }

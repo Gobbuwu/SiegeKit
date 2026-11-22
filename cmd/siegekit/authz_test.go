@@ -25,7 +25,7 @@ import (
 type authzCall struct {
 	cfg  egress.Config
 	reqs []authz.Request
-	b    http.Header
+	b, c http.Header
 	rate float64
 }
 
@@ -34,8 +34,8 @@ func useAuthz(t *testing.T, res authz.Result, err error) *[]authzCall {
 	t.Helper()
 	var calls []authzCall
 	old := authzCheck
-	authzCheck = func(_ context.Context, cfg egress.Config, reqs []authz.Request, b http.Header, rate float64) (authz.Result, error) {
-		calls = append(calls, authzCall{cfg, reqs, b, rate})
+	authzCheck = func(_ context.Context, cfg egress.Config, reqs []authz.Request, acc authz.Accounts, rate float64) (authz.Result, error) {
+		calls = append(calls, authzCall{cfg, reqs, acc.B, acc.C, rate})
 		return res, err
 	}
 	t.Cleanup(func() { authzCheck = old })
@@ -174,7 +174,7 @@ func TestScanURLAccessControl(t *testing.T) {
 	r := readReport()
 	p := r.Plugins[0]
 	if p.Status != report.Ran || p.Requests != 7 || p.Findings != 1 || p.Input != "a.har, 2 request(s) recorded as account A; 1 route(s) from the OpenAPI spec http://localhost:3000/openapi.json; account B from SIEGEKIT_SESSION_B" ||
-		p.Result != "replayed 3 request(s) (2 from the HAR file, 1 from the OpenAPI spec): 1 readable by account B, 0 readable with no login, 0 with secret fields for no login; 1 static files not replayed" {
+		p.Result != "replayed 3 request(s) (2 from the HAR file, 1 from the OpenAPI spec): 1 readable by account B; account C not tested (SIEGEKIT_SESSION_C not set), 0 readable with no login, 0 with secret fields for no login; 1 static files not replayed" {
 		t.Errorf("plugin %+v", p)
 	}
 	var af *findings.Finding
@@ -195,12 +195,37 @@ func TestScanURLAccessControl(t *testing.T) {
 	useData(t)
 	calls = useAuthz(t, authz.Result{ATried: 2, Requests: 4}, nil)
 	code, out = scan("--har", harFile, "--only", "access-control", "http://localhost:3000/")
-	if code != report.ExitClean || len(*calls) != 1 || (*calls)[0].b != nil || len((*calls)[0].reqs) != 2 || !strings.Contains(out, "(SIEGEKIT_SESSION_B not set: account B is not tested)") || !strings.Contains(out, "OpenAPI spec: no OpenAPI spec was given with --openapi and none was found at") || strings.Contains(out, "tests that need one do not run") {
+	if code != report.ExitClean || len(*calls) != 1 || (*calls)[0].b != nil || len((*calls)[0].reqs) != 2 || !strings.Contains(out, "as account A and with no login (SIEGEKIT_SESSION_B and SIEGEKIT_SESSION_C not set: accounts B and C are not tested)") || !strings.Contains(out, "OpenAPI spec: no OpenAPI spec was given with --openapi and none was found at") || strings.Contains(out, "tests that need one do not run") {
 		t.Errorf("no B: exit %d\n%s", code, out)
 	}
-	if p := readReport().Plugins[0]; p.Input != "a.har, 2 request(s) recorded as account A" || !strings.Contains(p.Result, "account B not tested") {
+	if p := readReport().Plugins[0]; p.Input != "a.har, 2 request(s) recorded as account A" || !strings.Contains(p.Result, "accounts B and C not tested") {
 		t.Errorf("no B: %+v", p)
 	}
+
+	// Account C (ADR 0051): its session is passed, the question and the
+	// plan name it, and a mistake in it is refused before any request.
+	t.Setenv(authz.SessionEnv, "Authorization: Bearer B")
+	t.Setenv(authz.SessionEnvC, "Authorization: Bearer C")
+	useActive(t)
+	useData(t)
+	calls = useAuthz(t, authz.Result{ATried: 2, Requests: 8, BTested: true, CTested: true}, nil)
+	code, out = scan("--har", harFile, "--only", "access-control", "http://localhost:3000/")
+	if code != report.ExitClean || len(*calls) != 1 || (*calls)[0].b.Get("Authorization") != "Bearer B" || (*calls)[0].c.Get("Authorization") != "Bearer C" ||
+		!strings.Contains(out, `with the sessions of accounts A (the HAR file's session), B (SIEGEKIT_SESSION_B) and C (SIEGEKIT_SESSION_C). Type "test accounts"`) ||
+		!strings.Contains(out, "from a.har as account A, as account C, as account B and with no login\n") {
+		t.Errorf("C: exit %d\n%s", code, out)
+	}
+	if p := readReport().Plugins[0]; !strings.HasSuffix(p.Input, "; account B from SIEGEKIT_SESSION_B; account C from SIEGEKIT_SESSION_C") || !strings.Contains(p.Result, "readable by account C or B") {
+		t.Errorf("C: %+v", p)
+	}
+	t.Setenv(authz.SessionEnvC, "no colon")
+	f = useActive(t)
+	calls = useAuthz(t, authz.Result{}, nil)
+	if code, out = scan("--har", harFile, "--only", "access-control", "http://localhost:3000/"); code != exitInvalid || !strings.Contains(out, "SIEGEKIT_SESSION_C must hold") || len(*calls)+len(f.specs) != 0 {
+		t.Errorf("bad C: exit %d\n%s", code, out)
+	}
+	os.Unsetenv(authz.SessionEnvC)
+	os.Unsetenv(authz.SessionEnv)
 
 	// A failed check makes the run incomplete; --profile quick runs it.
 	useActive(t)

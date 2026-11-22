@@ -418,7 +418,7 @@ func TestWriteCheck(t *testing.T) {
 	tu := mustTarget(t, srv.URL+"/")
 	cfg := egress.Config{Target: tu, Addrs: []netip.Addr{netip.MustParseAddr("127.0.0.1")}, Version: "test"}
 	w := appWrites(t, srv)
-	res, err := WriteCheck(context.Background(), cfg, w.Writes, http.Header{"Authorization": {"Bearer B"}}, "alice", 10, target.Local)
+	res, err := WriteCheck(context.Background(), cfg, w.Writes, Accounts{B: http.Header{"Authorization": {"Bearer B"}}}, "alice", 10, target.Local)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -501,7 +501,7 @@ func TestWriteCheckWithoutCopies(t *testing.T) {
 		t.Fatal(a, err)
 	}
 	ws := []Write{{Method: "DELETE", Path: "/api/items/8", Header: http.Header{"Authorization": {"Bearer A"}}}}
-	res, err := WriteCheck(context.Background(), cfg, ws, http.Header{"Authorization": {"Bearer B"}}, "", 10, target.Local)
+	res, err := WriteCheck(context.Background(), cfg, ws, Accounts{B: http.Header{"Authorization": {"Bearer B"}}}, "", 10, target.Local)
 	if err != nil || len(res.Replays) != 2 || res.Replays[1].NotSent == "" || res.Replays[0].Recreated {
 		t.Fatalf("%+v %v", res, err)
 	}
@@ -515,16 +515,16 @@ func TestWriteCheckWithoutCopies(t *testing.T) {
 	// the app redirects to its login page, which is a refusal.
 	form := Write{Method: "POST", Path: "/orgs/3/settings", RecordedStatus: 303, CSRF: true,
 		Header: http.Header{"Authorization": {"Bearer A"}, "Content-Type": {"application/x-www-form-urlencoded"}}, Body: []byte("_csrf=tok-alice-0123456789&name=A")}
-	res, err = WriteCheck(context.Background(), cfg, []Write{form}, nil, "", 10, target.Local)
+	res, err = WriteCheck(context.Background(), cfg, []Write{form}, Accounts{}, "", 10, target.Local)
 	if r := res.Replays[0]; err != nil || !r.CSRFSwapped || r.Answer.Status != http.StatusSeeOther || !strings.HasPrefix(r.Location, "/login") || r.Accepted() {
 		t.Errorf("no-login form %+v %v", r, err)
 	}
 	// Without B, only the request with no login is sent.
-	res, err = WriteCheck(context.Background(), cfg, []Write{{Method: "PUT", Path: "/api/cards/7", Header: http.Header{"Authorization": {"Bearer A"}}}}, nil, "", 10, target.Local)
+	res, err = WriteCheck(context.Background(), cfg, []Write{{Method: "PUT", Path: "/api/cards/7", Header: http.Header{"Authorization": {"Bearer A"}}}}, Accounts{}, "", 10, target.Local)
 	if err != nil || len(res.Replays) != 1 || res.Replays[0].Who != AsNoLogin || res.BTested {
 		t.Fatalf("%+v %v", res, err)
 	}
-	if s := res.WriteSummary(nil); !strings.Contains(s, "account B is not tested") || !strings.Contains(s, "none was accepted") {
+	if s := res.WriteSummary(nil); !strings.Contains(s, "accounts B and C are not tested") || !strings.Contains(s, "none was accepted") {
 		t.Errorf("%q", s)
 	}
 }
@@ -547,7 +547,7 @@ func TestWriteCheckMedium(t *testing.T) {
 		{Method: "POST", Path: "/repos/alice/pub/issues", Header: http.Header{"Authorization": {"Bearer A"}}, Body: []byte(`{"title":"x"}`)},
 		{Method: "PUT", Path: "/user/starred/alice/pub", Header: http.Header{"Authorization": {"Bearer A"}}},
 	}
-	res, err := WriteCheck(context.Background(), cfg, ws, http.Header{"Authorization": {"Bearer B"}}, "alice", 10, target.Local)
+	res, err := WriteCheck(context.Background(), cfg, ws, Accounts{B: http.Header{"Authorization": {"Bearer B"}}}, "alice", 10, target.Local)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -584,7 +584,7 @@ func TestWriteCheckNoActionGET(t *testing.T) {
 		{Method: "PUT", Path: "/api/orders/7/approve", Header: http.Header{"Authorization": {"Bearer A"}}},
 		{Method: "POST", Path: "/orders/7/edit", CSRF: true, Header: http.Header{"Authorization": {"Bearer A"}, "Referer": {srv.URL + "/orders/7/cancel"}, "Content-Type": {"application/x-www-form-urlencoded"}}, Body: []byte("_csrf=old&x=1")},
 	}
-	res, err := WriteCheck(context.Background(), cfg, ws, http.Header{"Authorization": {"Bearer B"}}, "alice", 10, target.Local)
+	res, err := WriteCheck(context.Background(), cfg, ws, Accounts{B: http.Header{"Authorization": {"Bearer B"}}}, "alice", 10, target.Local)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -606,10 +606,10 @@ func TestWriteCheckNoActionGET(t *testing.T) {
 func TestWriteCheckRefuses(t *testing.T) {
 	tu := mustTarget(t, "http://127.0.0.1:1/")
 	ws := []Write{{Method: "DELETE", Path: "/x"}}
-	if _, err := WriteCheck(context.Background(), egress.Config{Target: tu}, ws, nil, "", 1, target.Deployed); err == nil || !strings.Contains(err.Error(), "local targets") {
+	if _, err := WriteCheck(context.Background(), egress.Config{Target: tu}, ws, Accounts{}, "", 1, target.Deployed); err == nil || !strings.Contains(err.Error(), "local targets") {
 		t.Errorf("deployed: %v", err)
 	}
-	if _, err := WriteCheck(context.Background(), egress.Config{Target: tu, ReadOnly: true}, ws, nil, "", 1, target.Local); err == nil || !strings.Contains(err.Error(), "read-only") {
+	if _, err := WriteCheck(context.Background(), egress.Config{Target: tu, ReadOnly: true}, ws, Accounts{}, "", 1, target.Local); err == nil || !strings.Contains(err.Error(), "read-only") {
 		t.Errorf("read-only: %v", err)
 	}
 }
@@ -754,7 +754,7 @@ func TestWriteCheckGraphQL(t *testing.T) {
 			t.Fatalf("%v %+v", err, ws)
 		}
 		cfg := egress.Config{Target: tu, Addrs: []netip.Addr{netip.MustParseAddr("127.0.0.1")}, Version: "test"}
-		res, err := WriteCheck(context.Background(), cfg, ws.Writes, http.Header{"Authorization": {"Bearer B"}}, "alice", 10, target.Local)
+		res, err := WriteCheck(context.Background(), cfg, ws.Writes, Accounts{B: http.Header{"Authorization": {"Bearer B"}}}, "alice", 10, target.Local)
 		srv.Close()
 		if err != nil {
 			t.Fatal(err)
@@ -859,7 +859,7 @@ func TestWriteCheckTriesAndSteps(t *testing.T) {
 			t.Fatalf("writes %q\nwant %q", labels, want)
 		}
 		cfg := egress.Config{Target: tu, Addrs: []netip.Addr{netip.MustParseAddr("127.0.0.1")}, Version: "test"}
-		res, err := WriteCheck(context.Background(), cfg, ws.Writes, http.Header{"Authorization": {"Bearer B"}}, "alice", 10, target.Local)
+		res, err := WriteCheck(context.Background(), cfg, ws.Writes, Accounts{B: http.Header{"Authorization": {"Bearer B"}}}, "alice", 10, target.Local)
 		srv.Close()
 		if err != nil {
 			t.Fatal(err)

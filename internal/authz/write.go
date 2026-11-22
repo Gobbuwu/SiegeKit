@@ -20,6 +20,7 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -822,14 +823,16 @@ func splitWords(s string) []string {
 // Who replayed a write.
 const (
 	AsB       = "B"
+	AsC       = "C"
 	AsNoLogin = "no login"
 )
 
-// WriteReplay is one write replayed as B or with no login.
+// WriteReplay is one write replayed as C, as B or with no login.
 type WriteReplay struct {
 	Write
-	Who  string
-	Sent string // the path as sent, with the re-created object's ID
+	Index int // the write's place in the list WriteCheck was given
+	Who   string
+	Sent  string // the path as sent, with the re-created object's ID
 	// Recreated: A's create was sent again and the write used its new
 	// object. RecreateFailed: it was sent and gave no ID, so the write
 	// used A's recorded object.
@@ -862,6 +865,7 @@ type WriteResult struct {
 	// names no ID or login, which B may make as its own.
 	PlainCreates []string
 	BTested      bool
+	CTested      bool
 	StepsSent    int // A's earlier writes sent again before replays
 }
 
@@ -900,11 +904,12 @@ func plainCreate(w Write, loginName string) bool {
 	return !found
 }
 
-// WriteCheck replays the writes as account B (b, nil for none) and with no
-// login, one request at a time, at most rate per second. It changes data,
-// so it runs only on local targets with a configuration that allows
-// writes (ADR 0049).
-func WriteCheck(ctx context.Context, cfg egress.Config, ws []Write, b http.Header, loginName string, rate float64, mode target.Mode) (WriteResult, error) {
+// WriteCheck replays the writes as account C, with no login and as
+// account B (acc, each nil for none; without C, B goes before no login),
+// one request at a time, at most rate per second. C goes first, so nothing
+// B changes can make C's replay fail (ADR 0051). It changes data, so it runs only on local targets with a
+// configuration that allows writes (ADR 0049).
+func WriteCheck(ctx context.Context, cfg egress.Config, ws []Write, acc Accounts, loginName string, rate float64, mode target.Mode) (WriteResult, error) {
 	if mode != target.Local {
 		return WriteResult{}, errors.New("the write replay runs only on local targets")
 	}
@@ -915,7 +920,7 @@ func WriteCheck(ctx context.Context, cfg egress.Config, ws []Write, b http.Heade
 	if rate > 0 {
 		interval = time.Duration(float64(time.Second) / rate)
 	}
-	res := WriteResult{BTested: b != nil}
+	res := WriteResult{BTested: acc.B != nil, CTested: acc.C != nil}
 	var last time.Time
 	var lastHeader http.Header
 	do := func(method, p string, h http.Header, body []byte) (Answer, error) {
@@ -940,18 +945,28 @@ func WriteCheck(ctx context.Context, cfg egress.Config, ws []Write, b http.Heade
 		}
 		return Answer{Status: a.Status, Body: a.Body}, nil
 	}
-	session := sessionNames(b)
-	for _, w := range ws {
-		bOnRecorded := false // B's replay was accepted on A's recorded object
+	session := sessionNames(acc.B, acc.C)
+	sessionOf := map[string]http.Header{AsB: acc.B, AsC: acc.C}
+	for i, w := range ws {
+		// onRecorded names the account whose replay was accepted on A's
+		// recorded object, which it may have changed or deleted.
+		onRecorded := ""
 		plain := plainCreate(w, loginName)
-		for _, who := range []string{AsB, AsNoLogin} {
-			if who == AsB && (b == nil || plain) {
-				if b != nil {
+		// With C, no login goes before B, so each write that C and no
+		// login were refused on shows whether C's session works (CWorks)
+		// even when B then changes A's recorded object (ADR 0051 item 4).
+		order := []string{AsB, AsNoLogin}
+		if acc.C != nil {
+			order = []string{AsC, AsNoLogin, AsB}
+		}
+		for _, who := range order {
+			if who != AsNoLogin && (sessionOf[who] == nil || plain) {
+				if sessionOf[who] != nil {
 					res.PlainCreates = appendOnce(res.PlainCreates, w.Method+" "+pathOf(w.Path))
 				}
 				continue
 			}
-			rp := WriteReplay{Write: w, Who: who, Sent: w.Path}
+			rp := WriteReplay{Write: w, Index: i, Who: who, Sent: w.Path}
 			sw := w
 			var copyID string
 			if w.Create != nil {
@@ -977,8 +992,8 @@ func WriteCheck(ctx context.Context, cfg egress.Config, ws []Write, b http.Heade
 				sw = sw.withID(w.ClientID, freshID(w.ClientID))
 				rp.Sent = sw.Path
 			}
-			if !rp.Recreated && who == AsNoLogin && bOnRecorded {
-				rp.NotSent = "account B's replay was accepted on account A's recorded object, which it may have changed or deleted"
+			if !rp.Recreated && onRecorded != "" {
+				rp.NotSent = whoName(onRecorded) + "'s replay was accepted on account A's recorded object, which it may have changed or deleted"
 				res.Replays = append(res.Replays, rp)
 				continue
 			}
@@ -1018,10 +1033,8 @@ func WriteCheck(ctx context.Context, cfg egress.Config, ws []Write, b http.Heade
 				}
 			}
 			h := without(sw.Header, session)
-			if who == AsB {
-				for k, vs := range b {
-					h[k] = append([]string(nil), vs...)
-				}
+			for k, vs := range sessionOf[who] {
+				h[k] = append([]string(nil), vs...)
 			}
 			body := sw.Body
 			if w.CSRF {
@@ -1079,8 +1092,8 @@ func WriteCheck(ctx context.Context, cfg egress.Config, ws []Write, b http.Heade
 					res.CleanedUp++
 				}
 			}
-			if who == AsB && !rp.Recreated && rp.Accepted() && (w.Method != http.MethodPost || hasID(w.Path)) {
-				bOnRecorded = true
+			if who != AsNoLogin && !rp.Recreated && rp.Accepted() && (w.Method != http.MethodPost || hasID(w.Path)) {
+				onRecorded = who
 			}
 			res.Replays = append(res.Replays, rp)
 		}
@@ -1208,14 +1221,72 @@ func (r WriteReplay) Severity() (findings.Severity, bool) {
 	return findings.Medium, true
 }
 
+// cRefused reports whether C's replay was refused in a way that says
+// something about access: it was sent, got a clear answer (clearAnswer)
+// that was not accepted, and carried C's own CSRF token if the write needs
+// one (ADR 0051 item 3).
+func (r WriteReplay) cRefused() bool {
+	return r.NotSent == "" && clearAnswer(r.Answer) && !r.Accepted() && (!r.CSRF || r.CSRFSwapped)
+}
+
+// CWorks reports whether C's session was seen to work in the write
+// replay: for one write sent both as C and with no login, C got an answer
+// a logged-out client does not (seenLoggedIn, ADR 0051 item 4).
+func (r WriteResult) CWorks() bool {
+	if !r.CTested {
+		return false
+	}
+	c := map[int]Answer{}
+	for _, rp := range r.Replays {
+		if rp.Who == AsC && rp.NotSent == "" {
+			c[rp.Index] = rp.Answer
+		}
+	}
+	for _, rp := range r.Replays {
+		if a, ok := c[rp.Index]; ok && rp.Who == AsNoLogin && rp.NotSent == "" && seenLoggedIn(a, rp.Answer) {
+			return true
+		}
+	}
+	return false
+}
+
 // WriteFindings turns the accepted replays into findings at the recorded
-// write's URL, without the query.
+// write's URL, without the query. With account C (ADR 0051), C's accepted
+// replay is reported as B's is; B's accepted replay is low when C's was
+// refused, and folded into C's finding when C's was accepted too.
 func WriteFindings(origin string, res WriteResult) []findings.Finding {
 	var out []findings.Finding
+	cWorks := res.CWorks()
+	byC := map[int]WriteReplay{}
+	for _, r := range res.Replays {
+		if r.Who == AsC {
+			byC[r.Index] = r
+		}
+	}
 	for _, r := range res.Replays {
 		sev, ok := r.Severity()
 		if !ok {
 			continue
+		}
+		rc, hasC := byC[r.Index]
+		_, cOK := rc.Severity()
+		alsoB := ""
+		switch {
+		case r.Who == AsB && hasC && cOK:
+			continue // folded into C's finding below
+		case r.Who == AsC:
+			for _, rb := range res.Replays {
+				if rb.Who == AsB && rb.Index == r.Index {
+					if bSev, bOK := rb.Severity(); bOK {
+						alsoB = " Account B's replay was accepted too."
+						if bSev > sev {
+							// B's replay showed the change; C's did not.
+							sev, r = bSev, rb
+							alsoB = " Account B's replay was accepted too, and the proof below is from B's replay; account C's replay was accepted, but SiegeKit could not see A's data change after it."
+						}
+					}
+				}
+			}
 		}
 		pathOnly, _, _ := strings.Cut(r.Path, "?")
 		f := findings.Finding{Severity: sev, Location: findings.Location{URI: origin + pathOnly}, Family: Family}
@@ -1235,16 +1306,39 @@ func WriteFindings(origin string, res WriteResult) []findings.Finding {
 		if r.Recreated {
 			obj = "a copy of account A's object that SiegeKit made first with A's recorded create"
 		}
-		if r.Who == AsB {
-			cwe := "CWE-862"
-			if hasID(r.Path) {
-				cwe = "CWE-639"
+		cwe := "CWE-862"
+		if hasID(r.Path) {
+			cwe = "CWE-639"
+		}
+		label := opLabel(pathOnly, r.GraphQL, r.RPC)
+		switch {
+		case alsoB != "" || r.Who == AsC:
+			f.RuleID, f.Title, f.CWEs = "cross-account-write", "Another account can change this data", []string{cwe}
+			f.Message = fmt.Sprintf("%s %s, %s as account C (%s, an account outside every space account A shares) on %s, was accepted (status %d). Any logged-in account can likely change or delete account A's data: broken access control (OWASP API1 and API5).%s %s", r.Method, label, how, SessionEnvC, obj, rc.Answer.Status, alsoB, proof)
+		case r.Who == AsB && res.CTested && cWorks && hasC && rc.cRefused():
+			f.Severity, f.RuleID, f.Title, f.CWEs = findings.Low, "b-only-write", "Only account B can change this data", []string{cwe}
+			f.Message = fmt.Sprintf("%s %s, %s as account B on %s, was accepted (status %d), while account C (%s, an account outside every space account A shares) was refused (status %d). B has access C lacks: expected if B is a member of a space A shares with it, such as a group, team, project or conversation; a flaw if B should not have it, such as a role or group the app trusts wrongly. Check it by hand. %s", r.Method, label, how, obj, r.Answer.Status, SessionEnvC, rc.Answer.Status, proof)
+		case r.Who == AsB:
+			note := ""
+			if res.CTested {
+				switch {
+				case !cWorks:
+					note = " Account C was not compared: its session got the same status as a request with no login on every write, so it may have expired (check " + SessionEnvC + ")."
+				case !hasC:
+					note = " Account C was not compared: this write was not sent as account C."
+				case rc.NotSent != "":
+					note = " Account C was not compared: " + rc.NotSent + "."
+				case rc.CSRF && !rc.CSRFSwapped:
+					note = " Account C was not compared: no page gave account C its own CSRF token, so its refusal says nothing about access control."
+				default:
+					note = fmt.Sprintf(" Account C was not compared: its replay got no clear answer (%s).", answerText(rc.Answer))
+				}
 			}
 			f.RuleID, f.Title, f.CWEs = "cross-account-write", "Another account can change this data", []string{cwe}
-			f.Message = fmt.Sprintf("%s %s, %s as account B on %s, was accepted (status %d). Account B can likely change or delete account A's data: broken access control (OWASP API1 and API5). %s", r.Method, opLabel(pathOnly, r.GraphQL, r.RPC), how, obj, r.Answer.Status, proof)
-		} else {
+			f.Message = fmt.Sprintf("%s %s, %s as account B on %s, was accepted (status %d). Account B can likely change or delete account A's data: broken access control (OWASP API1 and API5). %s%s", r.Method, label, how, obj, r.Answer.Status, proof, note)
+		default:
 			f.RuleID, f.Title, f.CWEs = "no-login-write", "Data can be changed with no login", []string{"CWE-306"}
-			f.Message = fmt.Sprintf("%s %s, %s with no login on %s, was accepted (status %d). Anyone may be able to change this data: missing authentication (OWASP API2). %s", r.Method, opLabel(pathOnly, r.GraphQL, r.RPC), how, obj, r.Answer.Status, proof)
+			f.Message = fmt.Sprintf("%s %s, %s with no login on %s, was accepted (status %d). Anyone may be able to change this data: missing authentication (OWASP API2). %s", r.Method, label, how, obj, r.Answer.Status, proof)
 		}
 		out = append(out, f)
 	}
@@ -1258,7 +1352,17 @@ func WriteFindings(origin string, res WriteResult) []findings.Finding {
 // WriteSummary says in one line what was replayed and what may have
 // changed, so the person knows what to reset (ADR 0049 item 6).
 func (r WriteResult) WriteSummary(w *Writes) string {
-	var high, medium, sent int
+	var high, medium, low, sent int
+	for _, f := range WriteFindings("", r) {
+		switch f.Severity {
+		case findings.High:
+			high++
+		case findings.Medium:
+			medium++
+		case findings.Low:
+			low++
+		}
+	}
 	var accepted, recreatedAt, notSent, recreateFailed []string
 	for _, rp := range r.Replays {
 		if rp.NotSent != "" {
@@ -1266,11 +1370,6 @@ func (r WriteResult) WriteSummary(w *Writes) string {
 			continue
 		}
 		sent++
-		if sev, ok := rp.Severity(); ok && sev == findings.High {
-			high++
-		} else if ok {
-			medium++
-		}
 		if rp.Accepted() {
 			accepted = appendOnce(accepted, fmt.Sprintf("%s as %s", Write{Method: rp.Method, Path: pathOf(rp.Sent), GraphQL: rp.GraphQL, RPC: rp.RPC}.Label(), whoName(rp.Who)))
 		}
@@ -1281,9 +1380,16 @@ func (r WriteResult) WriteSummary(w *Writes) string {
 			recreateFailed = appendOnce(recreateFailed, rp.Method+" "+pathOf(rp.Path))
 		}
 	}
-	who := "as account B and with no login"
-	if !r.BTested {
-		who = "with no login (" + SessionEnv + " not set: account B is not tested)"
+	var who string
+	switch {
+	case r.BTested && r.CTested:
+		who = "as account C, as account B and with no login"
+	case r.CTested:
+		who = "as account C and with no login (" + SessionEnv + " not set: account B is not tested)"
+	case r.BTested:
+		who = "as account B and with no login (" + SessionEnvC + " not set: account C is not tested)"
+	default:
+		who = "with no login (" + SessionEnv + " and " + SessionEnvC + " not set: accounts B and C are not tested)"
 	}
 	recorded, tried := uniqueWrites(r.Replays)
 	more := ""
@@ -1291,6 +1397,9 @@ func (r WriteResult) WriteSummary(w *Writes) string {
 		more = fmt.Sprintf(" and %d not in it (PUT, PATCH or DELETE on objects account A read or made)", tried)
 	}
 	s := fmt.Sprintf("replayed %d write(s) from the HAR file%s %s (%d replay(s)): %d high, %d medium", recorded, more, who, sent, high, medium)
+	if r.CTested {
+		s += fmt.Sprintf(", %d low (accepted for account B only)", low)
+	}
 	if len(accepted) > 0 {
 		s += fmt.Sprintf("; %d accepted and may have changed data: %s", len(accepted), strings.Join(accepted, ", "))
 	} else {
@@ -1313,10 +1422,17 @@ func (r WriteResult) WriteSummary(w *Writes) string {
 		notes = append(notes, "A's create gave no new ID for "+strings.Join(recreateFailed, ", ")+", so A's recorded object was used")
 	}
 	if len(r.PlainCreates) > 0 {
-		notes = append(notes, "not sent as account B because they make a new object that names no ID or login: "+strings.Join(r.PlainCreates, ", "))
+		notes = append(notes, "not sent as "+accountsName(r)+" because they make a new object that names no ID or login: "+strings.Join(r.PlainCreates, ", "))
 	}
 	if len(notSent) > 0 {
-		notes = append(notes, "not tested with no login, because B's replay was accepted on A's recorded object: "+strings.Join(notSent, ", "))
+		if r.CTested {
+			notes = append(notes, "not sent to every account, because an earlier account's replay was accepted on A's recorded object: "+strings.Join(notSent, ", "))
+		} else {
+			notes = append(notes, "not tested with no login, because B's replay was accepted on A's recorded object: "+strings.Join(notSent, ", "))
+		}
+	}
+	if r.CTested && !r.CWorks() && slices.ContainsFunc(r.Replays, func(rp WriteReplay) bool { return rp.Who == AsC && rp.NotSent == "" }) {
+		notes = append(notes, "account C got the same status as a request with no login on every write, so its session may have expired (check "+SessionEnvC+"); no finding of account B's was lowered")
 	}
 	if w != nil {
 		if w.Lockout > 0 {
@@ -1362,9 +1478,23 @@ func csrfWrites(rs []WriteReplay) (swapped, stale int) {
 	return len(sw), len(st)
 }
 
+// accountsName names the accounts besides A that the write replay used.
+func accountsName(r WriteResult) string {
+	switch {
+	case r.BTested && r.CTested:
+		return "accounts B and C"
+	case r.CTested:
+		return "account C"
+	}
+	return "account B"
+}
+
 func whoName(who string) string {
-	if who == AsB {
+	switch who {
+	case AsB:
 		return "account B"
+	case AsC:
+		return "account C"
 	}
 	return "no login"
 }

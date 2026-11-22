@@ -1,9 +1,11 @@
 // Package authz is SiegeKit's access-control check between accounts
 // (ADR 0011 item 1, ADR 0035). It replays the GET and HEAD requests of a
-// browser recording (a HAR file) made as account A three times: as A, as
-// account B and with no login. A request whose answer B gets exactly as A
-// does, while a request with no login is refused, is reported as data B can
-// likely read. One whose answer comes back to a request with no login,
+// browser recording (a HAR file) made as account A: as A, as account B,
+// as account C and with no login. A request whose answer B or C gets
+// exactly as A does, while a request with no login is refused, is reported
+// as data that account can likely read. C is an account outside every
+// space A shares (ADR 0051): what only B reads is reported as low, because
+// B may be a member of A's space. One whose answer comes back to a request with no login,
 // holding A's login name, is reported as data anyone can read. It sends no
 // other method. A GET can still change data, so GETs whose URL names an
 // action (change, save, delete...) are not replayed (ADR 0048).
@@ -40,12 +42,21 @@ const (
 	MaxRequests = 100      // requests replayed, each sent up to three times
 	MaxHARSize  = 64 << 20 // bytes read from the HAR file
 	MaxAnswer   = 2 << 20  // bytes read from each answer
-	maxSession  = 8 << 10  // bytes of SIEGEKIT_SESSION_B
+	maxSession  = 8 << 10  // bytes of SIEGEKIT_SESSION_B or SIEGEKIT_SESSION_C
 )
 
 // SessionEnv names the environment variable that holds account B's session
 // headers, one "Name: value" per line (answer 2a).
 const SessionEnv = "SIEGEKIT_SESSION_B"
+
+// SessionEnvC names the environment variable that holds account C's
+// session headers, in the same form: an account outside every space A
+// shares with B (ADR 0051).
+const SessionEnvC = "SIEGEKIT_SESSION_C"
+
+// Accounts are the sessions the checks send as besides A's own: B and C,
+// each nil when not given.
+type Accounts struct{ B, C http.Header }
 
 // sessionHeaders carry a login. They are taken from A's requests for B and
 // for the request with no login; B's own header names are added to them.
@@ -343,9 +354,13 @@ var reHeaderName = regexp.MustCompile(`^[A-Za-z0-9!#$%&'*+.^_|~-]+$`)
 
 // ParseSession reads account B's session headers: one "Name: value" per
 // line, for example "Authorization: Bearer ..." or "Cookie: session=...".
-func ParseSession(s string) (http.Header, error) {
+func ParseSession(s string) (http.Header, error) { return ParseSessionFrom(SessionEnv, s) }
+
+// ParseSessionFrom reads session headers given in the environment variable
+// env (SessionEnv or SessionEnvC), in the form ParseSession reads.
+func ParseSessionFrom(env, s string) (http.Header, error) {
 	if len(s) > maxSession {
-		return nil, fmt.Errorf("%s is longer than %d KiB", SessionEnv, maxSession>>10)
+		return nil, fmt.Errorf("%s is longer than %d KiB", env, maxSession>>10)
 	}
 	h := http.Header{}
 	for _, line := range strings.Split(strings.ReplaceAll(s, "\r\n", "\n"), "\n") {
@@ -355,16 +370,16 @@ func ParseSession(s string) (http.Header, error) {
 		name, value, ok := strings.Cut(line, ":")
 		name, value = strings.TrimSpace(name), strings.TrimSpace(value)
 		if !ok || !reHeaderName.MatchString(name) || value == "" || strings.ContainsAny(value, "\r\n\x00") {
-			return nil, fmt.Errorf("%s must hold one \"Name: value\" header per line", SessionEnv)
+			return nil, fmt.Errorf("%s must hold one \"Name: value\" header per line", env)
 		}
 		k := http.CanonicalHeaderKey(name)
 		if skipHeaders[k] || strings.HasPrefix(k, "Proxy-") {
-			return nil, fmt.Errorf("%s cannot set %s", SessionEnv, k)
+			return nil, fmt.Errorf("%s cannot set %s", env, k)
 		}
 		h.Add(k, value)
 	}
 	if len(h) == 0 {
-		return nil, fmt.Errorf("%s is empty", SessionEnv)
+		return nil, fmt.Errorf("%s is empty", env)
 	}
 	return h, nil
 }
@@ -376,11 +391,11 @@ type Answer struct {
 	Err    string // the target did not answer, or the answer was too large
 }
 
-// Replay is one request replayed as A, as B and with no login.
+// Replay is one request replayed as A, as B, as C and with no login.
 type Replay struct {
 	Request
-	A, B, None Answer
-	BTested    bool
+	A, B, C, None    Answer
+	BTested, CTested bool
 }
 
 // Result is what Check did.
@@ -388,9 +403,10 @@ type Result struct {
 	Replays  []Replay
 	Requests int // requests the target answered
 	ATried   int // requests replayed as A
-	AFailed  int // A's replay did not answer 2xx: B and no login not sent
+	AFailed  int // A's replay did not answer 2xx: B, C and no login not sent
 	BRefused int // B's replay refused with 401 or 403
 	BTested  bool
+	CTested  bool
 }
 
 // send and sleep are replaced in tests.
@@ -411,12 +427,13 @@ var (
 	now = time.Now
 )
 
-// Check replays the requests one at a time, at most rate per second. b is
-// account B's session, nil to test only requests with no login. cfg must
+// Check replays the requests one at a time, at most rate per second. acc
+// holds accounts B's and C's sessions; with neither, only requests with
+// no login are tested. C is sent before B (ADR 0051). cfg must
 // be read-only: only GET and HEAD are sent. A request whose URL names an
 // action (ActionReason) is refused: ParseHAR and AddSpecRoutes leave them
 // out (ADR 0048).
-func Check(ctx context.Context, cfg egress.Config, reqs []Request, b http.Header, rate float64) (Result, error) {
+func Check(ctx context.Context, cfg egress.Config, reqs []Request, acc Accounts, rate float64) (Result, error) {
 	if !cfg.ReadOnly {
 		return Result{}, errors.New("the access-control check sends only GET and HEAD: pass a read-only configuration")
 	}
@@ -430,7 +447,7 @@ func Check(ctx context.Context, cfg egress.Config, reqs []Request, b http.Header
 			return Result{}, fmt.Errorf("%s is not replayed: %s, and a GET can change data (ADR 0048)", pathOnly, why)
 		}
 	}
-	res := Result{BTested: b != nil}
+	res := Result{BTested: acc.B != nil, CTested: acc.C != nil}
 	var last time.Time
 	do := func(r Request, h http.Header) (Answer, error) {
 		if !last.IsZero() {
@@ -452,7 +469,14 @@ func Check(ctx context.Context, cfg egress.Config, reqs []Request, b http.Header
 		}
 		return Answer{Status: a.Status, Body: a.Body}, nil
 	}
-	session := sessionNames(b)
+	session := sessionNames(acc.B, acc.C)
+	as := func(none, s http.Header) http.Header {
+		h := none.Clone()
+		for k, vs := range s {
+			h[k] = append([]string(nil), vs...)
+		}
+		return h
+	}
 	for _, r := range reqs {
 		rp := Replay{Request: r}
 		var err error
@@ -466,12 +490,14 @@ func Check(ctx context.Context, cfg egress.Config, reqs []Request, b http.Header
 			continue
 		}
 		none := without(r.Header, session)
-		if b != nil {
-			hb := none.Clone()
-			for k, vs := range b {
-				hb[k] = append([]string(nil), vs...)
+		if acc.C != nil {
+			if rp.C, err = do(r, as(none, acc.C)); err != nil {
+				return res, err
 			}
-			if rp.B, err = do(r, hb); err != nil {
+			rp.CTested = true
+		}
+		if acc.B != nil {
+			if rp.B, err = do(r, as(none, acc.B)); err != nil {
 				return res, err
 			}
 			rp.BTested = true
@@ -487,6 +513,17 @@ func Check(ctx context.Context, cfg egress.Config, reqs []Request, b http.Header
 	return res, nil
 }
 
+// answerText describes an answer by status or error, for messages.
+func answerText(a Answer) string {
+	switch {
+	case a.Err != "" && a.Status != 0:
+		return fmt.Sprintf("status %d, answer not read in full", a.Status)
+	case a.Err != "" || a.Status == 0:
+		return "no answer"
+	}
+	return fmt.Sprintf("status %d", a.Status)
+}
+
 func errString(err error) string {
 	if err == nil {
 		return ""
@@ -496,14 +533,17 @@ func errString(err error) string {
 
 func ok2xx(a Answer) bool { return a.Err == "" && a.Status >= 200 && a.Status < 300 }
 
-// sessionNames are the headers removed for B and for no login.
-func sessionNames(b http.Header) map[string]bool {
+// sessionNames are the headers removed for B, for C and for no login:
+// the usual session headers and every header B or C sets.
+func sessionNames(sessions ...http.Header) map[string]bool {
 	m := map[string]bool{}
 	for _, k := range sessionHeaders {
 		m[k] = true
 	}
-	for k := range b {
-		m[http.CanonicalHeaderKey(k)] = true
+	for _, s := range sessions {
+		for k := range s {
+			m[http.CanonicalHeaderKey(k)] = true
+		}
 	}
 	return m
 }
@@ -531,6 +571,63 @@ func same(x, y Answer) bool {
 // and body as A, a request with no login refused, and data in the answer.
 func (r Replay) CrossAccount() bool {
 	return r.BTested && same(r.A, r.B) && refused(r.None) && HoldsData(r.A.Body)
+}
+
+// Outsider reports whether C got A's data, by the rule CrossAccount uses
+// for B (ADR 0051).
+func (r Replay) Outsider() bool {
+	return r.CTested && same(r.A, r.C) && refused(r.None) && HoldsData(r.A.Body)
+}
+
+// clearAnswer: the target answered with a status that says what it
+// decided. A 429, a 5xx or no answer says nothing about access, so B's
+// finding is not lowered on it (ADR 0051 item 3).
+func clearAnswer(a Answer) bool {
+	return a.Err == "" && a.Status >= 200 && a.Status < 500 && a.Status != http.StatusTooManyRequests
+}
+
+// cSent reports whether any request was sent as C.
+func (r Result) cSent() bool {
+	for _, rp := range r.Replays {
+		if rp.CTested {
+			return true
+		}
+	}
+	return false
+}
+
+// BOnly reports whether only B got A's data: B did, and C, whose session
+// works (CWorks), got a clear answer that was not A's (ADR 0051 item 3).
+// Such a finding is low: B may be a member of a space A shares.
+func (r Replay) BOnly(cWorks bool) bool {
+	return cWorks && r.CrossAccount() && !r.Outsider() && clearAnswer(r.C)
+}
+
+// CWorks reports whether C's session was seen to work: on at least one
+// replay, C got an answer a logged-out client does not (seenLoggedIn). An
+// expired or mistyped session gets the no-login answers everywhere, and
+// then no finding of B's is lowered (ADR 0051 item 4).
+func (r Result) CWorks() bool {
+	if !r.CTested {
+		return false
+	}
+	for _, rp := range r.Replays {
+		if rp.CTested && seenLoggedIn(rp.C, rp.None) {
+			return true
+		}
+	}
+	return false
+}
+
+// seenLoggedIn reports whether c, the answer to C's request, shows that
+// C's session is taken: c and none (the same request with no login) both
+// answered, their statuses differ, and c is not 401 or a redirect, which
+// apps give a session they do not take. An acceptance alone does not
+// count: Rocket.Chat answers anyone's DELETE of a room's avatar with 200
+// (measured 2026-11-22 with an expired session for C, ADR 0051).
+func seenLoggedIn(c, none Answer) bool {
+	return c.Err == "" && none.Err == "" && c.Status != 0 && none.Status != 0 && c.Status != none.Status &&
+		c.Status != http.StatusUnauthorized && (c.Status < 300 || c.Status >= 400)
 }
 
 // NoLogin reports whether a request with no login got A's data (answer 6a):
@@ -596,10 +693,15 @@ func (r Result) Summary(h *HAR, loginName string, c Counts) string {
 	if h != nil && h.FromSpec > 0 {
 		s = fmt.Sprintf("replayed %d request(s) (%d from the HAR file, %d from the OpenAPI spec)", r.ATried, r.ATried-h.FromSpec, h.FromSpec)
 	}
-	if r.BTested {
-		s += fmt.Sprintf(": %d readable by account B", c.Cross)
-	} else {
-		s += ": account B not tested (" + SessionEnv + " not set)"
+	switch {
+	case r.BTested && r.CTested:
+		s += fmt.Sprintf(": %d readable by account C or B, %d only by account B (low)", c.Cross, c.BOnly)
+	case r.CTested:
+		s += fmt.Sprintf(": %d readable by account C; account B not tested (%s not set)", c.Cross, SessionEnv)
+	case r.BTested:
+		s += fmt.Sprintf(": %d readable by account B; account C not tested (%s not set)", c.Cross, SessionEnvC)
+	default:
+		s += ": accounts B and C not tested (" + SessionEnv + " and " + SessionEnvC + " not set)"
 	}
 	if loginName != "" {
 		s += fmt.Sprintf(", %d readable with no login", c.NoLogin)
@@ -613,6 +715,9 @@ func (r Result) Summary(h *HAR, loginName string, c Counts) string {
 	}
 	if r.BTested && r.BRefused > 0 && r.BRefused == r.ATried-r.AFailed {
 		notes = append(notes, "account B was refused on every request: check that its session in "+SessionEnv+" is still valid")
+	}
+	if r.cSent() && !r.CWorks() {
+		notes = append(notes, "account C got the same status as a request with no login on every request, so its session may have expired (check "+SessionEnvC+"); no finding of account B's was lowered")
 	}
 	if h != nil {
 		for _, x := range []struct {
@@ -674,24 +779,57 @@ func hasID(p string) bool {
 // not copied into the report.
 func Findings(origin string, res Result, loginName string) []findings.Finding {
 	var out []findings.Finding
+	cWorks := res.CWorks()
 	for _, r := range res.Replays {
 		pathOnly, _, _ := strings.Cut(r.Path, "?")
 		loc := findings.Location{URI: origin + pathOnly}
+		cwe := "CWE-862"
+		if hasID(r.Path) {
+			cwe = "CWE-639"
+		}
+		// High only with a sign that the answer is A's own: an ID in the
+		// URL or A's login name in it. Otherwise two new accounts can get
+		// the same default answer (measured on Gitea's /user/settings, ADR
+		// 0035).
+		sev, note := findings.Medium, " The URL holds no ID and the answer does not name account A, so this may be an answer every account gets, such as default settings: check it by hand."
+		if hasID(r.Path) || namesA(r.A.Body, loginName) {
+			sev, note = findings.High, ""
+		}
 		switch {
+		case r.Outsider():
+			also := ""
+			if r.CrossAccount() {
+				also = " Account B got the same answer."
+			}
+			out = append(out, findings.Finding{
+				RuleID:   "cross-account-read",
+				Title:    "Another account can read this data",
+				Message:  fmt.Sprintf("%s %s answered account C (%s, an account outside every space account A shares) exactly as it answered account A (status %d, %d bytes), while a request with no login was refused (status %d). Any logged-in account can likely read account A's data here: broken access control (OWASP API1 and API5).%s This is a heuristic, not proof: compare both answers yourself.%s", r.Method, pathOnly, SessionEnvC, r.A.Status, len(r.A.Body), r.None.Status, also, note),
+				Severity: sev,
+				CWEs:     []string{cwe},
+				Location: loc,
+				Family:   Family,
+			})
+		case r.BOnly(cWorks):
+			out = append(out, findings.Finding{
+				RuleID:   "b-only-read",
+				Title:    "Only account B can read this data",
+				Message:  fmt.Sprintf("%s %s answered account B exactly as it answered account A (status %d, %d bytes), while account C (%s, an account outside every space account A shares) did not get it (status %d, %d bytes) and a request with no login was refused (status %d). B has access C lacks: expected if B is a member of a space A shares with it, such as a group, team, project or conversation; a flaw if B should not have it, such as a role or group the app trusts wrongly. Check it by hand.", r.Method, pathOnly, r.A.Status, len(r.A.Body), SessionEnvC, r.C.Status, len(r.C.Body), r.None.Status),
+				Severity: findings.Low,
+				CWEs:     []string{cwe},
+				Location: loc,
+				Family:   Family,
+			})
 		case r.CrossAccount():
-			cwe := "CWE-862"
-			if hasID(r.Path) {
-				cwe = "CWE-639"
+			if r.CTested {
+				switch {
+				case !cWorks:
+					note += " Account C was not compared: its session got the same status as a request with no login on every request, so it may have expired (check " + SessionEnvC + ")."
+				case !clearAnswer(r.C):
+					note += fmt.Sprintf(" Account C was not compared: its replay got no clear answer (%s).", answerText(r.C))
+				}
 			}
-			// High only with a sign that the answer is A's own: an ID in
-			// the URL or A's login name in it. Otherwise two new accounts
-			// can get the same default answer (measured on Gitea's
-			// /user/settings, ADR 0035).
-			sev, note := findings.Medium, " The URL holds no ID and the answer does not name account A, so this may be an answer every account gets, such as default settings: check it by hand."
-			if hasID(r.Path) || namesA(r.A.Body, loginName) {
-				sev, note = findings.High, ""
-			}
-			f := findings.Finding{
+			out = append(out, findings.Finding{
 				RuleID:   "cross-account-read",
 				Title:    "Another account can read this data",
 				Message:  fmt.Sprintf("%s %s answered account B exactly as it answered account A (status %d, %d bytes), while a request with no login was refused (status %d). Account B can likely read account A's data here: broken access control (OWASP API1 and API5). This is a heuristic, not proof: compare both answers yourself.%s", r.Method, pathOnly, r.A.Status, len(r.A.Body), r.None.Status, note),
@@ -699,8 +837,7 @@ func Findings(origin string, res Result, loginName string) []findings.Finding {
 				CWEs:     []string{cwe},
 				Location: loc,
 				Family:   Family,
-			}
-			out = append(out, f)
+			})
 		case r.NoLogin(loginName):
 			out = append(out, findings.Finding{
 				RuleID:   "no-login-read",
@@ -819,14 +956,20 @@ func (r Replay) NoLoginSecrets() []string {
 	return SecretFields(r.None.Body)
 }
 
-// Counts are how many replays each rule reported.
-type Counts struct{ Cross, NoLogin, Secrets int }
+// Counts are how many replays each rule reported: Cross by C or by B at
+// high or medium, BOnly by B alone (low, ADR 0051).
+type Counts struct{ Cross, BOnly, NoLogin, Secrets int }
 
 // Count counts the replays each rule reports.
 func Count(res Result, loginName string) Counts {
 	var c Counts
+	cWorks := res.CWorks()
 	for _, r := range res.Replays {
 		switch {
+		case r.Outsider():
+			c.Cross++
+		case r.BOnly(cWorks):
+			c.BOnly++
 		case r.CrossAccount():
 			c.Cross++
 		case r.NoLogin(loginName):
