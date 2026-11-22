@@ -375,6 +375,58 @@ func vulnApp() http.Handler {
 		w.Header().Set("Content-Type", "application/json")
 		io.WriteString(w, `{"rows":[]}`)
 	})
+	// A login limited for everyone after 3 failed attempts, whatever the
+	// user name: login-throttle sees the limit, and spraying many user
+	// names from the same address is limited too, so no finding
+	// (ADR 0055). /account/sign-in-limited above locks only the account,
+	// so spraying gets past it: a planted issue.
+	var guarded atomic.Int32
+	mux.HandleFunc("POST /account/sign-in-guarded", func(w http.ResponseWriter, r *http.Request) {
+		if guarded.Add(1) > 3 {
+			http.Error(w, "too many attempts", http.StatusTooManyRequests)
+			return
+		}
+		http.Error(w, "wrong password", http.StatusUnauthorized)
+	})
+	// Password resets with no limit (CWE-799, ADR 0055): every request
+	// gets the same answer, however many there are; and resets limited to
+	// 3 requests.
+	mux.HandleFunc("POST /account/forgot-password", func(w http.ResponseWriter, r *http.Request) {
+		io.WriteString(w, "If the address has an account, we sent it an email.")
+	})
+	var resets atomic.Int32
+	mux.HandleFunc("POST /account/forgot-password-limited", func(w http.ResponseWriter, r *http.Request) {
+		if resets.Add(1) > 3 {
+			http.Error(w, "slow down", http.StatusTooManyRequests)
+			return
+		}
+		io.WriteString(w, "If the address has an account, we sent it an email.")
+	})
+	// Sign-ups with no limit (CWE-799): each new user name makes an
+	// account; a name taken already is refused.
+	var accounts sync.Map
+	mux.HandleFunc("POST /account/sign-up", func(w http.ResponseWriter, r *http.Request) {
+		r.ParseForm()
+		if _, taken := accounts.LoadOrStore(r.Form.Get("username"), true); taken || r.Form.Get("username") == "" {
+			http.Error(w, "name taken", http.StatusConflict)
+			return
+		}
+		w.WriteHeader(http.StatusCreated)
+	})
+	// Second-factor code pages: one with no limit at all (CWE-307), one
+	// whose header allows 5 wrong codes (not an issue), and one whose
+	// header allows 100 (more than 10: a planted low issue).
+	code := func(limit string) http.HandlerFunc {
+		return func(w http.ResponseWriter, r *http.Request) {
+			if limit != "" {
+				w.Header().Set("X-RateLimit-Limit", limit)
+			}
+			http.Error(w, "wrong code", http.StatusUnauthorized)
+		}
+	}
+	mux.HandleFunc("POST /account/2fa", code(""))
+	mux.HandleFunc("POST /account/2fa-limited", code("5"))
+	mux.HandleFunc("POST /account/2fa-loose", code("100"))
 	return mux
 }
 
@@ -466,6 +518,21 @@ var vulnAppIssues = map[string]map[string]string{
 		"public-api-spec /api-docs/swagger-ui-init.js": "the API spec is served in a Swagger UI page at /api-docs/",
 		"public-source-map /static/app.js.map":         "the source map that app.js names is served",
 		"public-source-map /static/vendor.js.map":      "a source map that vendor.js does not name is served",
+	},
+	// The page checks and spraying run in the test process
+	// (TestPagesFindPlantedIssues, ADR 0055).
+	"reset-limit": {
+		"reset-not-limited /account/forgot-password": "password resets are not limited at POST /account/forgot-password",
+	},
+	"signup-limit": {
+		"signup-not-limited /account/sign-up": "sign-ups are not limited at POST /account/sign-up",
+	},
+	"code-limit": {
+		"code-not-limited /account/2fa":      "wrong second-factor codes are not limited at POST /account/2fa",
+		"code-limit-high /account/2fa-loose": "POST /account/2fa-loose allows 100 wrong codes per window",
+	},
+	"login-spray": {
+		"spray-not-limited /account/sign-in-limited": "POST /account/sign-in-limited locks one account but not one password tried on many",
 	},
 	// rate-limit runs in the test process (TestRateLimitFindsPlantedIssue).
 	"rate-limit": {

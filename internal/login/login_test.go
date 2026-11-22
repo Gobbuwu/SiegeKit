@@ -3,6 +3,7 @@ package login
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -346,4 +347,49 @@ func FuzzLogin(f *testing.F) {
 			t.Fatalf("form %s: %v %v", fl.render("pw"), q, err)
 		}
 	})
+}
+
+func TestSpray(t *testing.T) {
+	l, cfg := testLogin(t)
+	var f fake
+	f.install(t, func(int) (*egress.Answer, error) { return answer(401, `{"error":"Invalid user"}`), nil })
+	r, err := Spray(context.Background(), cfg, l, 4)
+	if err != nil || r.Limited || r.Attempts != 4 || r.Baseline != 401 || len(f.waits) != 3 {
+		t.Fatalf("%+v %v waits %v", r, err, f.waits)
+	}
+	// Each login is for a new invented name, all with one wrong password,
+	// never the test account.
+	var password string
+	for i, b := range f.bodies {
+		var m map[string]string
+		if err := json.Unmarshal([]byte(b), &m); err != nil {
+			t.Fatal(err)
+		}
+		if m["user"] != fmt.Sprintf("siegekit-nobody-%d", i+1) || !strings.HasPrefix(m["password"], "siegekit-wrong-") || i > 0 && m["password"] != password {
+			t.Errorf("login %d: %v", i, m)
+		}
+		password = m["password"]
+	}
+	fs := SprayFindings(l, r, 4)
+	if len(fs) != 1 || fs[0].RuleID != "spray-not-limited" || fs[0].Severity != findings.Medium || fs[0].CWEs[0] != "CWE-307" || fs[0].Sources[0].Plugin != SprayID ||
+		fs[0].Location.URI != "http://localhost:3000/login" || !strings.Contains(fs[0].Message, "4 logins for 4 different invented user names") {
+		t.Errorf("%+v", fs)
+	}
+	// A limit, or fewer logins than planned, gives no finding.
+	f = fake{}
+	f.install(t, func(i int) (*egress.Answer, error) {
+		if i == 2 {
+			return answer(429, ""), nil
+		}
+		return answer(401, ""), nil
+	})
+	if r, err := Spray(context.Background(), cfg, l, 4); err != nil || !r.Limited || r.Attempts != 3 || len(SprayFindings(l, r, 4)) != 0 {
+		t.Errorf("limited: %+v %v", r, err)
+	}
+	// An email login gets invented addresses at example.com.
+	e := *l
+	e.User = "tester@shop.test"
+	if SprayUser(&e, 3) != "siegekit-nobody-3@example.com" || SprayUser(l, 3) != "siegekit-nobody-3" {
+		t.Error(SprayUser(&e, 3), SprayUser(l, 3))
+	}
 }

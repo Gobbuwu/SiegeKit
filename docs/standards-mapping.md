@@ -12,7 +12,7 @@ How SiegeKit's planned checks map to four widely used lists. "Auto" means a plan
 | A04 Cryptographic Failures | Partial | Opengrep weak-crypto rules; ZAP and Nuclei TLS and cookie checks; offline hash audit (M3) |
 | A05 Injection | Auto | Opengrep, Bandit, gosec; ZAP, Nuclei, sqlmap |
 | A06 Insecure Design | Manual | Threat modelling and design review |
-| A07 Authentication Failures | Partial | Login throttling, default credentials ([ADR 0010](adr/0010-login-checks.md)); ZAP session checks |
+| A07 Authentication Failures | Partial | Login throttling, password spraying past a per-account lockout and second-factor code limits ([ADR 0055](adr/0055-rate-limit-pages.md)), default credentials ([ADR 0010](adr/0010-login-checks.md)); ZAP session checks |
 | A08 Software or Data Integrity Failures | Partial | Opengrep (unsafe deserialization); SCA |
 | A09 Security Logging and Alerting Failures | Manual | Checklist item 7 |
 | A10 Mishandling of Exceptional Conditions | Auto | Schemathesis (error leakage, crashes); fuzzers (M3) |
@@ -22,7 +22,7 @@ How SiegeKit's planned checks map to four widely used lists. "Auto" means a plan
 | Item | Coverage | How |
 | --- | --- | --- |
 | API1 Broken Object Level Authorization | Partial | `access-control`, recorded requests replayed as a second account (ADR 0035); `access-control-write`, recorded writes, local targets (ADR 0049) |
-| API2 Broken Authentication | Partial | `access-control` and `access-control-write` with no login (ADR 0035, 0049), login throttling (ADR 0030) |
+| API2 Broken Authentication | Partial | `access-control` and `access-control-write` with no login (ADR 0035, 0049), login throttling (ADR 0030), spraying and code limits (ADR 0055) |
 | API3 Broken Object Property Level Authorization | Partial | Differential test compares returned fields; mass-assignment remains manual |
 | API4 Unrestricted Resource Consumption | Partial | `rate-limit`: capped burst to one URL the user names, local targets (ADR 0011, 0036); no load testing by design |
 | API5 Broken Function Level Authorization | Partial | `access-control` with two accounts of different roles (ADR 0035; GET and HEAD only; writes with `access-control-write` on local targets, ADR 0049) |
@@ -42,6 +42,7 @@ How SiegeKit's planned checks map to four widely used lists. "Auto" means a plan
 | 862, 863, 284, 639 authorization; 306 missing authentication | Partial | Authorization differential test and unauthenticated route check (ADR 0011); `backend-live` for Supabase tables and Realtime Database paths (ADR 0037) |
 | 200 Sensitive information exposure | Auto | Secrets scanning in code and git history (M1) and served content (M2); container images not scheduled; ZAP |
 | 770 No resource limits | Partial | `rate-limit` (`rate-not-limited`, ADR 0011, 0036) |
+| 799 Improper control of interaction frequency | Partial | `reset-limit` (`reset-not-limited`), `signup-limit` (`signup-not-limited`), local targets (ADR 0055) |
 | 787, 416, 125, 120, 476, 121, 122 memory-safety bugs | Auto (fuzzing) | AFL++, libFuzzer-based fuzzers, Go fuzzing (M3); only for code with a harness |
 
 ## OWASP Top 10 for LLM Applications (2025)

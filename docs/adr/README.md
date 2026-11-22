@@ -58,6 +58,7 @@ Each significant design decision is recorded as a short ADR before code is writt
 | [0052](0052-route-sweep.md) | Route sweep: every GET route of the API spec, as outsider C (amends 0035, 0051) | Accepted |
 | [0053](0053-routes-from-server-code.md) | Routes read from the app's server code for the route sweep (amends 0037, 0052) | Accepted |
 | [0054](0054-write-replay-known-answers.md) | Known answers for the write replay in CI, and IDs replaced by their place (amends 0039, 0049) | Accepted |
+| [0055](0055-rate-limit-pages.md) | Rate limits on reset, sign-up and code pages, and password spraying (amends 0029, 0030, 0036) | Accepted |
 
 ADRs 0002 to 0011 were accepted at the M0 design sign-off on 2026-11-18.
 

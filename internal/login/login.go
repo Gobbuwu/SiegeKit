@@ -102,7 +102,10 @@ func (l *Login) ContentType() string {
 }
 
 // render fills in the placeholders, escaped for JSON strings or forms.
-func (l *Login) render(password string) []byte {
+func (l *Login) render(password string) []byte { return l.renderFor(l.User, password) }
+
+// renderFor fills in the placeholders with user and password.
+func (l *Login) renderFor(user, password string) []byte {
 	esc := url.QueryEscape
 	if l.json {
 		esc = func(s string) string {
@@ -110,7 +113,7 @@ func (l *Login) render(password string) []byte {
 			return string(b[1 : len(b)-1])
 		}
 	}
-	return []byte(strings.NewReplacer("{user}", esc(l.User), "{password}", esc(password)).Replace(l.body))
+	return []byte(strings.NewReplacer("{user}", esc(user), "{password}", esc(password)).Replace(l.body))
 }
 
 // wrongPassword returns a new random password that cannot be the account's
@@ -153,6 +156,38 @@ var (
 	now = time.Now
 )
 
+// SprayID and SprayName describe the spraying check (ADR 0055 item 6).
+const (
+	SprayID   = "login-spray"
+	SprayName = "Password spraying check"
+)
+
+// SprayUser is the i-th user name the spraying check invents (from 1): an
+// email address at example.com, which is reserved and accepts no mail
+// (RFC 2606, RFC 7505), when the test account's name is an email address,
+// so the app's format checks pass, and a plain name otherwise. No real
+// account has such a name, so none is locked.
+func SprayUser(l *Login, i int) string {
+	if strings.Contains(l.User, "@") {
+		return fmt.Sprintf("siegekit-nobody-%d@example.com", i)
+	}
+	return fmt.Sprintf("siegekit-nobody-%d", i)
+}
+
+// Spray sends attempts logins like Check, but each for a new invented user
+// name and all with one wrong password, as an attacker spraying one
+// password across many accounts does (design Q5). It runs only after
+// Check saw a limit on one account: if one account is never limited from
+// one address, many accounts from that address cannot be limited either.
+func Spray(ctx context.Context, cfg egress.Config, l *Login, attempts int) (Result, error) {
+	password := wrongPassword()
+	i := 0
+	return run(ctx, cfg, l, attempts, func() []byte {
+		i++
+		return l.renderFor(SprayUser(l, i), password)
+	})
+}
+
 // Check sends attempts logins, at most one per Interval, and stops at the
 // first sign of a limit. The first answer is the baseline: a 429, 423 or
 // 503 status or a Retry-After header in a later answer, a status other than
@@ -161,6 +196,12 @@ var (
 // baseline and at least 1 second long count as a limit (owner decision
 // 2026-11-20, ADR 0030). cfg must not be for a deployed target.
 func Check(ctx context.Context, cfg egress.Config, l *Login, attempts int) (Result, error) {
+	return run(ctx, cfg, l, attempts, func() []byte { return l.render(wrongPassword()) })
+}
+
+// run sends attempts logins with the bodies body gives; Check and Spray
+// share it, so both read a limit the same way.
+func run(ctx context.Context, cfg egress.Config, l *Login, attempts int, body func() []byte) (Result, error) {
 	if attempts < MinAttempts || attempts > MaxAttempts {
 		return Result{}, fmt.Errorf("attempts must be from %d to %d", MinAttempts, MaxAttempts)
 	}
@@ -178,7 +219,7 @@ func Check(ctx context.Context, cfg egress.Config, l *Login, attempts int) (Resu
 			}
 		}
 		last = now()
-		a, err := send(ctx, cfg, http.MethodPost, l.Path, l.ContentType(), l.render(wrongPassword()), MaxAnswer)
+		a, err := send(ctx, cfg, http.MethodPost, l.Path, l.ContentType(), body(), MaxAnswer)
 		if err != nil {
 			if i == 0 {
 				return r, fmt.Errorf("the login URL did not answer: %w", err)
@@ -278,6 +319,27 @@ func Findings(l *Login, r Result, planned int) []findings.Finding {
 		Family:   Family,
 	}
 	f.Sources = []findings.Source{{Plugin: ID, RuleID: f.RuleID}}
+	f.ComputeFingerprint()
+	return []findings.Finding{f}
+}
+
+// SprayFindings turns a spraying result into findings: one when no limit
+// was seen, medium like a login with no limit (owner 2026-11-22).
+func SprayFindings(l *Login, r Result, planned int) []findings.Finding {
+	if r.Limited || r.Attempts < planned {
+		return nil
+	}
+	f := findings.Finding{
+		RuleID: "spray-not-limited",
+		Title:  "Logins across many accounts are not limited",
+		Message: fmt.Sprintf("The app limited failed logins for the one test account, but %d logins for %d different invented user names (siegekit-nobody-1 and on), one per second and all with the same wrong password, all got the same answer (%d) with no slowdown, block or CAPTCHA. So the limit is per account only: an attacker who tries one common password on many accounts (password spraying) is never stopped. Also limit failed logins per client address, or across accounts. SiegeKit does not see a limit set above %d attempts.",
+			r.Attempts, r.Attempts, r.Baseline, planned),
+		Severity: findings.Medium,
+		CWEs:     []string{"CWE-307"},
+		Location: findings.Location{URI: l.URL},
+		Family:   Family,
+	}
+	f.Sources = []findings.Source{{Plugin: SprayID, RuleID: f.RuleID}}
 	f.ComputeFingerprint()
 	return []findings.Finding{f}
 }

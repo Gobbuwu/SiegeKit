@@ -45,8 +45,13 @@ type Endpoint struct {
 	URL    string // the URL as given, for plans and reports
 	Path   string // path and query on the target's origin
 	Method string // GET, or POST when a body is given
-	body   []byte
-	json   bool
+	// Page is the kind of page for the reset, sign-up and code checks
+	// (ADR 0055), "" for --rate-limit-url. Its body is a template whose
+	// {wrong} and {new} are filled in anew for each request.
+	Page Page
+	From string // where the page came from: its flag or the HAR file
+	body []byte
+	json bool
 }
 
 // Parse checks the --rate-limit-url and --rate-limit-body values. The URL
@@ -99,12 +104,29 @@ type Result struct {
 	Limited  bool   // a limit was seen
 	Signal   string // what showed the limit
 	Baseline int    // the status of the first answer
+	// Changed counts answers whose status differs from the first one's.
+	// Such a run is not reported as "not limited": a changed status may
+	// be a limit that shows no 429, 503 or header (ADR 0055 item 7).
+	Changed int
+	// Limit is the number a RateLimit-Limit or X-RateLimit-Limit header
+	// gave, 0 when none did (ADR 0055 item 5).
+	Limit int
+	// Accepted counts answers below 400: on a sign-up page each may have
+	// made an account, on a reset page each may have sent an email.
+	Accepted int
 }
 
 // Summary says the result in one line, for reports.
 func (r Result) Summary(planned int) string {
 	if r.Limited {
-		return fmt.Sprintf("limit seen after %d of %d requests: %s", r.Requests, planned, r.Signal)
+		s := fmt.Sprintf("limit seen after %d of %d requests: %s", r.Requests, planned, r.Signal)
+		if r.Limit > 0 {
+			s += fmt.Sprintf(" (limit %d)", r.Limit)
+		}
+		return s
+	}
+	if r.Changed > 0 {
+		return fmt.Sprintf("no 429, 503 or rate-limit header in %d requests, but %d answered a status other than the first answer's %d, which may be a limit: not reported", r.Requests, r.Changed, r.Baseline)
 	}
 	return fmt.Sprintf("no limit seen in %d requests, all answered %d with no rate-limit header", r.Requests, r.Baseline)
 }
@@ -131,8 +153,11 @@ var (
 // sign of a limit: a 429 or 503 answer, or a RateLimit-*, X-RateLimit-* or
 // Retry-After header (answer 7a). The first answer must be a success or a
 // client error other than 401, 403, 404, 405 and 501, so a wrong URL or a
-// URL behind a login is reported as such rather than as "not limited".
-// Data-changing requests (POST) need a configuration that allows them.
+// URL behind a login is reported as such rather than as "not limited". On
+// a reset or code page a 401 or 403 is the answer to a wrong guess, so it
+// is a valid first answer there; a sign-up's first answer must be below
+// 400, or no account was made (ADR 0055 item 4). Data-changing requests
+// (POST) need a configuration that allows them.
 func Check(ctx context.Context, cfg egress.Config, e *Endpoint, n int) (Result, error) {
 	if n < MinRequests || n > MaxRequests {
 		return Result{}, fmt.Errorf("requests must be from %d to %d", MinRequests, MaxRequests)
@@ -149,7 +174,7 @@ func Check(ctx context.Context, cfg egress.Config, e *Endpoint, n int) (Result, 
 			}
 		}
 		last = now()
-		a, err := send(ctx, cfg, e.Method, e.Path, e.ContentType(), e.body, MaxAnswer)
+		a, err := send(ctx, cfg, e.Method, e.Path, e.ContentType(), e.next(), MaxAnswer)
 		if a == nil || err != nil && !errors.Is(err, egress.ErrTooLarge) {
 			if ctx.Err() != nil {
 				return r, ctx.Err()
@@ -160,24 +185,33 @@ func Check(ctx context.Context, cfg egress.Config, e *Endpoint, n int) (Result, 
 			return r, fmt.Errorf("the target stopped answering after %d request(s): %v. A block of SiegeKit's address and a crash look the same from here, so this check cannot tell which it was", r.Requests, err)
 		}
 		r.Requests++
+		if a.Status < 400 {
+			r.Accepted++
+		}
 		if s := Signal(a.Status, a.Header); s != "" {
-			r.Limited, r.Signal = true, s
+			r.Limited, r.Signal, r.Limit = true, s, LimitNumber(a.Header)
 			if i == 0 {
 				r.Signal += ", already at the first request"
 			}
 			return r, nil
 		}
 		if i == 0 {
+			guess := e.Page == Reset || e.Page == Code
 			switch {
-			case a.Status == http.StatusUnauthorized || a.Status == http.StatusForbidden:
+			case (a.Status == http.StatusUnauthorized || a.Status == http.StatusForbidden) && !guess:
 				return r, fmt.Errorf("the URL answered %d: it needs a login, which this check does not send; name a URL that answers without one", a.Status)
 			case a.Status == http.StatusNotFound || a.Status == http.StatusMethodNotAllowed || a.Status == http.StatusNotImplemented:
-				return r, fmt.Errorf("the URL answered %d to a %s; check --rate-limit-url and --rate-limit-body", a.Status, e.Method)
+				return r, fmt.Errorf("the URL answered %d to a %s; check %s", a.Status, e.Method, e.source())
 			case a.Status >= 500:
-				return r, fmt.Errorf("the URL answered %d (a server error); check --rate-limit-url and --rate-limit-body", a.Status)
+				return r, fmt.Errorf("the URL answered %d (a server error); check %s", a.Status, e.source())
+			case e.Page == SignUp && a.Status >= 400:
+				return r, fmt.Errorf("the sign-up answered %d, so it made no account and its limit cannot be tested; check %s", a.Status, e.source())
 			}
 			r.Baseline = a.Status
 			continue
+		}
+		if a.Status != r.Baseline {
+			r.Changed++
 		}
 		if a.Status >= 500 {
 			return r, fmt.Errorf("the URL answered %d (a server error) after %d request(s); a crash is not a limit, so this check cannot tell whether requests are limited", a.Status, r.Requests-1)
@@ -208,9 +242,13 @@ func Signal(status int, h http.Header) string {
 }
 
 // Findings turns a result into findings: one when no limit was seen in
-// all planned requests.
+// all planned requests and every answer had the first one's status. The
+// reset, sign-up and code pages have their own (ADR 0055).
 func Findings(e *Endpoint, r Result, planned int) []findings.Finding {
-	if r.Limited || r.Requests < planned {
+	if e.Page != "" {
+		return pageFindings(e, r, planned)
+	}
+	if r.Limited || r.Requests < planned || r.Changed > 0 {
 		return nil
 	}
 	f := findings.Finding{

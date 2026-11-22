@@ -1,6 +1,6 @@
 {
   "fixture": "juice-shop v20.4.0 by URL (docker.io/bkimminich/juice-shop@sha256:9bbaecc41791f00b002bc65931cc5ff355fbdb941fa72b06558c18dace43197b)",
-  "measured": "CI gate runs 44834908813 and 44836476025 on 2026-11-20 (ubuntu-latest), each on podman 5.7.0 rootless, cgroup v2, and docker 29.4.2 rootful, cgroup v2: four runs. Minimum requests are 90% of the fewest of the four; public-maps and schemathesis (and served-secrets' higher minimum) from 3 local runs on 2026-11-21 (docker 29.10.0 rootful, cgroup v1: 11, 4 and 17 requests on each run), confirmed by the gate of #56 (ADR 0046); zap-active's recorded requests (ADR 0047) from 2 local runs on 2026-11-21 (docker 29.10.0 rootful, cgroup v1), to be confirmed by the gate of the ADR 0047 PR; access-control with account C (ADR 0051): 48 requests on 1 local run on 2026-11-22 (docker 29.10.0 rootful, cgroup v1), to be confirmed by the gate of the ADR 0051 PR",
+  "measured": "CI gate runs 44834908813 and 44836476025 on 2026-11-20 (ubuntu-latest), each on podman 5.7.0 rootless, cgroup v2, and docker 29.4.2 rootful, cgroup v2: four runs. Minimum requests are 90% of the fewest of the four; public-maps and schemathesis (and served-secrets' higher minimum) from 3 local runs on 2026-11-21 (docker 29.10.0 rootful, cgroup v1: 11, 4 and 17 requests on each run), confirmed by the gate of #56 (ADR 0046); zap-active's recorded requests (ADR 0047) from 2 local runs on 2026-11-21 (docker 29.10.0 rootful, cgroup v1), to be confirmed by the gate of the ADR 0047 PR; access-control with account C (ADR 0051): 48 requests on 1 local run on 2026-11-22 (docker 29.10.0 rootful, cgroup v1), to be confirmed by the gate of the ADR 0051 PR; login-spray, reset-limit, signup-limit and code-limit (ADR 0055) are skipped until their known answers (ADR 0055 item 10), as the gate's a.har uses none of these pages and login-throttle sees no limit",
   "checks": {
     "access-control": {
       "status": "ran",
@@ -22,6 +22,11 @@
     "backend-live": {
       "status": "skipped",
       "reason": "no backend URL was given",
+      "cause": "no-input"
+    },
+    "code-limit": {
+      "status": "skipped",
+      "reason": "no verification-code page (second factor) was given or found in a.har",
       "cause": "no-input"
     },
     "ffuf": {
@@ -50,6 +55,11 @@
         "path-found /video"
       ],
       "minRequests": 4282
+    },
+    "login-spray": {
+      "status": "skipped",
+      "reason": "login-throttle saw no limit on one account",
+      "cause": "no-input"
     },
     "login-throttle": {
       "status": "ran",
@@ -106,6 +116,11 @@
       ],
       "minRequests": 18
     },
+    "reset-limit": {
+      "status": "skipped",
+      "reason": "no password-reset page was given or found in a.har",
+      "cause": "no-input"
+    },
     "schemathesis": {
       "status": "ran",
       "match": "exact",
@@ -117,6 +132,11 @@
     "served-secrets": {
       "status": "ran",
       "minRequests": 15
+    },
+    "signup-limit": {
+      "status": "skipped",
+      "reason": "no sign-up page was given or found in a.har",
+      "cause": "no-input"
     },
     "zap": {
       "status": "ran",
