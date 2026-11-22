@@ -64,6 +64,14 @@ type Write struct {
 	// has no name), empty for other requests. GraphQL answers a refused
 	// operation with 200 and an "errors" list, so Accepted reads the body.
 	GraphQL string
+	// RPC names the method of a method call sent as POST (DDP or JSON-RPC,
+	// RPCKind; ADR 0050), empty for other requests. Its IDs are looked for
+	// in the call's params, and a 2xx answer can report a refusal inside.
+	RPC, RPCKind string
+	// ClientID is the new object's ID that this write's own body chose
+	// (its recorded answer gave it back): each replay sends a fresh one
+	// there, since the app ignores a second object with that ID (ADR 0050).
+	ClientID string
 	// Tried: not in the recording. SiegeKit tries this method on an object
 	// account A read or made, because the recording did not use it there
 	// (ADR 0049 item 2c).
@@ -89,10 +97,7 @@ type Step struct {
 // Label is the write as people read it: method and path, plus the
 // GraphQL mutation, since every GraphQL write shares one path.
 func (w Write) Label() string {
-	if w.GraphQL != "" {
-		return w.Method + " " + w.Path + " (GraphQL " + w.GraphQL + ")"
-	}
-	return w.Method + " " + w.Path
+	return w.Method + " " + opLabel(w.Path, w.GraphQL, w.RPC)
 }
 
 // Create is a recorded POST whose answer gave the ID a later write uses.
@@ -102,6 +107,12 @@ type Create struct {
 	Body   []byte
 	Field  []string // keys leading to the ID in the create's JSON answer
 	OldID  string   // the ID in the recorded answer
+	// RPC: a method call; Field is read in the call's result (ADR 0050).
+	// RPCMethod is its method's name.
+	RPC       bool
+	RPCMethod string
+	// ClientID: the create's body chose OldID; A sends it with a fresh ID.
+	ClientID bool
 }
 
 // Writes is what ParseWrites took from a HAR file.
@@ -118,6 +129,15 @@ type Writes struct {
 	// GraphQLReads counts GraphQL queries and subscriptions sent with
 	// POST: they read, so they are not replayed as writes.
 	GraphQLReads int
+	// RPCReads counts method calls sent as POST whose method name reads
+	// (ADR 0050), and ReadPOSTs POSTs whose path ends in a read verb: they
+	// are not replayed. ReadNames names the first maxReadNames of them.
+	RPCReads, ReadPOSTs int
+	ReadNames           []string
+	// Transport counts SockJS and Socket.IO polling requests: they carry
+	// a socket session's messages, bound to that session's ID in the URL,
+	// so they are not replayed (ADR 0050).
+	Transport int
 	// TriesOverLimit counts tries left out past MaxTries.
 	TriesOverLimit int
 }
@@ -137,23 +157,25 @@ func (w *Writes) Recorded() (recorded, tried int) {
 
 type harWriteFile struct {
 	Log struct {
-		Entries []struct {
-			Request struct {
-				Method   string       `json:"method"`
-				URL      string       `json:"url"`
-				Headers  []harHeader  `json:"headers"`
-				PostData *harPostBody `json:"postData"`
-			} `json:"request"`
-			Response struct {
-				Status  int `json:"status"`
-				Content struct {
-					MimeType string `json:"mimeType"`
-					Text     string `json:"text"`
-					Encoding string `json:"encoding"`
-				} `json:"content"`
-			} `json:"response"`
-		} `json:"entries"`
+		Entries []harWriteEntry `json:"entries"`
 	} `json:"log"`
+}
+
+type harWriteEntry struct {
+	Request struct {
+		Method   string       `json:"method"`
+		URL      string       `json:"url"`
+		Headers  []harHeader  `json:"headers"`
+		PostData *harPostBody `json:"postData"`
+	} `json:"request"`
+	Response struct {
+		Status  int `json:"status"`
+		Content struct {
+			MimeType string `json:"mimeType"`
+			Text     string `json:"text"`
+			Encoding string `json:"encoding"`
+		} `json:"content"`
+	} `json:"response"`
 }
 
 type harPostBody struct {
@@ -170,9 +192,10 @@ type pending struct {
 
 // recordedCreate is a recorded POST with the IDs its answer holds.
 type recordedCreate struct {
-	index int
-	c     Create
-	ids   []idField
+	index  int
+	c      Create
+	ids    []idField
+	client map[string]bool // IDs the create's own body chose
 }
 
 type idField struct {
@@ -236,6 +259,10 @@ func ParseWrites(data []byte, t *target.URL) (*Writes, error) {
 			}
 			continue
 		}
+		if socketTransport(p) {
+			w.Transport++
+			continue
+		}
 		var body []byte
 		hd := replayHeaders(r.Headers)
 		if pd := r.PostData; pd != nil {
@@ -270,6 +297,35 @@ func ParseWrites(data []byte, t *target.URL) (*Writes, error) {
 				continue
 			}
 			wr.GraphQL = name
+		} else if call, isRPC := rpcOp(body); isRPC {
+			// A method call names itself in its body: the lockout words
+			// apply to its method names too (ADR 0050).
+			locked := false
+			for _, m := range call.methods {
+				if why := lockoutReason(method, pathOf(p)+"/"+m); why != "" {
+					w.Lockout++
+					label := method + " " + opLabel(pathOf(p), "", m)
+					if !containsString(w.LockoutPaths, label) {
+						w.LockoutPaths = append(w.LockoutPaths, label)
+					}
+					locked = true
+					break
+				}
+			}
+			if locked {
+				continue
+			}
+			all, first := call.reads()
+			if all {
+				w.RPCReads++
+				w.addReadName(method + " " + opLabel(pathOf(p), "", call.methods[0]))
+				continue
+			}
+			wr.RPC, wr.RPCKind = first, call.kind
+		} else if method == http.MethodPost && readPath(p) {
+			w.ReadPOSTs++
+			w.addReadName(method + " " + pathOf(p))
+			continue
 		}
 		if method == http.MethodPost {
 			depth := 3
@@ -282,8 +338,22 @@ func ParseWrites(data []byte, t *target.URL) (*Writes, error) {
 					depth = 5
 				}
 			}
-			if ids := answerIDs(e.Response.Status, e.Response.Content.Text, e.Response.Content.Encoding, depth); len(ids) > 0 {
-				creates = append(creates, recordedCreate{index: i, c: Create{Path: p, Header: hd.Clone(), Body: body}, ids: ids})
+			if ids := answerIDs(e.Response.Status, e.Response.Content.Text, e.Response.Content.Encoding, depth, wr.RPC); len(ids) > 0 {
+				client := clientIDs(body, ids)
+				for v := range client {
+					// An ID seen earlier in the recording names an object
+					// that exists: this POST changes it (ADR 0050).
+					if seenBefore(f.Log.Entries[:i], v) {
+						delete(client, v)
+					}
+				}
+				for _, id := range ids {
+					if client[id.value] {
+						wr.ClientID = id.value
+						break
+					}
+				}
+				creates = append(creates, recordedCreate{index: i, c: Create{Path: p, Header: hd.Clone(), Body: body, RPC: wr.RPC != "", RPCMethod: wr.RPC}, ids: ids, client: client})
 			}
 		}
 		key := method + " " + p + " " + string(body)
@@ -307,6 +377,36 @@ func ParseWrites(data []byte, t *target.URL) (*Writes, error) {
 	w.Writes = append(w.Writes, tries...)
 	w.TriesOverLimit = over
 	return w, nil
+}
+
+// seenBefore reports whether s is in an earlier entry's URL, request body
+// or answer.
+func seenBefore(entries []harWriteEntry, s string) bool {
+	b := []byte(s)
+	for _, e := range entries {
+		if strings.Contains(e.Request.URL, s) || e.Request.PostData != nil && e.Request.PostData.Text != nil && strings.Contains(*e.Request.PostData.Text, s) {
+			return true
+		}
+		text := []byte(e.Response.Content.Text)
+		if e.Response.Content.Encoding == "base64" {
+			if d, err := base64.StdEncoding.DecodeString(e.Response.Content.Text); err == nil {
+				text = d
+			}
+		}
+		if bytes.Contains(text, b) {
+			return true
+		}
+	}
+	return false
+}
+
+// maxReadNames is how many reads sent as POST the result names.
+const maxReadNames = 5
+
+func (w *Writes) addReadName(s string) {
+	if len(w.ReadNames) < maxReadNames && !containsString(w.ReadNames, s) {
+		w.ReadNames = append(w.ReadNames, s)
+	}
 }
 
 func containsString(list []string, s string) bool {
@@ -336,8 +436,10 @@ func idRank(key string) int {
 // answerIDs returns the ID fields of a 2xx JSON answer: keys named like
 // idNames whose value is a whole number or a short string without "/" or
 // spaces, in objects at most maxDepth deep (3, or 4 for GraphQL; not
-// inside arrays), nearest first and by idNames order.
-func answerIDs(status int, text, encoding string, maxDepth int) []idField {
+// inside arrays), nearest first and by idNames order. For a method call
+// (rpcMethod, its name) they are read in the call's result, and a call
+// named as a create whose result is the ID itself gives that ID (ADR 0050).
+func answerIDs(status int, text, encoding string, maxDepth int, rpcMethod string) []idField {
 	if status < 200 || status >= 300 || text == "" {
 		return nil
 	}
@@ -354,6 +456,12 @@ func answerIDs(status int, text, encoding string, maxDepth int) []idField {
 		return nil
 	}
 	v = unbatch(v)
+	if rpcMethod != "" {
+		v = rpcResult(v)
+		if id, ok := scalarID(v); ok && createName(rpcMethod) {
+			return []idField{{field: []string{resultField}, value: id}}
+		}
+	}
 	var out []idField
 	level := []struct {
 		obj  map[string]any
@@ -438,9 +546,15 @@ func findCreate(w Write, index int, creates []recordedCreate) *Create {
 			if !uses[id.value] {
 				continue
 			}
-			if s := commonSegments(c.c.Path, w.Path); s > bestScore {
+			s := commonSegments(c.c.Path, w.Path)
+			if w.RPC != "" && c.c.RPCMethod != "" && sameNoun(w, id.value, c.c.RPCMethod) {
+				// Method calls share one path: the create whose name has the
+				// noun of the key that holds the ID wins (ADR 0050).
+				s += 1000
+			}
+			if s > bestScore {
 				cc := c.c
-				cc.Field, cc.OldID = id.field, id.value
+				cc.Field, cc.OldID, cc.ClientID = id.field, id.value, c.client[id.value]
 				best, bestScore = &cc, s
 			}
 			break
@@ -477,9 +591,8 @@ func writeIDs(w Write) map[string]bool {
 			}
 		}
 	}
-	var v any
-	if json.Unmarshal(w.Body, &v) == nil {
-		walkIDKeys(v, 0, func(_ map[string]any, _ string, s string) { m[s] = true })
+	if scope, _, ok := idScope(w.Body); ok {
+		walkIDKeys(scope, 0, func(_ map[string]any, _ string, s string) { m[s] = true })
 	}
 	return m
 }
@@ -514,7 +627,8 @@ func walkIDKeys(v any, depth int, fn func(obj map[string]any, key, value string)
 }
 
 // withID is w with oldID replaced by newID in its path segments, query
-// values, and JSON or form body values at ID-named keys.
+// values, and JSON (a method call's params only) or form body values at
+// ID-named keys.
 func (w Write) withID(oldID, newID string) Write {
 	out := w
 	out.Header = w.Header.Clone()
@@ -543,10 +657,10 @@ func (w Write) withID(oldID, newID string) Write {
 		out.Path += "?" + q
 	}
 	ct := strings.ToLower(w.Header.Get("Content-Type"))
-	var v any
+	scope, encode, isJSON := idScope(w.Body)
 	switch {
-	case len(w.Body) > 0 && json.Unmarshal(w.Body, &v) == nil:
-		walkIDKeys(v, 0, func(obj map[string]any, k, s string) {
+	case isJSON:
+		walkIDKeys(scope, 0, func(obj map[string]any, k, s string) {
 			if s != oldID {
 				return
 			}
@@ -558,7 +672,7 @@ func (w Write) withID(oldID, newID string) Write {
 			}
 			obj[k] = newID
 		})
-		if b, err := json.Marshal(v); err == nil {
+		if b, err := encode(); err == nil {
 			out.Body = b
 		}
 	case strings.HasPrefix(ct, "application/x-www-form-urlencoded"):
@@ -766,9 +880,14 @@ func plainCreate(w Write, loginName string) bool {
 		}
 	}
 	found := false
-	var v any
-	if json.Unmarshal(w.Body, &v) == nil {
-		walkIDKeys(v, 0, func(map[string]any, string, string) { found = true })
+	if scope, _, ok := idScope(w.Body); ok {
+		walkIDKeys(scope, 0, func(_ map[string]any, _ string, v string) {
+			// The new object's own ID, chosen by the client, names no
+			// other object (ADR 0050).
+			if !(freshSelfID && v == w.ClientID) {
+				found = true
+			}
+		})
 	} else if vals, err := url.ParseQuery(string(w.Body)); err == nil && strings.HasPrefix(strings.ToLower(w.Header.Get("Content-Type")), "application/x-www-form-urlencoded") {
 		for k, vs := range vals {
 			for _, x := range vs {
@@ -836,17 +955,27 @@ func WriteCheck(ctx context.Context, cfg egress.Config, ws []Write, b http.Heade
 			sw := w
 			var copyID string
 			if w.Create != nil {
-				ca, err := do(http.MethodPost, w.Create.Path, w.Create.Header, w.Create.Body)
+				cw := Write{Method: http.MethodPost, Path: w.Create.Path, Header: w.Create.Header, Body: w.Create.Body}
+				if w.Create.ClientID {
+					// The create chose its object's ID: a fresh one, or the
+					// app ignores the copy (ADR 0050).
+					cw = cw.withID(w.Create.OldID, freshID(w.Create.OldID))
+				}
+				ca, err := do(http.MethodPost, cw.Path, cw.Header, cw.Body)
 				if err != nil {
 					return res, err
 				}
-				if id, ok := newID(ca, w.Create.Field); ok {
+				if id, ok := newID(ca, w.Create.Field, w.Create.RPC); ok {
 					sw = w.withID(w.Create.OldID, id)
 					rp.Recreated, rp.Sent, copyID = true, sw.Path, id
 					res.Recreated++
 				} else {
 					rp.RecreateFailed = true
 				}
+			}
+			if w.ClientID != "" && freshSelfID {
+				sw = sw.withID(w.ClientID, freshID(w.ClientID))
+				rp.Sent = sw.Path
 			}
 			if !rp.Recreated && who == AsNoLogin && bOnRecorded {
 				rp.NotSent = "account B's replay was accepted on account A's recorded object, which it may have changed or deleted"
@@ -971,8 +1100,9 @@ func unbatch(v any) any {
 	return v
 }
 
-// newID reads the re-created object's ID from A's create answer.
-func newID(a Answer, field []string) (string, bool) {
+// newID reads the re-created object's ID from A's create answer (in the
+// call's result for a method call).
+func newID(a Answer, field []string, rpc bool) (string, bool) {
 	if !ok2xx(a) || len(field) == 0 {
 		return "", false
 	}
@@ -981,6 +1111,12 @@ func newID(a Answer, field []string) (string, bool) {
 		return "", false
 	}
 	v = unbatch(v)
+	if rpc {
+		v = rpcResult(v)
+		if len(field) == 1 && field[0] == resultField {
+			return scalarID(v)
+		}
+	}
 	for _, k := range field {
 		m, ok := v.(map[string]any)
 		if !ok {
@@ -995,10 +1131,15 @@ func newID(a Answer, field []string) (string, bool) {
 // or a redirect when A's own recorded write was answered with a redirect
 // too and this one does not lead to a login page. Server-rendered forms
 // answer a successful write with 303 (4 of 13 Gitea web writes, measured
-// 2026-11-21, ADR 0049).
+// 2026-11-21, ADR 0049). A 2xx answer that reports a refusal inside is
+// not accepted: GraphQL errors, a "success" that is false, or a method
+// call's error (ADR 0050).
 func (r WriteReplay) Accepted() bool {
 	if ok2xx(r.Answer) {
-		return r.GraphQL == "" || !graphQLRefused(r.Answer.Body)
+		if r.GraphQL != "" && graphQLRefused(r.Answer.Body) {
+			return false
+		}
+		return !envelopeRefused(r.Answer.Body, r.RPCKind)
 	}
 	return r.Answer.Err == "" && r.Answer.Status >= 300 && r.Answer.Status < 400 &&
 		r.RecordedStatus >= 300 && r.RecordedStatus < 400 && !toLogin(r.Location) && !echoed(r.Location, r.Sent, r.Body)
@@ -1100,10 +1241,10 @@ func WriteFindings(origin string, res WriteResult) []findings.Finding {
 				cwe = "CWE-639"
 			}
 			f.RuleID, f.Title, f.CWEs = "cross-account-write", "Another account can change this data", []string{cwe}
-			f.Message = fmt.Sprintf("%s %s, %s as account B on %s, was accepted (status %d). Account B can likely change or delete account A's data: broken access control (OWASP API1 and API5). %s", r.Method, gqlPath(pathOnly, r.GraphQL), how, obj, r.Answer.Status, proof)
+			f.Message = fmt.Sprintf("%s %s, %s as account B on %s, was accepted (status %d). Account B can likely change or delete account A's data: broken access control (OWASP API1 and API5). %s", r.Method, opLabel(pathOnly, r.GraphQL, r.RPC), how, obj, r.Answer.Status, proof)
 		} else {
 			f.RuleID, f.Title, f.CWEs = "no-login-write", "Data can be changed with no login", []string{"CWE-306"}
-			f.Message = fmt.Sprintf("%s %s, %s with no login on %s, was accepted (status %d). Anyone may be able to change this data: missing authentication (OWASP API2). %s", r.Method, gqlPath(pathOnly, r.GraphQL), how, obj, r.Answer.Status, proof)
+			f.Message = fmt.Sprintf("%s %s, %s with no login on %s, was accepted (status %d). Anyone may be able to change this data: missing authentication (OWASP API2). %s", r.Method, opLabel(pathOnly, r.GraphQL, r.RPC), how, obj, r.Answer.Status, proof)
 		}
 		out = append(out, f)
 	}
@@ -1131,7 +1272,7 @@ func (r WriteResult) WriteSummary(w *Writes) string {
 			medium++
 		}
 		if rp.Accepted() {
-			accepted = appendOnce(accepted, fmt.Sprintf("%s as %s", Write{Method: rp.Method, Path: pathOf(rp.Sent), GraphQL: rp.GraphQL}.Label(), whoName(rp.Who)))
+			accepted = appendOnce(accepted, fmt.Sprintf("%s as %s", Write{Method: rp.Method, Path: pathOf(rp.Sent), GraphQL: rp.GraphQL, RPC: rp.RPC}.Label(), whoName(rp.Who)))
 		}
 		if rp.Recreated && rp.Create != nil {
 			recreatedAt = appendOnce(recreatedAt, "POST "+pathOf(rp.Create.Path))
@@ -1184,10 +1325,13 @@ func (r WriteResult) WriteSummary(w *Writes) string {
 		for _, x := range []struct {
 			n    int
 			what string
-		}{{w.NoBody, "with form fields but no body text in the HAR file"}, {w.GraphQLReads, "GraphQL queries or subscriptions (reads)"}, {w.Duplicate, "duplicates"}, {w.OverLimit, fmt.Sprintf("over the %d-write limit", MaxWrites)}, {w.TriesOverLimit, fmt.Sprintf("tries on A's objects over the %d-try limit", MaxTries)}} {
+		}{{w.NoBody, "with form fields but no body text in the HAR file"}, {w.GraphQLReads, "GraphQL queries or subscriptions (reads)"}, {w.RPCReads, "method calls sent as POST whose method name reads"}, {w.ReadPOSTs, "POSTs whose path ends in a read word"}, {w.Transport, "SockJS or Socket.IO polling requests (a socket session's messages)"}, {w.Duplicate, "duplicates"}, {w.OverLimit, fmt.Sprintf("over the %d-write limit", MaxWrites)}, {w.TriesOverLimit, fmt.Sprintf("tries on A's objects over the %d-try limit", MaxTries)}} {
 			if x.n > 0 {
 				notes = append(notes, fmt.Sprintf("%d %s not replayed", x.n, x.what))
 			}
+		}
+		if len(w.ReadNames) > 0 {
+			notes = append(notes, "reads sent as POST include "+strings.Join(w.ReadNames, ", "))
 		}
 	}
 	swapped, stale := csrfWrites(r.Replays)
@@ -1557,11 +1701,4 @@ func payloadRefused(v any, depth int) bool {
 		}
 	}
 	return false
-}
-
-func gqlPath(path, op string) string {
-	if op == "" {
-		return path
-	}
-	return path + " (GraphQL " + op + ")"
 }
