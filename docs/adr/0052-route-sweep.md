@@ -3,6 +3,7 @@
 - Status: Accepted (owner 2026-11-22 06:29 UTC, decision card "Spec + server code (E2), with B": this ADR is pull request 2 of 3, the spec sweep for reads; owner 2026-11-22 09:46 UTC: read YAML with a vendored library, `go.yaml.in/yaml/v3`. Build-time items 3 to 9 are Claude's, measured below and brought to the owner with the pull request)
 - Date: 2026-11-22
 - Amends: [0035](0035-access-control-replay.md) (item 2: the headers spec routes carry; the sweep on local targets), [0051](0051-outsider-account-c.md) (what C is sent)
+- Amended by: [0053](0053-routes-from-server-code.md) (routes read from the server code are swept too; an optional ID filter read from code is filled only when the recording has an ID)
 
 ## Context
 

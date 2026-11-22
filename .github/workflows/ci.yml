@@ -107,6 +107,8 @@ jobs:
           go test -run='^$' -fuzz=FuzzParseHAR -fuzztime=30s ./internal/authz
           go test -run='^$' -fuzz=FuzzParseWrites -fuzztime=30s ./internal/authz
           go test -run='^$' -fuzz=FuzzSweepRoutes -fuzztime=30s ./internal/authz
+          go test -run='^$' -fuzz=FuzzTokenizeJS -fuzztime=30s ./internal/coderoutes
+          go test -run='^$' -fuzz=FuzzGoRoutes -fuzztime=30s ./internal/coderoutes
           go test -run='^$' -fuzz=FuzzParse -fuzztime=30s ./internal/ratelimit
           go test -run='^$' -fuzz=FuzzParse -fuzztime=30s ./internal/backend
           go test -run='^$' -fuzz=FuzzReadScripts -fuzztime=30s ./internal/backend

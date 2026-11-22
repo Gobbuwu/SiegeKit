@@ -944,27 +944,6 @@ func (w *goWalker) handleCall(sc *scope, call *ast.CallExpr, methods []string) b
 	return true
 }
 
-// chainMethods collects the HTTP methods of .Methods(...) calls in a
-// chain.
-func (w *goWalker) chainMethods(sc *scope, call *ast.CallExpr) []string {
-	var out []string
-	for c := call; c != nil; {
-		sel, ok := c.Fun.(*ast.SelectorExpr)
-		if !ok {
-			break
-		}
-		if sel.Sel.Name == "Methods" {
-			for _, a := range c.Args {
-				if m, ok := w.method(sc, a); ok {
-					out = append(out, m)
-				}
-			}
-		}
-		c, _ = sel.X.(*ast.CallExpr)
-	}
-	return out
-}
-
 func (w *goWalker) method(sc *scope, e ast.Expr) (string, bool) {
 	if sel, ok := e.(*ast.SelectorExpr); ok {
 		if x, ok := sel.X.(*ast.Ident); ok && x.Name == "http" {

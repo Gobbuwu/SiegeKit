@@ -101,14 +101,14 @@ func FromPath(root string) (Result, error) {
 	}
 	var goFiles []srcFile
 	var jsRes jsResult
-	jsCount, total := 0, 0
+	jsCount, total := 0, int64(0)
 	add := func(path string, size int64) {
 		name := filepath.Base(path)
 		js := isJS(name)
 		if !strings.HasSuffix(name, ".go") && !js || skipFile(name) {
 			return
 		}
-		if size > MaxFileSize || len(goFiles)+jsCount >= MaxFiles || total+int(size) > MaxTotalSize {
+		if size > MaxFileSize || len(goFiles)+jsCount >= MaxFiles || total+size > MaxTotalSize {
 			res.TooBig++
 			return
 		}
@@ -117,7 +117,7 @@ func FromPath(root string) (Result, error) {
 			res.Unparsed++
 			return
 		}
-		total += len(b)
+		total += int64(len(b))
 		if js {
 			// Read and dropped one at a time: a server bundle is tens of
 			// megabytes (Rocket.Chat's app.js, 20 to 24 MB).
