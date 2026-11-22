@@ -1,6 +1,6 @@
 # 0054. Known answers for the write replay in CI, and IDs replaced by their place
 
-- Status: Accepted (CI known answers: M2 queue item, coordinator 2026-11-22; how CI records account A: owner's choice pending, recommended a real Chromium recording)
+- Status: Accepted (CI known answers: M2 queue item, coordinator 2026-11-22; account A recorded in Chromium: owner's choice 2026-11-22)
 - Date: 2026-11-22
 - Amends: [0049](0049-write-replay.md) (item 2a: where a copy's ID replaces the recorded one; item 2d: which earlier writes name the object), [0039](0039-known-answers-and-engine-parity.md) (a run that starts no container has no engine)
 
@@ -47,6 +47,6 @@ Labels ("real", "allowed by design") are Claude's, from ADR 0049's and ADR 0051'
 
 ## Alternatives considered
 
-- **A scripted HAR instead of a browser recording**: same Juice Shop answer, 3 s instead of about 75 s and no npm package; it does not test what only real recordings hold (Socket.IO polling, browser headers, the reads the browser makes, which drive the tries of item 2c). Put to the owner as a decision card (2026-11-22) with both measured; recommended the Chromium recording.
+- **A scripted HAR instead of a browser recording**: same Juice Shop answer, 3 s instead of about 75 s and no npm package; it does not test what only real recordings hold (Socket.IO polling, browser headers, the reads the browser makes, which drive the tries of item 2c). Put to the owner as a decision card (2026-11-22) with both measured; the owner chose the Chromium recording.
 - **Writes added to the web job's hand-made HAR**: zap-active also attacks the recording's requests (ADR 0047), so its known answer would change and its attacks on A's writes would run after the write replay in the same job; a separate job keeps each answer about one check.
 - **Value replacement with a closer path match only** (the fix for the address and card both being 7, ADR 0049): it cannot tell the basket in the path from the address in the body.
