@@ -1,0 +1,88 @@
+package main
+
+// Measurement only, not committed. Mirrors the CLI: --source read with
+// coderoutes.FromPath, addSpecRequests (local target), then Check with B
+// and C.
+import (
+	"context"
+	"fmt"
+	"net/netip"
+	"os"
+	"strings"
+	"testing"
+
+	"github.com/Gobbuwu/SiegeKit/internal/authz"
+	"github.com/Gobbuwu/SiegeKit/internal/coderoutes"
+	"github.com/Gobbuwu/SiegeKit/internal/egress"
+	"github.com/Gobbuwu/SiegeKit/internal/openapi"
+	"github.com/Gobbuwu/SiegeKit/internal/target"
+)
+
+func TestZZCode(t *testing.T) {
+	harPath := os.Getenv("ZZ_HAR")
+	if harPath == "" {
+		t.Skip()
+	}
+	data, _ := os.ReadFile(harPath)
+	tu, _ := target.Parse(os.Getenv("ZZ_TARGET"))
+	h, err := authz.ParseHAR(data, tu)
+	if err != nil {
+		t.Fatal(err)
+	}
+	harN := len(h.Requests)
+	var spec *openapi.Spec
+	if sp := os.Getenv("ZZ_SPEC"); sp != "" {
+		b, _ := os.ReadFile(sp)
+		format, err := openapi.Check(b)
+		if err != nil {
+			t.Fatal(err)
+		}
+		spec = &openapi.Spec{Data: b, Format: format, Source: sp}
+	}
+	var code []authz.SpecRoute
+	if d := os.Getenv("ZZ_CODE"); d != "" {
+		r, err := coderoutes.FromPath(d)
+		fmt.Printf("CODE err=%v files=%d routes=%d found=%v unresolved=%d toobig=%d unparsed=%d truncated=%v\n", err, r.Files, len(r.Routes), r.Found, r.Unresolved, r.TooBig, r.Unparsed, r.Truncated)
+		code = r.Routes
+	}
+	inSpec := addSpecRequests(h, spec, code, false)
+	fmt.Printf("PARSED har=%d spec=%d sweep=%d codesweep=%d inspec=%d noid=%d url=%d unreadable=%d action=%d over=%d sweepover=%d\n", harN, h.FromSpec, h.FromSweep, h.FromCodeSweep, inSpec, h.SweepNoID, h.SweepURL, h.SweepUnreadable, h.Action, h.OverLimit, h.SweepOverLimit)
+	if os.Getenv("ZZ_DRY") != "" {
+		for _, r := range h.Requests[harN:] {
+			fmt.Println("RPLAN", r.Path)
+		}
+		return
+	}
+	var acc authz.Accounts
+	if s := os.Getenv("ZZ_B"); s != "" {
+		acc.B, _ = authz.ParseSession(s)
+	}
+	if s := os.Getenv("ZZ_C"); s != "" {
+		acc.C, _ = authz.ParseSessionFrom(authz.SessionEnvC, s)
+	}
+	cfg := egress.Config{Target: tu, Addrs: []netip.Addr{netip.MustParseAddr("127.0.0.1")}, Version: "measure", ReadOnly: true}
+	res, err := authz.Check(context.Background(), cfg, h.Requests, acc, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cw := res.CWorks()
+	for i, r := range res.Replays {
+		src := "har"
+		if i >= harN {
+			src = "sweep"
+		}
+		short := func(a authz.Answer) string {
+			b := string(a.Body)
+			if len(b) > 90 {
+				b = b[:90]
+			}
+			return strings.ReplaceAll(b, "\n", " ")
+		}
+		fmt.Printf("RREPLAY %-5s %s %s A=%d/%d C=%d/%d B=%d/%d N=%d outsider=%v cross=%v bonly=%v Abody=%q Cbody=%q\n", src, r.Method, r.Path, r.A.Status, len(r.A.Body), r.C.Status, len(r.C.Body), r.B.Status, len(r.B.Body), r.None.Status, r.Outsider(), r.CrossAccount(), r.BOnly(cw), short(r.A), short(r.C))
+	}
+	fmt.Println("RSUMMARY requests", res.Requests, "rate429", res.Rate429, "cworks", cw)
+	fmt.Println("RSUMMARYTEXT", res.Summary(h, os.Getenv("ZZ_USER"), authz.Count(res, os.Getenv("ZZ_USER"))))
+	for _, f := range authz.Findings(tu.Origin(), res, os.Getenv("ZZ_USER")) {
+		fmt.Println("RFINDING", f.RuleID, f.Severity, f.Location.URI)
+	}
+}
