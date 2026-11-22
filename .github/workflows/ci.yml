@@ -105,6 +105,7 @@ jobs:
           go test -run='^$' -fuzz=FuzzParse -fuzztime=60s ./internal/target
           go test -run='^$' -fuzz=FuzzOnOrigin -fuzztime=30s ./internal/target
           go test -run='^$' -fuzz=FuzzParseHAR -fuzztime=30s ./internal/authz
+          go test -run='^$' -fuzz=FuzzParseWrites -fuzztime=30s ./internal/authz
           go test -run='^$' -fuzz=FuzzParse -fuzztime=30s ./internal/ratelimit
           go test -run='^$' -fuzz=FuzzParse -fuzztime=30s ./internal/backend
           go test -run='^$' -fuzz=FuzzReadScripts -fuzztime=30s ./internal/backend

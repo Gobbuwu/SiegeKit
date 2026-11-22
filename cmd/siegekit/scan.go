@@ -119,6 +119,15 @@ Flags:
                     "Name: value" per line) and with no login
   --har-user NAME   account A's login name, as it appears in the app's
                     answers; reports A's data readable with no login
+  --replay-writes   also replay the HAR file's POST, PUT, PATCH and DELETE
+                    requests as account B and with no login
+                    (access-control-write, local targets only). It changes
+                    data in the app: use a throwaway database or a
+                    snapshot. A person types "change test data" first.
+                    It also tries PUT, PATCH and DELETE on A's objects.
+                    Record every kind of change the app has (create,
+                    edit and delete each kind of object, send each form,
+                    finish a purchase): what A never did is not tested
   --rate-limit-url URL
                     an expensive URL on the target's origin, such as a
                     search, for the rate-limit check (local targets only);
@@ -173,6 +182,7 @@ func scan(args []string, stdout, stderr io.Writer) int {
 	fl.IntVar(&rl.requests, "rate-limit-requests", ratelimit.DefaultRequests, "")
 	har := fl.String("har", "", "")
 	harUser := fl.String("har-user", "", "")
+	replayWrites := fl.Bool("replay-writes", false, "")
 	backendURL := fl.String("backend-url", "", "")
 	source := fl.String("source", "", "")
 	// Allow flags before and after DIR.
@@ -230,6 +240,15 @@ func scan(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprint(stderr, "siegekit scan: --har-user needs --har\n")
 		return exitUsage
 	}
+	// Write replay changes data, so it is local only (ADR 0049 item 1).
+	switch {
+	case *replayWrites && *har == "":
+		fmt.Fprint(stderr, "siegekit scan: --replay-writes needs --har\n")
+		return exitUsage
+	case *replayWrites && *deployed:
+		fmt.Fprint(stderr, "siegekit scan: --replay-writes changes data, so it runs only on local targets, not with --deployed\n")
+		return exitUsage
+	}
 	if sc := otherScheme(pos[0]); sc != "" {
 		if _, err := os.Stat(pos[0]); err != nil {
 			fmt.Fprintf(stderr, "siegekit scan: %s:// URLs cannot be scanned; give an http:// or https:// URL or a directory\n", sc)
@@ -246,12 +265,12 @@ func scan(args []string, stdout, stderr io.Writer) int {
 			only: splitList(*only), skip: splitList(*skip), threshold: threshold,
 			reportDir: *reportDir, noSave: *noSave, consent: consent{yes: *yes, none: *noInstall},
 			requireAll: *requireAll, openAPI: *openAPI, profile: *profile, login: lf,
-			har: *har, harUser: *harUser, rateLimit: rl,
+			har: *har, harUser: *harUser, replayWrites: *replayWrites, rateLimit: rl,
 			backendURL: *backendURL, source: *source,
 		}, stdout, stderr)
 	}
-	if *deployed || *authorizedHost != "" || *openAPI != "" || lf.url != "" || attemptsSet || *har != "" || rl.url != "" || *backendURL != "" || *source != "" {
-		fmt.Fprint(stderr, "siegekit scan: --deployed, --authorized-host, --openapi, --har, --backend-url, --source, the --login flags and the --rate-limit flags only apply to URL targets\n")
+	if *deployed || *authorizedHost != "" || *openAPI != "" || lf.url != "" || attemptsSet || *har != "" || *replayWrites || rl.url != "" || *backendURL != "" || *source != "" {
+		fmt.Fprint(stderr, "siegekit scan: --deployed, --authorized-host, --openapi, --har, --replay-writes, --backend-url, --source, the --login flags and the --rate-limit flags only apply to URL targets\n")
 		return exitUsage
 	}
 	target, err := resolveDir(pos[0])

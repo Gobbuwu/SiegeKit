@@ -14,6 +14,11 @@
       ],
       "minRequests": 29
     },
+    "access-control-write": {
+      "status": "skipped",
+      "reason": "off unless asked for",
+      "cause": "no-input"
+    },
     "backend-live": {
       "status": "skipped",
       "reason": "no backend URL was given",

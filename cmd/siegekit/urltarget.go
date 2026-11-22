@@ -95,6 +95,7 @@ type urlScan struct {
 	profile        string // --profile: full or quick
 	login          loginFlags
 	har, harUser   string // --har and --har-user (ADR 0035)
+	replayWrites   bool   // --replay-writes (ADR 0049)
 	rateLimit      rateLimitFlags
 	backendURL     string // --backend-url (ADR 0037)
 	source         string // --source: the app's repository (ADR 0037)
@@ -102,6 +103,7 @@ type urlScan struct {
 	// Read from --har and SIEGEKIT_SESSION_B before any request.
 	harRequests *authz.HAR
 	sessionB    http.Header
+	writes      *authz.Writes // read only with --replay-writes
 	// Read from --rate-limit-url and --rate-limit-body before any request.
 	rateEndpoint *ratelimit.Endpoint
 	// Read from --backend-url and --source before any request.
@@ -227,6 +229,11 @@ func scanURL(raw string, o urlScan, stdout, stderr io.Writer) int {
 		}
 		if o.harRequests, err = authz.ParseHAR(data, u); err != nil {
 			return refuse("--har: %v", err)
+		}
+		if o.replayWrites {
+			if o.writes, err = authz.ParseWrites(data, u); err != nil {
+				return refuse("--har: %v", err)
+			}
 		}
 		if s, ok := os.LookupEnv(authz.SessionEnv); ok {
 			if o.sessionB, err = authz.ParseSession(s); err != nil {
@@ -411,6 +418,7 @@ func runURL(ctx context.Context, u *target.URL, addrs []netip.Addr, mode target.
 		{ID: publicmaps.ID, Name: publicmaps.Name, Family: publicmaps.Family, Targets: []string{"url"}},
 		{ID: backend.ID, Name: backend.Name, Family: backend.Family, Targets: []string{"url"}},
 		{ID: authz.ID, Name: authz.Name, Family: authz.Family, Targets: []string{"url"}},
+		{ID: authz.WriteID, Name: authz.WriteName, Family: authz.Family, Targets: []string{"url"}},
 	}, "url", o.only, o.skip)
 	if err != nil {
 		return fail(err)
@@ -419,6 +427,7 @@ func runURL(ctx context.Context, u *target.URL, addrs []netip.Addr, mode target.
 		return slices.ContainsFunc(own, func(c checks.Check) bool { return c.ID == id })
 	}
 	loginSelected, servedSelected, authzSelected := ownSelected(login.ID), ownSelected(served.ID), ownSelected(authz.ID)
+	writeSelected := ownSelected(authz.WriteID)
 	rateSelected, backendSelected, mapsSelected := ownSelected(ratelimit.ID), ownSelected(backend.ID), ownSelected(publicmaps.ID)
 	// The served-secrets check runs Gitleaks over the files it fetched
 	// (ADR 0032).
@@ -430,7 +439,7 @@ func runURL(ctx context.Context, u *target.URL, addrs []netip.Addr, mode target.
 		}
 		gitleaks = all[i]
 	}
-	for _, id := range []string{login.ID, ratelimit.ID} {
+	for _, id := range []string{login.ID, ratelimit.ID, authz.WriteID} {
 		if ownSelected(id) && runner.ProfileSkip(true, o.profile) != "" && slices.Contains(o.only, id) {
 			return fail(fmt.Errorf("--only names %s, which --profile %s does not run", id, o.profile))
 		}
@@ -536,6 +545,22 @@ func runURL(ctx context.Context, u *target.URL, addrs []netip.Addr, mode target.
 			unavailable[authz.ID] = runner.Fail(report.CausePlatform, "active tests run only on Linux for now (ADR 0018)")
 		}
 	}
+	// Write replay changes data: local only, off unless asked for, and
+	// left out of --profile quick (ADR 0049 items 1 and 2).
+	if writeSelected {
+		switch {
+		case o.deployed:
+			unavailable[authz.WriteID] = runner.Skip(report.CauseTargetMode, "changes data, so it runs only on local targets")
+		case runner.ProfileSkip(true, o.profile) != "":
+			unavailable[authz.WriteID] = runner.Skip(report.CauseProfile, runner.ProfileSkip(true, o.profile))
+		case !o.replayWrites:
+			unavailable[authz.WriteID] = runner.Skip(report.CauseNoInput, "off unless asked for, because it changes data: pass --replay-writes with --har (recorded as test account A) to replay its POST, PUT, PATCH and DELETE requests as account B and with no login")
+		case len(o.writes.Writes) == 0:
+			unavailable[authz.WriteID] = runner.Skip(report.CauseNoInput, fmt.Sprintf("%s has no POST, PUT, PATCH or DELETE request to replay (%d could log in, log out or lock an account out and are never replayed)", filepath.Base(o.har), o.writes.Lockout))
+		case hostOS != "linux":
+			unavailable[authz.WriteID] = runner.Fail(report.CausePlatform, "active tests run only on Linux for now (ADR 0018)")
+		}
+	}
 	limits := runner.LocalLimits
 	if o.deployed {
 		limits = runner.DeployedLimits
@@ -619,6 +644,20 @@ func runURL(ctx context.Context, u *target.URL, addrs []netip.Addr, mode target.
 			}
 			fmt.Fprintf(stdout, "  %-20s siegekit %s: replay %d GET and HEAD request(s) from %s %s\n",
 				authz.ID, version, len(o.harRequests.Requests), filepath.Base(o.har), who)
+		}
+	}
+	if writeSelected {
+		if r, ok := unavailable[authz.WriteID]; ok {
+			fmt.Fprintf(stdout, "  %-20s not run - %s\n", authz.WriteID, r.Reason)
+		} else {
+			planned = append(planned, authz.WriteID)
+			who := "as account B and with no login"
+			if o.sessionB == nil {
+				who = "with no login (" + authz.SessionEnv + " not set: account B is not tested)"
+			}
+			recorded, tried := o.writes.Recorded()
+			fmt.Fprintf(stdout, "  %-20s siegekit %s: replay %d POST, PUT, PATCH and DELETE request(s) from %s, and try %d PUT, PATCH or DELETE request(s) it did not make on account A's objects, %s, each on a copy of account A's object where the recording shows how A made it; this changes data\n",
+				authz.WriteID, version, recorded, filepath.Base(o.har), tried, who)
 		}
 	}
 	reach := strings.TrimSuffix(u.String(), u.Path)
@@ -708,16 +747,20 @@ func runURL(ctx context.Context, u *target.URL, addrs []netip.Addr, mode target.
 	// (owner Q5, 2026-11-21, ADR 0035). No flag or environment variable
 	// skips this: an AI assistant cannot confirm it for the person.
 	authzPlanned := slices.Contains(planned, authz.ID)
+	writePlanned := slices.Contains(planned, authz.WriteID)
 	recordedPlanned := slices.Contains(planned, zapActive) && o.harRequests != nil && len(o.harRequests.Recorded) > 0
 	var recordedRequests []authz.RecordedRequest
-	if authzPlanned || recordedPlanned {
+	if authzPlanned || writePlanned || recordedPlanned {
 		accounts := "account A (the HAR file's session)"
-		if authzPlanned && o.sessionB != nil {
+		if (authzPlanned || writePlanned) && o.sessionB != nil {
 			accounts = "accounts A (the HAR file's session) and B (" + authz.SessionEnv + ")"
 		}
 		var who []string
 		if authzPlanned {
 			who = append(who, authz.ID+" replays requests")
+		}
+		if writePlanned {
+			who = append(who, authz.WriteID+" replays writes")
 		}
 		if recordedPlanned {
 			who = append(who, fmt.Sprintf("%s attacks %d recorded request(s)", zapActive, len(o.harRequests.Recorded)))
@@ -739,10 +782,47 @@ func runURL(ctx context.Context, u *target.URL, addrs []netip.Addr, mode target.
 		case reason != "" && recordedPlanned:
 			fmt.Fprintf(stdout, "  %-20s runs without the recorded requests - %s\n", zapActive, reason)
 		}
-		if reason != "" && authzPlanned {
-			unavailable[authz.ID] = runner.Skip(report.CauseNotConfirmed, reason)
-			planned = slices.DeleteFunc(planned, func(p string) bool { return p == authz.ID })
-			fmt.Fprintf(stdout, "  %-20s not run - %s\n", authz.ID, reason)
+		if reason != "" {
+			for _, id := range []string{authz.ID, authz.WriteID} {
+				if slices.Contains(planned, id) {
+					unavailable[id] = runner.Skip(report.CauseNotConfirmed, reason)
+					planned = slices.DeleteFunc(planned, func(p string) bool { return p == id })
+					fmt.Fprintf(stdout, "  %-20s not run - %s\n", id, reason)
+				}
+			}
+		}
+	}
+	// Write replay changes data, so after "test accounts" the person reads
+	// the writes and types a second phrase (ADR 0049 item 3). No flag or
+	// environment variable skips it; a program that drives a
+	// pseudo-terminal can type it (ADR 0044).
+	if slices.Contains(planned, authz.WriteID) {
+		reason := ""
+		switch {
+		case stdinIsTerminal():
+			fmt.Fprintf(stdout, "%s will send these %d request(s) to %s:\n", authz.WriteID, len(o.writes.Writes), u)
+			for _, w := range o.writes.Writes {
+				note := ""
+				if w.Tried {
+					note = " (not in the recording)"
+				}
+				if len(w.Steps) > 0 {
+					note += fmt.Sprintf(" (account A first sends %d of its earlier writes again)", len(w.Steps))
+				}
+				fmt.Fprintf(stdout, "  %s%s\n", w.Label(), note)
+			}
+			fmt.Fprintf(stdout, "Each is sent as account B and with no login; where the recording shows how account A made the object, SiegeKit first makes a copy with A's request. Only what the recording did is tested, plus PUT, PATCH and DELETE on A's objects: record every kind of change the app has (create, edit and delete each kind of object, send each form, finish a purchase). This changes data in the app: use a throwaway database or a snapshot. Type %q to run them: ", changeTestData)
+			line, _ := o.in.ReadString('\n')
+			if strings.TrimSpace(line) != changeTestData {
+				reason = fmt.Sprintf("not confirmed: %q was not typed", changeTestData)
+			}
+		default:
+			reason = fmt.Sprintf("it changes data in the app, so a person must type %q in a terminal; run this command yourself (an AI assistant should ask you to). No flag skips this", changeTestData)
+		}
+		if reason != "" {
+			unavailable[authz.WriteID] = runner.Skip(report.CauseNotConfirmed, reason)
+			planned = slices.DeleteFunc(planned, func(p string) bool { return p == authz.WriteID })
+			fmt.Fprintf(stdout, "  %-20s not run - %s\n", authz.WriteID, reason)
 		}
 	}
 	// The spec paths are probed once, for the checks that use a spec
@@ -970,6 +1050,34 @@ func runURL(ctx context.Context, u *target.URL, addrs []netip.Addr, mode target.
 		}
 		authzResult = &pr
 	}
+	// After the read replay, so its answers are those A recorded (ADR 0049).
+	var writeResult *report.PluginResult
+	var writeFindings []findings.Finding
+	if writeSelected {
+		pr := report.PluginResult{ID: authz.WriteID, Family: authz.Family, Tool: "siegekit", Version: version}
+		if r, ok := unavailable[authz.WriteID]; ok {
+			pr.Status, pr.Cause, pr.Reason = r.Status, r.Cause, r.Reason
+		} else {
+			recorded, tried := o.writes.Recorded()
+			pr.Input = fmt.Sprintf("%s, %d write(s) recorded as account A, %d tried on A's objects", filepath.Base(o.har), recorded, tried)
+			if o.sessionB != nil {
+				pr.Input += "; account B from " + authz.SessionEnv
+			}
+			fmt.Fprintf(stdout, "%s: replaying %d write(s).\n", authz.WriteID, len(o.writes.Writes))
+			res, err := writeCheck(ctx, egress.Config{Target: u, Addrs: addrs, Version: version}, o.writes.Writes, o.sessionB, o.harUser, limits.Rate, mode)
+			if ctx.Err() != nil {
+				return fail(errors.New("interrupted; no report written"))
+			}
+			pr.Requests = res.Requests
+			if err != nil {
+				pr.Status, pr.Reason = report.Failed, err.Error()
+			} else {
+				writeFindings = authz.WriteFindings(u.Origin(), res)
+				pr.Status, pr.Result, pr.Findings = report.Ran, res.WriteSummary(o.writes), len(writeFindings)
+			}
+		}
+		writeResult = &pr
+	}
 	var active runner.ActiveRunner
 	if e, ok := ex.(*sandbox.Engine); ok {
 		bin, err := os.Executable()
@@ -994,7 +1102,7 @@ func runURL(ctx context.Context, u *target.URL, addrs []netip.Addr, mode target.
 		return fail(err)
 	}
 	var first []report.PluginResult
-	for _, pr := range []*report.PluginResult{loginResult, rateResult, servedResult, backendResult, mapsResult, authzResult} {
+	for _, pr := range []*report.PluginResult{loginResult, rateResult, servedResult, backendResult, mapsResult, authzResult, writeResult} {
 		if pr != nil {
 			first = append(first, *pr)
 		}
@@ -1002,7 +1110,7 @@ func runURL(ctx context.Context, u *target.URL, addrs []netip.Addr, mode target.
 	if len(first) > 0 {
 		run.Started = started
 		run.Plugins = append(first, run.Plugins...)
-		if run.Findings = findings.Dedupe(slices.Concat(loginFindings, rateFindings, servedFindings, backendFindings, mapsFindings, authzFindings, run.Findings)); run.Findings == nil {
+		if run.Findings = findings.Dedupe(slices.Concat(loginFindings, rateFindings, servedFindings, backendFindings, mapsFindings, authzFindings, writeFindings, run.Findings)); run.Findings == nil {
 			run.Findings = []findings.Finding{}
 		}
 	}
@@ -1044,8 +1152,15 @@ func runServed(ctx context.Context, ex runner.Executor, gl *manifest.Manifest, s
 // check's accounts are test accounts.
 const testAccounts = "test accounts"
 
+// changeTestData is what a person types before access-control-write
+// changes data (ADR 0049 item 3).
+const changeTestData = "change test data"
+
 // authzCheck replays the HAR's requests; tests replace it.
 var authzCheck = authz.Check
+
+// writeCheck is authz.WriteCheck; tests replace it.
+var writeCheck = authz.WriteCheck
 
 // readHAR reads the HAR file, refusing anything but a regular file of at
 // most authz.MaxHARSize bytes.

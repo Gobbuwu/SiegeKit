@@ -249,6 +249,68 @@ func vulnApp() http.Handler {
 		w.Header().Set("Content-Type", "application/json")
 		fmt.Fprint(w, `{"members":[{"name":"carol","passwordHash":"$2b$10$N9qo8uLOickgx2ZMRZoMyeIjZAgcfl7p92ldGxad68LJZdL17lhWy"}]}`)
 	})
+	// Carts (ADR 0049). Each account reads and deletes only its own cart,
+	// but any logged-in account can change a cart's quantity (CWE-639):
+	// account B changes account A's cart. Nothing here is linked from a
+	// page, so the crawling tools do not reach it.
+	var cartMu sync.Mutex
+	type cart struct {
+		owner string
+		qty   int
+	}
+	carts, nextCart := map[string]*cart{}, 1
+	mux.HandleFunc("POST /api/carts/", func(w http.ResponseWriter, r *http.Request) {
+		u := vulnAccounts[r.Header.Get("Authorization")]
+		if u == "" {
+			http.Error(w, "log in first", http.StatusUnauthorized)
+			return
+		}
+		cartMu.Lock()
+		defer cartMu.Unlock()
+		id := strconv.Itoa(nextCart)
+		nextCart++
+		carts[id] = &cart{owner: u, qty: 1}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusCreated)
+		fmt.Fprintf(w, `{"status":"success","data":{"id":%s,"qty":1}}`, id)
+	})
+	cartOf := func(w http.ResponseWriter, r *http.Request, ownerOnly bool) *cart {
+		u := vulnAccounts[r.Header.Get("Authorization")]
+		c, ok := carts[r.PathValue("id")]
+		switch {
+		case u == "":
+			http.Error(w, "log in first", http.StatusUnauthorized)
+		case !ok || ownerOnly && c.owner != u:
+			http.NotFound(w, r)
+		default:
+			return c
+		}
+		return nil
+	}
+	mux.HandleFunc("GET /api/carts/{id}", func(w http.ResponseWriter, r *http.Request) {
+		cartMu.Lock()
+		defer cartMu.Unlock()
+		if c := cartOf(w, r, true); c != nil {
+			w.Header().Set("Content-Type", "application/json")
+			fmt.Fprintf(w, `{"data":{"qty":%d}}`, c.qty)
+		}
+	})
+	mux.HandleFunc("PUT /api/carts/{id}", func(w http.ResponseWriter, r *http.Request) {
+		cartMu.Lock()
+		defer cartMu.Unlock()
+		if c := cartOf(w, r, false); c != nil {
+			c.qty++
+			fmt.Fprint(w, `{"status":"success"}`)
+		}
+	})
+	mux.HandleFunc("DELETE /api/carts/{id}", func(w http.ResponseWriter, r *http.Request) {
+		cartMu.Lock()
+		defer cartMu.Unlock()
+		if c := cartOf(w, r, true); c != nil {
+			delete(carts, r.PathValue("id"))
+			fmt.Fprint(w, `{"status":"success"}`)
+		}
+	})
 	mux.HandleFunc("GET /account/profile", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		fmt.Fprint(w, `{"email":"alice@shop.test","address":"1 Main St"}`)
@@ -371,5 +433,10 @@ var vulnAppIssues = map[string]map[string]string{
 		"cross-account-read /api/orders/7": "account B reads account A's order at GET /api/orders/7",
 		"no-login-read /account/profile":   "account A's profile answers with no login",
 		"no-login-secret /api/members":     "the member list gives anyone password hashes",
+	},
+	// access-control-write runs in the test process
+	// (TestAuthzWriteFindsPlantedIssue).
+	"access-control-write": {
+		"cross-account-write /api/carts/1": "account B changes account A's cart at PUT /api/carts/1",
 	},
 }

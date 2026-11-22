@@ -52,6 +52,7 @@ Each significant design decision is recorded as a short ADR before code is writt
 | [0046](0046-public-api-maps.md) | Public API specs and source maps (amends 0028, 0032) | Accepted |
 | [0047](0047-recorded-requests-to-zap.md) | Recorded requests in ZAP's attack scan (amends 0004, 0023, 0035) | Accepted |
 | [0048](0048-get-replay-skips-actions.md) | Access-control replay skips GETs that name an action (amends 0035) | Accepted |
+| [0049](0049-write-replay.md) | Replaying recorded writes as another account (amends 0035) | Accepted |
 
 ADRs 0002 to 0011 were accepted at the M0 design sign-off on 2026-11-18.
 
