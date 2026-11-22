@@ -336,8 +336,8 @@ func freshID(old string) string {
 	}
 	if reUUID.MatchString(old) {
 		var b [16]byte
-		for i := range b {
-			b[i] = byte(rnd(256))
+		if _, err := rand.Read(b[:]); err != nil {
+			panic(err)
 		}
 		b[6] = b[6]&0x0f | 0x40
 		b[8] = b[8]&0x3f | 0x80
@@ -354,21 +354,21 @@ func freshID(old string) string {
 		switch {
 		case c >= '0' && c <= '9':
 			if i == 0 && len(out) > 1 {
-				out[i] = byte('1' + rnd(9))
+				out[i] = digits[1+rnd(9)]
 			} else {
-				out[i] = byte('0' + rnd(10))
+				out[i] = digits[rnd(10)]
 			}
 		case c >= 'a' && c <= 'z':
 			if isHex {
 				out[i] = "abcdef"[rnd(6)]
 			} else {
-				out[i] = byte('a' + rnd(26))
+				out[i] = lower[rnd(26)]
 			}
 		case c >= 'A' && c <= 'Z':
 			if isHex {
 				out[i] = "ABCDEF"[rnd(6)]
 			} else {
-				out[i] = byte('A' + rnd(26))
+				out[i] = upper[rnd(26)]
 			}
 		}
 	}
@@ -376,3 +376,10 @@ func freshID(old string) string {
 }
 
 var reHex = regexp.MustCompile(`^[0-9a-fA-F]+$`)
+
+// The characters freshID picks from, by index (no integer conversions).
+const (
+	digits = "0123456789"
+	lower  = "abcdefghijklmnopqrstuvwxyz"
+	upper  = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+)
