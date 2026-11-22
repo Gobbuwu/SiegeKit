@@ -2,6 +2,7 @@ package authz
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
@@ -125,3 +126,31 @@ func FuzzSweepRoutes(f *testing.F) {
 		}
 	})
 }
+
+// IDs are harvested in a fixed order, so the same recording always fills
+// the same routes; times are not taken as IDs (ADR 0052).
+func TestHarvestOrderAndTimes(t *testing.T) {
+	tu := mustTarget(t, "http://localhost:3000/")
+	ans := `{"z_id":"zzzzzzzzzz1","create_at":1795344345615,"ts":"1795344345616","_updatedAt":"1795344345617","created_unix":1795344345618,"lastMessageDate":"1795344345619","chat":"cccccccccc1","a_id":"aaaaaaaaaa1","m_id":"mmmmmmmmmm1","id":42}`
+	har := []byte(`{"log":{"entries":[{"request":{"method":"GET","url":"http://localhost:3000/x?q2=qqqqqqqqqq2&q1=qqqqqqqqqq1","headers":[]},"response":{"content":{"text":` + strconvQuote(ans) + `}}}]}}`)
+	var first []string
+	for i := 0; i < 50; i++ {
+		h, err := ParseHAR(har, tu)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if i == 0 {
+			first = h.ids.all
+			continue
+		}
+		if strings.Join(h.ids.all, ",") != strings.Join(first, ",") {
+			t.Fatalf("run %d harvested %v, run 0 %v", i, h.ids.all, first)
+		}
+	}
+	want := "qqqqqqqqqq1,qqqqqqqqqq2,aaaaaaaaaa1,cccccccccc1,42,mmmmmmmmmm1,zzzzzzzzzz1"
+	if got := strings.Join(first, ","); got != want {
+		t.Errorf("harvested %s, want %s", got, want)
+	}
+}
+
+func strconvQuote(s string) string { b, _ := json.Marshal(s); return string(b) }

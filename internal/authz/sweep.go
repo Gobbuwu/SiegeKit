@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -82,9 +83,14 @@ func normKey(s string) string {
 	return b.String()
 }
 
+// reTimeKey matches a field name that holds a time, not an object ID
+// (Mattermost's create_at, Rocket.Chat's ts and _updatedAt, Gitea's
+// created_unix): its numbers would take fill slots from real IDs.
+var reTimeKey = regexp.MustCompile(`(_at|[a-z]At|_unix|_ts)$|^(ts|at)$|(?i)date|time`)
+
 // add records value v seen under key k.
 func (s *idSet) add(k, v string) {
-	if !isID(v) {
+	if !isID(v) || reTimeKey.MatchString(k) {
 		return
 	}
 	nk := normKey(k)
@@ -98,6 +104,15 @@ func (s *idSet) add(k, v string) {
 		s.seen[v] = true
 		s.all = append(s.all, v)
 	}
+}
+
+func sortedKeys[V any](m map[string]V) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
 }
 
 func containsStr(xs []string, x string) bool {
@@ -114,8 +129,8 @@ func containsStr(xs []string, x string) bool {
 // under its field name; a query keeps each value under its parameter name.
 func (s *idSet) harvest(rawQuery string, body *harPostData, respText string) {
 	if q, err := url.ParseQuery(rawQuery); err == nil {
-		for k, vs := range q {
-			for _, v := range vs {
+		for _, k := range sortedKeys(q) {
+			for _, v := range q[k] {
 				s.add(k, v)
 			}
 		}
@@ -146,8 +161,11 @@ func (s *idSet) walk(key string, v any, depth int) {
 	}
 	switch x := v.(type) {
 	case map[string]any:
-		for k, e := range x {
-			s.walk(k, e, depth+1)
+		// In key order: Go's map order is random, and with the caps
+		// above it decided which IDs filled a route, so two runs on
+		// the same recording sent different requests (ADR 0052).
+		for _, k := range sortedKeys(x) {
+			s.walk(k, x[k], depth+1)
 		}
 	case []any:
 		for _, e := range x {
