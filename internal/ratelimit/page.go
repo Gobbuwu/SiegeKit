@@ -292,7 +292,20 @@ var (
 	idFields      = words("email emailaddress mail username user login loginname account accountname name nickname handle phone phonenumber mobile")
 	repeatFields  = words("passwordrepeat repeatpassword repeat retype retypepassword passwordconfirm passwordconfirmation confirmpassword password2 passwordagain verifypassword")
 	currentFields = words("currentpassword oldpassword")
+	// Last path segments that name a collection of users.
+	userCollections = words("users user accounts account members customers")
 )
+
+// lastSegment is the last non-empty segment of a path, in lower case,
+// without its query.
+func lastSegment(path string) string {
+	path, _, _ = strings.Cut(path, "?")
+	segs := strings.FieldsFunc(path, func(r rune) bool { return r == '/' })
+	if len(segs) == 0 {
+		return ""
+	}
+	return strings.ToLower(segs[len(segs)-1])
+}
 
 func words(s string) map[string]bool {
 	m := map[string]bool{}
@@ -402,6 +415,11 @@ func classify(path, mime, body string) Page {
 	// /api/Users/): a password, the password again, and no current one.
 	case hasField(passwordWords) && hasField(repeatFields) && !hasField(currentFields) &&
 		!anyIn(ts, loginWords) && !anyIn(ts, passwordWords) && !anyIn(ts, words("change update reset")):
+		return SignUp
+	// A sign-up posted to a collection of users with no password repeat
+	// (Mattermost's POST /api/v4/users): a password and a user name or
+	// email address, and no current password.
+	case userCollections[lastSegment(path)] && hasField(passwordWords) && hasField(idFields) && !hasField(currentFields):
 		return SignUp
 	}
 	return ""

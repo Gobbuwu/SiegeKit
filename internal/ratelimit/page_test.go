@@ -173,6 +173,14 @@ func TestClassify(t *testing.T) {
 		{"/api/auth/signUp", jsonMIME, `{}`, SignUp},
 		{"/register", formMIME, "u=a", SignUp},
 		{"/api/Users/", jsonMIME, `{"email":"a","password":"b","passwordRepeat":"b"}`, SignUp},
+		// Mattermost 12.0.2 (recorded 2026-11-22): a sign-up with no
+		// repeat, and its login and lookalikes.
+		{"/api/v4/users", jsonMIME, `{"email":"a@b.c","username":"a","password":"p"}`, SignUp},
+		{"/api/v4/users/login", jsonMIME, `{"login_id":"a","password":"p"}`, ""},
+		{"/api/v4/users/password/reset/send", jsonMIME, `{"email":"a@b.c"}`, Reset},
+		{"/api/v4/users", jsonMIME, `{"username":"a"}`, ""},
+		{"/api/v4/users/me/password", jsonMIME, `{"current_password":"a","new_password":"b"}`, ""},
+		{"/api/v4/users?x=1", jsonMIME, `{"email":"a","password":"p","current_password":"c"}`, ""},
 		{"/rest/2fa/verify", jsonMIME, `{"tmpToken":"t","totpToken":"1"}`, Code},
 		{"/user/two_factor", formMIME, "passcode=1", Code},
 		{"/api/mfa", jsonMIME, `{"otp":"1"}`, Code},
