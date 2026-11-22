@@ -286,7 +286,7 @@ func TestWriteCheckRPC(t *testing.T) {
 		t.Fatalf("%v %+v", err, ws)
 	}
 	cfg := egress.Config{Target: tu, Addrs: []netip.Addr{netip.MustParseAddr("127.0.0.1")}, Version: "test"}
-	res, err := WriteCheck(context.Background(), cfg, ws.Writes, http.Header{"X-Auth-Token": {"tb"}, "X-User-Id": {"bob1"}}, "alice", 10, target.Local)
+	res, err := WriteCheck(context.Background(), cfg, ws.Writes, Accounts{B: http.Header{"X-Auth-Token": {"tb"}, "X-User-Id": {"bob1"}}}, "alice", 10, target.Local)
 	if err != nil {
 		t.Fatal(err)
 	}

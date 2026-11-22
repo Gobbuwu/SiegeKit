@@ -114,13 +114,15 @@ Flags:
                     second (default 20, at most 50)
   --har FILE        a browser recording (HAR file) made while using the app
                     as test account A, for the access-control check: its
-                    GET and HEAD requests are replayed as A, as account B
-                    (session headers in SIEGEKIT_SESSION_B, one
-                    "Name: value" per line) and with no login
+                    GET and HEAD requests are replayed as A, as account C
+                    (an account outside every space A shares; session
+                    headers in SIEGEKIT_SESSION_C), as account B (session
+                    headers in SIEGEKIT_SESSION_B, one "Name: value" per
+                    line) and with no login
   --har-user NAME   account A's login name, as it appears in the app's
                     answers; reports A's data readable with no login
   --replay-writes   also replay the HAR file's POST, PUT, PATCH and DELETE
-                    requests as account B and with no login
+                    requests as accounts C and B and with no login
                     (access-control-write, local targets only). It changes
                     data in the app: use a throwaway database or a
                     snapshot. A person types "change test data" first.

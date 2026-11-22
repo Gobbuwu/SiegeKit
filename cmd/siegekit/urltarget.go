@@ -100,9 +100,11 @@ type urlScan struct {
 	backendURL     string // --backend-url (ADR 0037)
 	source         string // --source: the app's repository (ADR 0037)
 
-	// Read from --har and SIEGEKIT_SESSION_B before any request.
+	// Read from --har, SIEGEKIT_SESSION_B and SIEGEKIT_SESSION_C before
+	// any request.
 	harRequests *authz.HAR
 	sessionB    http.Header
+	sessionC    http.Header   // an account outside A's shared spaces (ADR 0051)
 	writes      *authz.Writes // read only with --replay-writes
 	// Read from --rate-limit-url and --rate-limit-body before any request.
 	rateEndpoint *ratelimit.Endpoint
@@ -237,6 +239,11 @@ func scanURL(raw string, o urlScan, stdout, stderr io.Writer) int {
 		}
 		if s, ok := os.LookupEnv(authz.SessionEnv); ok {
 			if o.sessionB, err = authz.ParseSession(s); err != nil {
+				return refuse("%v", err)
+			}
+		}
+		if s, ok := os.LookupEnv(authz.SessionEnvC); ok {
+			if o.sessionC, err = authz.ParseSessionFrom(authz.SessionEnvC, s); err != nil {
 				return refuse("%v", err)
 			}
 		}
@@ -538,7 +545,7 @@ func runURL(ctx context.Context, u *target.URL, addrs []netip.Addr, mode target.
 	if authzSelected {
 		switch {
 		case o.harRequests == nil:
-			unavailable[authz.ID] = runner.Skip(report.CauseNoInput, "no HAR file was given: pass --har (a browser recording made as test account A) and set "+authz.SessionEnv+" to account B's session headers to test access between accounts")
+			unavailable[authz.ID] = runner.Skip(report.CauseNoInput, "no HAR file was given: pass --har (a browser recording made as test account A) and set "+authz.SessionEnv+" and "+authz.SessionEnvC+" to accounts B's and C's session headers to test access between accounts")
 		case len(o.harRequests.Requests) == 0:
 			unavailable[authz.ID] = runner.Skip(report.CauseNoInput, fmt.Sprintf("%s has no GET or HEAD request to replay (%d naming an action left out, ADR 0048); its %d request(s) go to zap-active (ADR 0047)", filepath.Base(o.har), o.harRequests.Action, len(o.harRequests.Recorded)))
 		case hostOS != "linux":
@@ -638,9 +645,12 @@ func runURL(ctx context.Context, u *target.URL, addrs []netip.Addr, mode target.
 			fmt.Fprintf(stdout, "  %-20s not run - %s\n", authz.ID, r.Reason)
 		} else {
 			planned = append(planned, authz.ID)
-			who := "as account A, as account B and with no login"
-			if o.sessionB == nil {
-				who = "as account A and with no login (" + authz.SessionEnv + " not set: account B is not tested)"
+			who := "as account A, " + o.otherAccounts() + "with no login"
+			if o.otherAccounts() == "" {
+				who = "as account A and with no login"
+			}
+			if note := o.accountsNotTested(); note != "" {
+				who += " (" + note + ")"
 			}
 			fmt.Fprintf(stdout, "  %-20s siegekit %s: replay %d GET and HEAD request(s) from %s %s\n",
 				authz.ID, version, len(o.harRequests.Requests), filepath.Base(o.har), who)
@@ -651,9 +661,9 @@ func runURL(ctx context.Context, u *target.URL, addrs []netip.Addr, mode target.
 			fmt.Fprintf(stdout, "  %-20s not run - %s\n", authz.WriteID, r.Reason)
 		} else {
 			planned = append(planned, authz.WriteID)
-			who := "as account B and with no login"
-			if o.sessionB == nil {
-				who = "with no login (" + authz.SessionEnv + " not set: account B is not tested)"
+			who := o.writeSenders()
+			if note := o.accountsNotTested(); note != "" {
+				who += " (" + note + ")"
 			}
 			recorded, tried := o.writes.Recorded()
 			fmt.Fprintf(stdout, "  %-20s siegekit %s: replay %d POST, PUT, PATCH and DELETE request(s) from %s, and try %d PUT, PATCH or DELETE request(s) it did not make on account A's objects, %s, each on a copy of account A's object where the recording shows how A made it; this changes data\n",
@@ -752,8 +762,15 @@ func runURL(ctx context.Context, u *target.URL, addrs []netip.Addr, mode target.
 	var recordedRequests []authz.RecordedRequest
 	if authzPlanned || writePlanned || recordedPlanned {
 		accounts := "account A (the HAR file's session)"
-		if (authzPlanned || writePlanned) && o.sessionB != nil {
-			accounts = "accounts A (the HAR file's session) and B (" + authz.SessionEnv + ")"
+		if authzPlanned || writePlanned {
+			switch {
+			case o.sessionB != nil && o.sessionC != nil:
+				accounts = "accounts A (the HAR file's session), B (" + authz.SessionEnv + ") and C (" + authz.SessionEnvC + ")"
+			case o.sessionB != nil:
+				accounts = "accounts A (the HAR file's session) and B (" + authz.SessionEnv + ")"
+			case o.sessionC != nil:
+				accounts = "accounts A (the HAR file's session) and C (" + authz.SessionEnvC + ")"
+			}
 		}
 		var who []string
 		if authzPlanned {
@@ -811,7 +828,7 @@ func runURL(ctx context.Context, u *target.URL, addrs []netip.Addr, mode target.
 				}
 				fmt.Fprintf(stdout, "  %s%s\n", w.Label(), note)
 			}
-			fmt.Fprintf(stdout, "Each is sent as account B and with no login; where the recording shows how account A made the object, SiegeKit first makes a copy with A's request. Only what the recording did is tested, plus PUT, PATCH and DELETE on A's objects: record every kind of change the app has (create, edit and delete each kind of object, send each form, finish a purchase). This changes data in the app: use a throwaway database or a snapshot. Type %q to run them: ", changeTestData)
+			fmt.Fprintf(stdout, "Each is sent %s; where the recording shows how account A made the object, SiegeKit first makes a copy with A's request. Only what the recording did is tested, plus PUT, PATCH and DELETE on A's objects: record every kind of change the app has (create, edit and delete each kind of object, send each form, finish a purchase). This changes data in the app: use a throwaway database or a snapshot. Type %q to run them: ", o.writeSenders(), changeTestData)
 			line, _ := o.in.ReadString('\n')
 			if strings.TrimSpace(line) != changeTestData {
 				reason = fmt.Sprintf("not confirmed: %q was not typed", changeTestData)
@@ -1032,11 +1049,9 @@ func runURL(ctx context.Context, u *target.URL, addrs []netip.Addr, mode target.
 			if o.harRequests.FromSpec > 0 {
 				pr.Input += fmt.Sprintf("; %d route(s) from the OpenAPI spec %s", o.harRequests.FromSpec, spec.Source)
 			}
-			if o.sessionB != nil {
-				pr.Input += "; account B from " + authz.SessionEnv
-			}
+			pr.Input += o.accountsInput()
 			fmt.Fprintf(stdout, "%s: replaying %d request(s).\n", authz.ID, len(o.harRequests.Requests))
-			res, err := authzCheck(ctx, egress.Config{Target: u, Addrs: addrs, VerifyTLS: o.deployed, Version: version, ReadOnly: true}, o.harRequests.Requests, o.sessionB, limits.Rate)
+			res, err := authzCheck(ctx, egress.Config{Target: u, Addrs: addrs, VerifyTLS: o.deployed, Version: version, ReadOnly: true}, o.harRequests.Requests, authz.Accounts{B: o.sessionB, C: o.sessionC}, limits.Rate)
 			if ctx.Err() != nil {
 				return fail(errors.New("interrupted; no report written"))
 			}
@@ -1060,11 +1075,9 @@ func runURL(ctx context.Context, u *target.URL, addrs []netip.Addr, mode target.
 		} else {
 			recorded, tried := o.writes.Recorded()
 			pr.Input = fmt.Sprintf("%s, %d write(s) recorded as account A, %d tried on A's objects", filepath.Base(o.har), recorded, tried)
-			if o.sessionB != nil {
-				pr.Input += "; account B from " + authz.SessionEnv
-			}
+			pr.Input += o.accountsInput()
 			fmt.Fprintf(stdout, "%s: replaying %d write(s).\n", authz.WriteID, len(o.writes.Writes))
-			res, err := writeCheck(ctx, egress.Config{Target: u, Addrs: addrs, Version: version}, o.writes.Writes, o.sessionB, o.harUser, limits.Rate, mode)
+			res, err := writeCheck(ctx, egress.Config{Target: u, Addrs: addrs, Version: version}, o.writes.Writes, authz.Accounts{B: o.sessionB, C: o.sessionC}, o.harUser, limits.Rate, mode)
 			if ctx.Err() != nil {
 				return fail(errors.New("interrupted; no report written"))
 			}
@@ -1155,6 +1168,61 @@ const testAccounts = "test accounts"
 // changeTestData is what a person types before access-control-write
 // changes data (ADR 0049 item 3).
 const changeTestData = "change test data"
+
+// otherAccounts names the accounts besides A that the replays use, as
+// "as account C, as account B and " (C first, ADR 0051), or "".
+func (o *urlScan) otherAccounts() string {
+	s := ""
+	if o.sessionC != nil {
+		s += "as account C, "
+	}
+	if o.sessionB != nil {
+		s += "as account B, "
+	}
+	if s != "" {
+		s = strings.TrimSuffix(s, ", ") + " and "
+	}
+	return s
+}
+
+// writeSenders names the write replay's senders in the order they send
+// (ADR 0051 item 2).
+func (o *urlScan) writeSenders() string {
+	switch {
+	case o.sessionC != nil && o.sessionB != nil:
+		return "as account C, with no login and as account B"
+	case o.sessionC != nil:
+		return "as account C and with no login"
+	case o.sessionB != nil:
+		return "as account B and with no login"
+	}
+	return "with no login"
+}
+
+// accountsNotTested says which session variables are not set, or "".
+func (o *urlScan) accountsNotTested() string {
+	switch {
+	case o.sessionB == nil && o.sessionC == nil:
+		return authz.SessionEnv + " and " + authz.SessionEnvC + " not set: accounts B and C are not tested"
+	case o.sessionB == nil:
+		return authz.SessionEnv + " not set: account B is not tested"
+	case o.sessionC == nil:
+		return authz.SessionEnvC + " not set: account C, an account outside A's shared spaces, is not tested"
+	}
+	return ""
+}
+
+// accountsInput names the session variables given, for the report.
+func (o *urlScan) accountsInput() string {
+	s := ""
+	if o.sessionB != nil {
+		s += "; account B from " + authz.SessionEnv
+	}
+	if o.sessionC != nil {
+		s += "; account C from " + authz.SessionEnvC
+	}
+	return s
+}
 
 // authzCheck replays the HAR's requests; tests replace it.
 var authzCheck = authz.Check

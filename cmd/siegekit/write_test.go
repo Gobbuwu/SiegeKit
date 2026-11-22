@@ -22,7 +22,7 @@ import (
 type writeCall struct {
 	cfg       egress.Config
 	ws        []authz.Write
-	b         http.Header
+	b, c      http.Header
 	loginName string
 	rate      float64
 	mode      target.Mode
@@ -33,8 +33,8 @@ func useWriteCheck(t *testing.T, res authz.WriteResult) *[]writeCall {
 	t.Helper()
 	var calls []writeCall
 	old := writeCheck
-	writeCheck = func(_ context.Context, cfg egress.Config, ws []authz.Write, b http.Header, loginName string, rate float64, mode target.Mode) (authz.WriteResult, error) {
-		calls = append(calls, writeCall{cfg, ws, b, loginName, rate, mode})
+	writeCheck = func(_ context.Context, cfg egress.Config, ws []authz.Write, acc authz.Accounts, loginName string, rate float64, mode target.Mode) (authz.WriteResult, error) {
+		calls = append(calls, writeCall{cfg, ws, acc.B, acc.C, loginName, rate, mode})
 		return res, nil
 	}
 	t.Cleanup(func() { writeCheck = old })
@@ -188,6 +188,22 @@ func TestScanURLWriteReplay(t *testing.T) {
 	if !found {
 		t.Errorf("findings %+v", r.Findings)
 	}
+
+	// With account C (ADR 0051): C goes first, and the plan, the listing
+	// and the input name it.
+	t.Setenv(authz.SessionEnvC, "Authorization: Bearer C")
+	useActive(t)
+	useData(t)
+	calls = useWriteCheck(t, changed)
+	useAuthz(t, authz.Result{ATried: 1, Requests: 3, BTested: true}, nil)
+	code, out = scanIn(true, "test accounts\nchange test data\n", "--har", harFile, "--replay-writes", "--only", "access-control-write,zap", "http://localhost:3000/")
+	if len(*calls) != 1 || (*calls)[0].c.Get("Authorization") != "Bearer C" || (*calls)[0].b.Get("Authorization") != "Bearer B" ||
+		!strings.Contains(out, "on account A's objects, as account C, with no login and as account B, each on a copy") ||
+		!strings.Contains(out, "Each is sent as account C, with no login and as account B; where") ||
+		!strings.HasSuffix(plugin(authz.WriteID).Input, "; account B from SIEGEKIT_SESSION_B; account C from SIEGEKIT_SESSION_C") {
+		t.Errorf("C: exit %d, %d calls\n%s", code, len(*calls), out)
+	}
+	os.Unsetenv(authz.SessionEnvC)
 
 	// --profile quick leaves it out.
 	useActive(t)

@@ -57,7 +57,7 @@ func TestAuthzFindsPlantedIssues(t *testing.T) {
 		t.Fatalf("%+v %v", h, err)
 	}
 	cfg := egress.Config{Target: tu, Addrs: []netip.Addr{netip.MustParseAddr("127.0.0.1")}, Version: "test", ReadOnly: true}
-	res, err := authz.Check(context.Background(), cfg, h.Requests, http.Header{"Authorization": {"Bearer token-b"}}, 100)
+	res, err := authz.Check(context.Background(), cfg, h.Requests, authz.Accounts{B: http.Header{"Authorization": {"Bearer token-b"}}}, 100)
 	if err != nil || res.Requests != 21 {
 		t.Fatalf("%+v %v", res, err)
 	}
@@ -116,7 +116,7 @@ func TestAuthzWriteFindsPlantedIssue(t *testing.T) {
 	if r, tried := w.Recorded(); err != nil || r != 3 || tried != 1 || w.Duplicate != 1 || w.Writes[1].Create == nil || w.Writes[2].Create == nil || w.Writes[3].Create == nil {
 		t.Fatalf("%+v %v", w, err)
 	}
-	res, err := authz.WriteCheck(context.Background(), cfg, w.Writes, http.Header{"Authorization": {"Bearer token-b"}}, "alice@shop.test", 100, target.Local)
+	res, err := authz.WriteCheck(context.Background(), cfg, w.Writes, authz.Accounts{B: http.Header{"Authorization": {"Bearer token-b"}}}, "alice@shop.test", 100, target.Local)
 	if err != nil {
 		t.Fatal(err)
 	}

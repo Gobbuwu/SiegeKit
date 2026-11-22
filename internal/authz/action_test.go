@@ -128,7 +128,7 @@ func TestParseHARSkipsActions(t *testing.T) {
 func TestCheckRefusesActions(t *testing.T) {
 	tu := mustTarget(t, "http://127.0.0.1:1/")
 	cfg := egress.Config{Target: tu, Addrs: []netip.Addr{netip.MustParseAddr("127.0.0.1")}, Version: "test", ReadOnly: true}
-	_, err := Check(context.Background(), cfg, []Request{{Method: "GET", Path: "/ok"}, {Method: "GET", Path: "/rest/user/change-password?new=secret"}}, http.Header{"Authorization": {"B"}}, 1)
+	_, err := Check(context.Background(), cfg, []Request{{Method: "GET", Path: "/ok"}, {Method: "GET", Path: "/rest/user/change-password?new=secret"}}, Accounts{B: http.Header{"Authorization": {"B"}}}, 1)
 	if err == nil || !strings.Contains(err.Error(), "/rest/user/change-password is not replayed") || strings.Contains(err.Error(), "secret") {
 		t.Errorf("%v", err)
 	}

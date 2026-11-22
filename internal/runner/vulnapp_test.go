@@ -214,7 +214,7 @@ func vulnApp() http.Handler {
 	// checks the owner, and /api/my/orders answers each account its own
 	// orders: neither is an issue. /account/profile answers with no login
 	// at all (CWE-306).
-	vulnAccounts := map[string]string{"Bearer token-a": "alice@shop.test", "Bearer token-b": "bob@shop.test"}
+	vulnAccounts := map[string]string{"Bearer token-a": "alice@shop.test", "Bearer token-b": "bob@shop.test", "Bearer token-c": "carol@shop.test"}
 	mux.HandleFunc("GET /api/orders/{id}", func(w http.ResponseWriter, r *http.Request) {
 		if vulnAccounts[r.Header.Get("Authorization")] == "" {
 			http.Error(w, "log in first", http.StatusUnauthorized)
@@ -310,6 +310,49 @@ func vulnApp() http.Handler {
 			delete(carts, r.PathValue("id"))
 			fmt.Fprint(w, `{"status":"success"}`)
 		}
+	})
+	// A team alice and bob share (ADR 0051), shaped like the private
+	// groups measured on Rocket.Chat and Mattermost: members read it and
+	// rename it, carol (outside it) gets 403. Its history of deleted
+	// messages answers any logged-in account (CWE-639), the flaw
+	// Rocket.Chat's chat.getDeletedMessages has: account C reads it.
+	var teamMu sync.Mutex
+	teamName := "secret-ab"
+	teamMember := func(w http.ResponseWriter, r *http.Request) bool {
+		switch vulnAccounts[r.Header.Get("Authorization")] {
+		case "":
+			http.Error(w, "log in first", http.StatusUnauthorized)
+		case "alice@shop.test", "bob@shop.test":
+			return true
+		default:
+			http.Error(w, "not a member", http.StatusForbidden)
+		}
+		return false
+	}
+	mux.HandleFunc("GET /api/teams/3", func(w http.ResponseWriter, r *http.Request) {
+		teamMu.Lock()
+		defer teamMu.Unlock()
+		if teamMember(w, r) {
+			w.Header().Set("Content-Type", "application/json")
+			fmt.Fprintf(w, `{"id":3,"name":%q,"members":["alice@shop.test","bob@shop.test"]}`, teamName)
+		}
+	})
+	mux.HandleFunc("PUT /api/teams/3", func(w http.ResponseWriter, r *http.Request) {
+		teamMu.Lock()
+		defer teamMu.Unlock()
+		if teamMember(w, r) {
+			teamName += "!"
+			w.Header().Set("Content-Type", "application/json")
+			fmt.Fprint(w, `{"status":"success"}`)
+		}
+	})
+	mux.HandleFunc("GET /api/teams/3/deleted", func(w http.ResponseWriter, r *http.Request) {
+		if vulnAccounts[r.Header.Get("Authorization")] == "" {
+			http.Error(w, "log in first", http.StatusUnauthorized)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"deleted":[{"id":"m17","at":"2026-11-22T06:00:00Z"}]}`)
 	})
 	mux.HandleFunc("GET /account/profile", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -438,5 +481,22 @@ var vulnAppIssues = map[string]map[string]string{
 	// (TestAuthzWriteFindsPlantedIssue).
 	"access-control-write": {
 		"cross-account-write /api/carts/1": "account B changes account A's cart at PUT /api/carts/1",
+	},
+}
+
+// vulnAppOutsiderIssues are what the access-control checks must report
+// when accounts B and C are both given (ADR 0051): bob shares team 3 with
+// alice, carol is outside it (TestAuthzOutsiderFindsPlantedIssues).
+var vulnAppOutsiderIssues = map[string]map[string]string{
+	"access-control": {
+		"cross-account-read /api/orders/7":        "account C reads account A's order at GET /api/orders/7",
+		"cross-account-read /api/teams/3/deleted": "account C, outside the team, reads its deleted messages at GET /api/teams/3/deleted",
+		"b-only-read /api/teams/3":                "account B, a member, reads the team A shares with it (low: allowed by design)",
+		"no-login-read /account/profile":          "account A's profile answers with no login",
+		"no-login-secret /api/members":            "the member list gives anyone password hashes",
+	},
+	"access-control-write": {
+		"cross-account-write /api/carts/1": "account C changes account A's cart at PUT /api/carts/1",
+		"b-only-write /api/teams/3":        "account B, a member, renames the team A shares with it (low: allowed by design)",
 	},
 }

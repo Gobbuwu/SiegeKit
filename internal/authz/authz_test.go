@@ -251,7 +251,7 @@ func TestCheck(t *testing.T) {
 		t.Fatal(err)
 	}
 	b := http.Header{"Authorization": {"Bearer B"}}
-	res, err := Check(context.Background(), cfg, h.Requests, b, 10)
+	res, err := Check(context.Background(), cfg, h.Requests, Accounts{B: b}, 10)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -285,7 +285,7 @@ func TestCheck(t *testing.T) {
 	if c := Count(res, "alice@x.test"); c != (Counts{Cross: 3, NoLogin: 1, Secrets: 1}) {
 		t.Errorf("count %+v", c)
 	}
-	if s := res.Summary(h, "alice@x.test", Count(res, "alice@x.test")); s != "replayed 11 request(s) from the HAR file: 3 readable by account B, 1 readable with no login, 1 with secret fields for no login; 1 did not answer account A with 2xx and were not sent further" {
+	if s := res.Summary(h, "alice@x.test", Count(res, "alice@x.test")); s != "replayed 11 request(s) from the HAR file: 3 readable by account B; account C not tested (SIEGEKIT_SESSION_C not set), 1 readable with no login, 1 with secret fields for no login; 1 did not answer account A with 2xx and were not sent further" {
 		t.Errorf("summary %q", s)
 	}
 	// Without --har-user, no-login reads are not reported.
@@ -306,7 +306,7 @@ func TestCheckWithoutB(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	res, err := Check(context.Background(), cfg, h.Requests, nil, 10)
+	res, err := Check(context.Background(), cfg, h.Requests, Accounts{}, 10)
 	if err != nil || res.BTested || len(*seen) != 4 {
 		t.Fatalf("%+v %v %v", res, err, *seen)
 	}
@@ -314,7 +314,7 @@ func TestCheckWithoutB(t *testing.T) {
 	if len(fs) != 1 || fs[0].RuleID != "no-login-read" {
 		t.Errorf("%+v", fs)
 	}
-	if s := res.Summary(h, "alice@x.test", Counts{NoLogin: 1}); !strings.Contains(s, "account B not tested") {
+	if s := res.Summary(h, "alice@x.test", Counts{NoLogin: 1}); !strings.Contains(s, "accounts B and C not tested") {
 		t.Errorf("summary %q", s)
 	}
 }
@@ -325,7 +325,7 @@ func TestCheckBRefused(t *testing.T) {
 	tu := mustTarget(t, srv.URL+"/")
 	cfg := egress.Config{Target: tu, Addrs: []netip.Addr{netip.MustParseAddr("127.0.0.1")}, Version: "test", ReadOnly: true}
 	h, _ := ParseHAR(har(t, []entry{{"GET", srv.URL + "/rest/basket/1"}}, map[string]string{"Authorization": "Bearer A"}), tu)
-	res, err := Check(context.Background(), cfg, h.Requests, http.Header{"Authorization": {"Bearer expired"}}, 10)
+	res, err := Check(context.Background(), cfg, h.Requests, Accounts{B: http.Header{"Authorization": {"Bearer expired"}}}, 10)
 	if err != nil || res.BRefused != 1 {
 		t.Fatalf("%+v %v", res, err)
 	}
@@ -338,7 +338,7 @@ func TestCheckBRefused(t *testing.T) {
 }
 
 func TestCheckRefusesWritableConfig(t *testing.T) {
-	if _, err := Check(context.Background(), egress.Config{}, []Request{{Method: "GET", Path: "/"}}, nil, 1); err == nil || !strings.Contains(err.Error(), "read-only") {
+	if _, err := Check(context.Background(), egress.Config{}, []Request{{Method: "GET", Path: "/"}}, Accounts{}, 1); err == nil || !strings.Contains(err.Error(), "read-only") {
 		t.Errorf("%v", err)
 	}
 }
@@ -351,7 +351,7 @@ func TestCheckStopsWhenCancelled(t *testing.T) {
 	old := sleep
 	sleep = func(context.Context, time.Duration) error { cancel(); return context.Canceled }
 	t.Cleanup(func() { sleep = old })
-	_, err := Check(ctx, cfg, []Request{{Method: "GET", Path: "/rest/basket/1"}, {Method: "GET", Path: "/api/Users"}}, nil, 1)
+	_, err := Check(ctx, cfg, []Request{{Method: "GET", Path: "/rest/basket/1"}, {Method: "GET", Path: "/api/Users"}}, Accounts{}, 1)
 	if err == nil {
 		t.Error("not stopped")
 	}

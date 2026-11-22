@@ -3,7 +3,7 @@
 - Status: Accepted (design, owner 2026-11-21; build-time items 2b, 3b, 4b and 7, owner 2026-11-21, "Both fixes (recommended)" and "Both (recommended)" after the measurements below; items 2c and 2d and the recording checklist, owner 2026-11-21, "Guide + 2 additions" after the gap measurements)
 - Date: 2026-11-21
 - Amends: [0035](0035-access-control-replay.md) ("Not covered: state-changing requests"; item 4 is unchanged: `access-control` stays GET and HEAD only)
-- Amended by: [0050](0050-method-calls-sent-as-post.md) (method calls sent as POST: reads, IDs in params, refusals inside a 2xx answer, IDs the client chose)
+- Amended by: [0050](0050-method-calls-sent-as-post.md) (method calls sent as POST: reads, IDs in params, refusals inside a 2xx answer, IDs the client chose), [0051](0051-outsider-account-c.md) (account C, and the order C, no login, B)
 
 ## Context
 
