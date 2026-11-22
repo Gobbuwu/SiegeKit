@@ -83,11 +83,6 @@ type Request struct {
 	Method string
 	Path   string // path and query on the target's origin
 	Header http.Header
-	// SweptID: the route sweep filled the URL with an ID from A's
-	// recording (ADR 0052), which counts as a sign that the answer is
-	// A's own even when the ID has a shape hasID does not know, such as
-	// Rocket.Chat's 17- and 34-character room IDs.
-	SweptID bool
 }
 
 // HAR is what was taken from a HAR file.
@@ -817,7 +812,7 @@ func Findings(origin string, res Result, loginName string) []findings.Finding {
 		pathOnly, _, _ := strings.Cut(r.Path, "?")
 		loc := findings.Location{URI: origin + pathOnly}
 		cwe := "CWE-862"
-		if hasID(r.Path) || r.SweptID {
+		if hasID(r.Path) {
 			cwe = "CWE-639"
 		}
 		// High only with a sign that the answer is A's own: an ID in the
@@ -825,7 +820,7 @@ func Findings(origin string, res Result, loginName string) []findings.Finding {
 		// the same default answer (measured on Gitea's /user/settings, ADR
 		// 0035).
 		sev, note := findings.Medium, " The URL holds no ID and the answer does not name account A, so this may be an answer every account gets, such as default settings: check it by hand."
-		if hasID(r.Path) || r.SweptID || namesA(r.A.Body, loginName) {
+		if hasID(r.Path) || namesA(r.A.Body, loginName) {
 			sev, note = findings.High, ""
 		}
 		switch {
