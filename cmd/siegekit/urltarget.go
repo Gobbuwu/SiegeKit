@@ -654,6 +654,10 @@ func runURL(ctx context.Context, u *target.URL, addrs []netip.Addr, mode target.
 			}
 			fmt.Fprintf(stdout, "  %-20s siegekit %s: replay %d GET and HEAD request(s) from %s %s\n",
 				authz.ID, version, len(o.harRequests.Requests), filepath.Base(o.har), who)
+			if !o.deployed {
+				fmt.Fprintf(stdout, "  %-20s and every GET route of the OpenAPI spec, if one is given or found, filled with IDs from %s (at most %d, ADR 0052)\n",
+					"", filepath.Base(o.har), authz.MaxSweep)
+			}
 		}
 	}
 	if writeSelected {

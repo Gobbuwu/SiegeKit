@@ -158,7 +158,8 @@ func TestScanURLAccessControl(t *testing.T) {
 	code, out := scan("--har", harFile, "--har-user", "alice", "--only", "access-control,zap", "http://localhost:3000/")
 	if code != report.ExitFindings || len(*calls) != 1 || len(f.specs) != 1 || strings.Contains(out, "Type yes") ||
 		!strings.Contains(out, `access-control replays requests with the sessions of accounts A (the HAR file's session) and B (SIEGEKIT_SESSION_B). Type "test accounts"`) ||
-		!strings.Contains(out, "access-control       siegekit 0.0.0-dev: replay 2 GET and HEAD request(s) from a.har as account A, as account B and with no login") {
+		!strings.Contains(out, "access-control       siegekit 0.0.0-dev: replay 2 GET and HEAD request(s) from a.har as account A, as account B and with no login") ||
+		!strings.Contains(out, "and every GET route of the OpenAPI spec, if one is given or found, filled with IDs from a.har (at most 500, ADR 0052)") {
 		t.Fatalf("exit %d, %d checks, %d runs\n%s", code, len(*calls), len(f.specs), out)
 	}
 	c := (*calls)[0]
@@ -262,7 +263,8 @@ func TestScanURLAccessControl(t *testing.T) {
 	}
 	useProver(t, &fakeProver{published: map[string]string{"shop.example": verify.Value(tok)}})
 	code, out = scanIn(true, "shop.example\ntest accounts\n", "--deployed", "--har", writeHAR(t, "https://shop.example/api/me"), "--only", "access-control", "https://shop.example/")
-	if code != exitOK || len(*calls) != 1 || !(*calls)[0].cfg.VerifyTLS || !(*calls)[0].cfg.ReadOnly || (*calls)[0].rate != 10 {
+	if code != exitOK || len(*calls) != 1 || !(*calls)[0].cfg.VerifyTLS || !(*calls)[0].cfg.ReadOnly || (*calls)[0].rate != 10 ||
+		strings.Contains(out, "every GET route of the OpenAPI spec") { // no sweep on deployed targets (ADR 0052)
 		t.Errorf("deployed: exit %d %+v\n%s", code, *calls, out)
 	}
 }
