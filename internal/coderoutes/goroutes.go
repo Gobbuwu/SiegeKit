@@ -32,9 +32,10 @@ type goResult struct {
 	truncated            bool // the walk hit maxWalk
 }
 
-// memoKey names one walk of a function: the function and the routers it
-// is given. Walking it again with the same routers finds the same routes.
-func memoKey(f goFunc, args []*string, mount string, recv *string) string {
+// memoKey names one walk of a function: the function and the routers and
+// constant strings it is given. Walking it again with the same ones finds
+// the same routes.
+func memoKey(f goFunc, args, strs []*string, mount string, recv *string) string {
 	var b strings.Builder
 	b.WriteString(f.pkg.dir + "\x00" + strconv.Itoa(int(f.decl.Pos())) + "\x00" + mount)
 	for _, a := range append([]*string{recv}, args...) {
@@ -42,6 +43,13 @@ func memoKey(f goFunc, args []*string, mount string, recv *string) string {
 			b.WriteString("\x00-")
 		} else {
 			b.WriteString("\x00=" + *a)
+		}
+	}
+	for _, a := range strs {
+		if a == nil {
+			b.WriteString("\x01-")
+		} else {
+			b.WriteString("\x01=" + *a)
 		}
 	}
 	return b.String()
@@ -172,13 +180,13 @@ func goRoutes(files []srcFile, root string) goResult {
 		}
 	}
 	for _, f := range roots {
-		w.walkFunc(f, nil, "", nil)
+		w.walkFunc(f, nil, nil, "", nil)
 	}
 	// Routing functions only reached through a cycle of calls.
 	for _, key := range sortedKeys(ix.funcs) {
 		for _, f := range ix.funcs[key] {
 			if ix.routing[f.decl] && !w.walked[f.decl] {
-				w.walkFunc(f, nil, "", nil)
+				w.walkFunc(f, nil, nil, "", nil)
 			}
 		}
 	}
@@ -405,6 +413,7 @@ type scope struct {
 	fn      goFunc
 	routers map[string]string       // local variable -> prefix
 	funcs   map[string]*ast.FuncLit // local variable -> closure
+	strs    map[string]string       // string parameter -> the constant the caller passed
 	mount   *string                 // prefix a mounted function's new router starts at
 	parent  *scope
 }
@@ -428,6 +437,20 @@ func (s *scope) setRouter(name, prefix string) {
 	s.routers[name] = prefix
 }
 
+// str returns the constant a string parameter was given, from the
+// nearest function walk (closures see their function's parameters).
+func (s *scope) str(name string) (string, bool) {
+	for c := s; c != nil; c = c.parent {
+		if _, ok := c.routers[name]; ok {
+			return "", false
+		}
+		if v, ok := c.strs[name]; ok {
+			return v, true
+		}
+	}
+	return "", false
+}
+
 func (s *scope) closure(name string) *ast.FuncLit {
 	for c := s; c != nil; c = c.parent {
 		if f, ok := c.funcs[name]; ok {
@@ -440,11 +463,11 @@ func (s *scope) closure(name string) *ast.FuncLit {
 // walkFunc walks f's body; args are the router prefixes of its
 // parameters (nil for unknown), mount the prefix a new router made inside
 // it starts at (set when it is mounted: Mount("/api/v1", Routes())).
-func (w *goWalker) walkFunc(f goFunc, args []*string, mount string, recv *string) {
+func (w *goWalker) walkFunc(f goFunc, args, strs []*string, mount string, recv *string) {
 	if w.onStack[f.decl] || w.budget <= 0 {
 		return
 	}
-	key := memoKey(f, args, mount, recv)
+	key := memoKey(f, args, strs, mount, recv)
 	if w.done[key] {
 		return
 	}
@@ -465,11 +488,11 @@ func (w *goWalker) walkFunc(f goFunc, args []*string, mount string, recv *string
 			sc.routers[f.decl.Recv.List[0].Names[0].Name] = p
 		}
 	}
-	w.bindParams(sc, f.decl.Type, args)
+	w.bindParams(sc, f.decl.Type, args, strs)
 	w.stmts(sc, f.decl.Body.List)
 }
 
-func (w *goWalker) bindParams(sc *scope, ft *ast.FuncType, args []*string) {
+func (w *goWalker) bindParams(sc *scope, ft *ast.FuncType, args, strs []*string) {
 	i := 0
 	for _, fld := range ft.Params.List {
 		names := fld.Names
@@ -483,6 +506,11 @@ func (w *goWalker) bindParams(sc *scope, ft *ast.FuncType, args []*string) {
 					sc.routers[n.Name] = *args[i]
 				case w.isRouterType(fld.Type):
 					sc.routers[n.Name] = ""
+				case i < len(strs) && strs[i] != nil:
+					if sc.strs == nil {
+						sc.strs = map[string]string{}
+					}
+					sc.strs[n.Name] = *strs[i]
 				}
 			}
 			i++
@@ -711,9 +739,12 @@ func (w *goWalker) callInto(sc *scope, call *ast.CallExpr, mount string) {
 		return
 	}
 	args := make([]*string, len(call.Args))
+	strs := make([]*string, len(call.Args))
 	for i, a := range call.Args {
 		if p, ok := w.routerOf(sc, a); ok {
 			args[i] = &p
+		} else if s, ok := w.str(sc, a); ok {
+			strs[i] = &s // n.R(r, "/user", ...) -> r.Route(pathPrefix, ...)
 		}
 	}
 	var recv *string
@@ -724,7 +755,7 @@ func (w *goWalker) callInto(sc *scope, call *ast.CallExpr, mount string) {
 	}
 	for _, c := range cs {
 		if w.ix.routing[c.decl] {
-			w.walkFunc(c, args, mount, recv)
+			w.walkFunc(c, args, strs, mount, recv)
 		}
 	}
 }
@@ -1083,7 +1114,34 @@ func (w *goWalker) queryParams(sc *scope, handlers []ast.Expr) []string {
 
 // str evaluates a string expression: a literal, a constant of the tree
 // (also in another package), or a + of those.
+// str resolves a string expression: literals, constants, + and the
+// string parameters a caller passed constants for.
 func (w *goWalker) str(sc *scope, e ast.Expr) (string, bool) {
+	return w.strScope(sc, e, 0)
+}
+
+func (w *goWalker) strScope(sc *scope, e ast.Expr, depth int) (string, bool) {
+	if depth > 16 {
+		return "", false
+	}
+	switch x := e.(type) {
+	case *ast.Ident:
+		if v, ok := sc.str(x.Name); ok {
+			return v, true
+		}
+	case *ast.ParenExpr:
+		return w.strScope(sc, x.X, depth+1)
+	case *ast.BinaryExpr:
+		if x.Op != token.ADD {
+			return "", false
+		}
+		a, ok := w.strScope(sc, x.X, depth+1)
+		if !ok {
+			return "", false
+		}
+		b, ok := w.strScope(sc, x.Y, depth+1)
+		return a + b, ok
+	}
 	return w.strDepth(sc.fn.pkg, sc.fn.file, e, 0)
 }
 

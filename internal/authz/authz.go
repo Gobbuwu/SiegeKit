@@ -87,7 +87,11 @@ type Request struct {
 
 // HAR is what was taken from a HAR file.
 type HAR struct {
-	Requests    []Request
+	Requests []Request
+	// Sessions are accounts B's and C's session headers, when known: their
+	// names are the app's session headers (X-Gotify-Key,
+	// X-Nd-Authorization), so spec and swept routes carry A's (ADR 0053).
+	Sessions    []http.Header
 	Static      int // static files, not replayed
 	OtherMethod int // not GET or HEAD
 	OtherOrigin int // on another origin (ADR 0005)

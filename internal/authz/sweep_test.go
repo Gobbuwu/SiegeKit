@@ -1,6 +1,7 @@
 package authz
 
 import (
+	"net/http"
 	"strings"
 	"testing"
 
@@ -323,5 +324,27 @@ func TestAddSweepRoutesPathNamesNotIDs(t *testing.T) {
 	}
 	if h.SweepNoID != 1 {
 		t.Errorf("SweepNoID = %d, want 1 (the {owner}/{repo} route)", h.SweepNoID)
+	}
+}
+
+// An app's own session header (Gotify's X-Gotify-Key) is not one of the
+// usual names; B's session names it, so swept routes carry A's (ADR 0053).
+func TestAddSweepRoutesAppSessionHeader(t *testing.T) {
+	tu, _ := target.Parse("http://localhost:8081/")
+	har := []byte(`{"log":{"entries":[{"request":{"method":"GET","url":"http://localhost:8081/application","headers":[{"name":"X-Gotify-Key","value":"alice-tok"},{"name":"Accept","value":"application/json"}]},"response":{"content":{"text":"[]"}}},{"request":{"method":"GET","url":"http://localhost:8081/version","headers":[{"name":"Accept","value":"application/json"}]},"response":{"content":{"text":"{}"}}}]}}`)
+	routes := []SpecRoute{{Path: "/client", FromCode: true}}
+	h, err := ParseHAR(har, tu)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.AddSweepRoutes(routes, "")
+	if h.FromSweep != 0 {
+		t.Fatalf("swept %d with no known session header", h.FromSweep)
+	}
+	h.Sessions = []http.Header{{"X-Gotify-Key": {"bob-tok"}}, nil}
+	h.AddSweepRoutes(routes, "")
+	last := h.Requests[len(h.Requests)-1]
+	if h.FromSweep != 1 || last.Path != "/client" || last.Header.Get("X-Gotify-Key") != "alice-tok" {
+		t.Errorf("swept %d, last %s %v", h.FromSweep, last.Path, last.Header)
 	}
 }

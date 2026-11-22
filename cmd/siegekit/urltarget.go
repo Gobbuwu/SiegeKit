@@ -1059,6 +1059,7 @@ func runURL(ctx context.Context, u *target.URL, addrs []netip.Addr, mode target.
 		if r, ok := unavailable[authz.ID]; ok {
 			pr.Status, pr.Cause, pr.Reason = r.Status, r.Cause, r.Reason
 		} else {
+			o.harRequests.Sessions = []http.Header{o.sessionB, o.sessionC}
 			inSpec := addSpecRequests(o.harRequests, spec, o.codeRoutes(), o.deployed)
 			pr.Input = fmt.Sprintf("%s, %d request(s) recorded as account A", filepath.Base(o.har), len(o.harRequests.Requests)-o.harRequests.FromSpec-o.harRequests.FromSweep)
 			if o.harRequests.FromSpec > 0 {

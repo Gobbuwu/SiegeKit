@@ -348,16 +348,42 @@ func (h *HAR) AddSweepRoutes(routes []SpecRoute, base string) {
 // without X-User-Id (ADR 0052). Recorded headers are already limited to
 // those a replay may send (replayHeaders). With none, nothing is added,
 // because A's answer would be the same as no login (ADR 0035).
+//
+// A request has a session when it carries one of the usual session
+// headers, or every header account B or C sets: an app's own session
+// header (Gotify's X-Gotify-Key) is named only by those (ADR 0053).
 func (h *HAR) lastSession() http.Header {
 	for i := len(h.Requests) - 1; i >= 0; i-- {
 		hd := h.Requests[i].Header
-		for _, k := range sessionHeaders {
-			if len(hd.Values(k)) > 0 {
-				return hd.Clone()
-			}
+		if hasSession(hd, h.Sessions) {
+			return hd.Clone()
 		}
 	}
 	return nil
+}
+
+func hasSession(hd http.Header, accounts []http.Header) bool {
+	for _, k := range sessionHeaders {
+		if len(hd.Values(k)) > 0 {
+			return true
+		}
+	}
+	for _, s := range accounts {
+		if len(s) == 0 {
+			continue
+		}
+		all := true
+		for k := range s {
+			if len(hd.Values(k)) == 0 {
+				all = false
+				break
+			}
+		}
+		if all {
+			return true
+		}
+	}
+	return false
 }
 
 // fillRoute turns one spec route into the full paths to send: the path

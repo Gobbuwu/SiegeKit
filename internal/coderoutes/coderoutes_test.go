@@ -274,20 +274,56 @@ func main() {
 	var cache map[string]string
 	_ = cache
 	get("/not-a-route")
+	// Navidrome: a helper given the prefix as a string, and one building
+	// the path from its string parameter.
+	n := &api{}
+	r.Group(func(r chi.Router) {
+		n.R(r, "/song")
+		n.R(r, "/album")
+		h(r, "getSong")
+	})
+	n.R(r, unknownPrefix())
 }
 
 func get(string) {}
+
+type api struct{}
+
+func (n *api) R(r chi.Router, pathPrefix string) {
+	r.Route(pathPrefix, func(r chi.Router) {
+		r.Get("/", nil)
+		r.Route("/{id}", func(r chi.Router) {
+			r.Get("/", nil)
+		})
+	})
+}
+
+func h(r chi.Router, path string) {
+	r.HandleFunc("/"+path, nil)
+	r.HandleFunc("/"+path+".view", nil)
+}
+
+func unknownPrefix() string { return "/x" }
 `,
 	})
 	r := mustFrom(t, dir)
 	eq(t, paths(r.Routes), []string{
+		"/album",
+		"/album/{id}",
 		"/any",
 		"/api/inner",
 		"/api/items/{itemID}",
 		"/api/m/{id}",
+		"/getSong",
+		"/getSong.view",
 		"/posts/{id}",
+		"/song",
+		"/song/{id}",
 		"/v1/users/{id}",
 	})
+	if r.Unresolved != 2 { // n.R(r, unknownPrefix()): its 2 GET routes
+		t.Errorf("unresolved %d, want 2", r.Unresolved)
+	}
 }
 
 // Rocket.Chat 6 and 8 shapes, Express, and code that only looks like
