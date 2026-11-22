@@ -250,3 +250,22 @@ func TestFailedAnswer(t *testing.T) {
 		}
 	}
 }
+
+// TestEngineOf: a run of SiegeKit's own checks only started no container
+// and holds for every engine; any other run without an engine is refused
+// (ADR 0054).
+func TestEngineOf(t *testing.T) {
+	own := []report.PluginResult{{ID: "access-control-write", Tool: "siegekit"}}
+	if e, err := EngineOf(&report.Run{Environment: &report.Environment{Engine: &report.Engine{Name: "podman"}}}); err != nil || e != "podman" {
+		t.Errorf("engine: %q %v", e, err)
+	}
+	if e, err := EngineOf(&report.Run{Environment: &report.Environment{OS: "linux"}, Plugins: own}); err != nil || e != "" {
+		t.Errorf("own checks only: %q %v", e, err)
+	}
+	if _, err := EngineOf(&report.Run{Plugins: append(own, report.PluginResult{ID: "zap", Tool: "zap"})}); err == nil {
+		t.Error("a tool ran with no engine named: accepted")
+	}
+	if _, err := EngineOf(&report.Run{}); err == nil {
+		t.Error("no checks, no engine: accepted")
+	}
+}

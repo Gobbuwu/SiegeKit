@@ -3,6 +3,8 @@ name: Real-repo gate
 # M1 gate: scanning real repositories must never crash, fail or time out.
 # Each repository is pinned to a commit so results are reproducible.
 # M2.4b (ADR 0023): a URL scan of OWASP Juice Shop, a known vulnerable app.
+# ADR 0054: write replay (access-control-write) on Juice Shop and Gitea from
+# Chromium recordings.
 on:
   workflow_dispatch:
   schedule:
@@ -13,6 +15,7 @@ on:
   pull_request:
     paths:
       - .github/workflows/gate.yml
+      - .github/gate/**
       - plugins/**
       - cmd/**
       - internal/**
@@ -292,3 +295,154 @@ jobs:
       - name: Juice Shop log
         if: failure()
         run: docker logs juice-shop 2>&1 | tail -50
+
+  writes:
+    # ADR 0054: access-control-write (ADR 0049) on real apps, from a real
+    # Chromium recording of account A, against known answers. Juice Shop
+    # v20.4.0 (the web job's image) has real write flaws between accounts;
+    # Gitea 1.24.6's web UI has CSRF tokens, redirects after a write, and
+    # an account B that may write (a collaborator) next to an outsider C.
+    # The check runs in SiegeKit's own process and starts no container, so
+    # the engine in the matrix is the one the app runs under.
+    name: Write replay on ${{ matrix.app }} (app on ${{ matrix.engine }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        app: [juice-shop, gitea]
+        engine: [podman, docker]
+    env:
+      APP_ENGINE: ${{ matrix.engine }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: false
+      - name: Build
+        run: CGO_ENABLED=0 go build -o "$RUNNER_TEMP/siegekit" ./cmd/siegekit
+      - name: Recorder
+        # Playwright 1.63.0 and its own Chromium build, pinned with their
+        # integrity hashes in .github/gate/package-lock.json; install
+        # scripts are not run. The runner's Node is used (Playwright needs
+        # 20 or later).
+        working-directory: .github/gate
+        run: |
+          node -e 'process.exit(Number(process.versions.node.split(".")[0]) >= 20 ? 0 : 1)'
+          npm ci --ignore-scripts --no-audit --no-fund
+          npx --no-install playwright install chromium
+      - name: Start the app
+        # Images pinned to the digests measured on 2026-11-22 (Juice Shop:
+        # the web job's; Gitea: docker.io/gitea/gitea:1.24.6).
+        run: |
+          set -euo pipefail
+          if [ "$APP_ENGINE" = podman ]; then test "$(podman info --format '{{.Host.Security.Rootless}}')" = true; fi
+          case "${{ matrix.app }}" in
+            juice-shop)
+              "$APP_ENGINE" run -d --name app -p 127.0.0.1:3000:3000 \
+                docker.io/bkimminich/juice-shop@sha256:9bbaecc41791f00b002bc65931cc5ff355fbdb941fa72b06558c18dace43197b
+              base=http://127.0.0.1:3000 ;;
+            gitea)
+              "$APP_ENGINE" run -d --name app -p 127.0.0.1:3001:3000 -e GITEA__security__INSTALL_LOCK=true \
+                -e GITEA__database__DB_TYPE=sqlite3 -e GITEA__server__ROOT_URL=http://127.0.0.1:3001/ \
+                docker.io/gitea/gitea@sha256:2edc102cbb636ae1ddac5fa0c715aa5b03079dee13ac6800b2cef6d4e912e718
+              base=http://127.0.0.1:3001 ;;
+          esac
+          echo "BASE=$base" >> "$GITHUB_ENV"
+          for i in $(seq 1 90); do
+            curl -sf -o /dev/null "$base/" && exit 0
+            sleep 2
+          done
+          "$APP_ENGINE" logs app
+          exit 1
+      - name: Accounts and A's recording
+        # Juice Shop: three new accounts, logged in A, B, C in that order
+        # (A's basket is 6), as in the web job. Gitea: alice owns the
+        # private repository alice/priv with one issue, bob is a
+        # collaborator with write access, carol is not (ADR 0051).
+        run: |
+          set -euo pipefail
+          pw='Gate-access-control-1'
+          case "${{ matrix.app }}" in
+            juice-shop)
+              for who in a b c; do
+                curl -sf -o /dev/null -H 'Content-Type: application/json' \
+                  -d "{\"email\":\"gate-$who@siegekit.test\",\"password\":\"$pw\",\"passwordRepeat\":\"$pw\",\"securityQuestion\":{\"id\":1},\"securityAnswer\":\"x\"}" "$BASE/api/Users"
+              done
+              login() { curl -sf -H 'Content-Type: application/json' -d "{\"email\":\"gate-$1@siegekit.test\",\"password\":\"$pw\"}" "$BASE/rest/user/login" | jq -r .authentication.token; }
+              ta=$(login a); tb=$(login b); tc=$(login c)
+              test -n "$ta"
+              printf 'Authorization: Bearer %s\nCookie: token=%s\n' "$tb" "$tb" > "$RUNNER_TEMP/session-b"
+              printf 'Authorization: Bearer %s\nCookie: token=%s\n' "$tc" "$tc" > "$RUNNER_TEMP/session-c"
+              node .github/gate/record-juice-shop.js "$BASE" gate-a@siegekit.test "$pw" "$RUNNER_TEMP/a.har"
+              echo "HAR_USER=gate-a@siegekit.test" >> "$GITHUB_ENV" ;;
+            gitea)
+              for u in alice bob carol; do
+                "$APP_ENGINE" exec -u git app gitea admin user create --username "$u" --password "$pw" --email "$u@siegekit.test" --must-change-password=false
+              done
+              api() { curl -sf -u "alice:$pw" -H 'Content-Type: application/json' "$@" -o /dev/null; }
+              api "$BASE/api/v1/user/repos" -d '{"name":"priv","private":true,"auto_init":true}'
+              api -X PUT "$BASE/api/v1/repos/alice/priv/collaborators/bob" -d '{"permission":"write"}'
+              api "$BASE/api/v1/repos/alice/priv/issues" -d '{"title":"seed issue","body":"secret"}'
+              node .github/gate/record-gitea.js "$BASE" "$pw" "$RUNNER_TEMP/a.har" "$RUNNER_TEMP/session-b" "$RUNNER_TEMP/session-c"
+              echo "HAR_USER=alice" >> "$GITHUB_ENV" ;;
+          esac
+      - name: Scan
+        # Only access-control-write. It asks a person to type that the
+        # accounts are test accounts and then "change test data" (ADR 0049
+        # item 8); the gate made the accounts and the app, so it types both
+        # through a pseudo-terminal (ADR 0044), as in the web job.
+        run: |
+          cat > "$RUNNER_TEMP/gate-scan.sh" <<SH
+          #!/bin/bash
+          exec "$RUNNER_TEMP/siegekit" scan --yes --authorized-host 127.0.0.1 --no-save --report-dir "$RUNNER_TEMP/report" \
+            --only access-control-write --har "$RUNNER_TEMP/a.har" --har-user "$HAR_USER" --replay-writes "$BASE/"
+          SH
+          chmod +x "$RUNNER_TEMP/gate-scan.sh"
+          SIEGEKIT_SESSION_B="$(cat "$RUNNER_TEMP/session-b")"
+          SIEGEKIT_SESSION_C="$(cat "$RUNNER_TEMP/session-c")"
+          export SIEGEKIT_SESSION_B SIEGEKIT_SESSION_C
+          set +e
+          printf 'test accounts\nchange test data\n' | script -qec "$RUNNER_TEMP/gate-scan.sh" "$RUNNER_TEMP/scan.log"
+          code=$?
+          set -e
+          echo "exit code $code"
+          if [ "$code" -ne 0 ] && [ "$code" -ne 3 ]; then exit 1; fi
+          grep -q 'Type "change test data" to run them' "$RUNNER_TEMP/scan.log"
+          r="$RUNNER_TEMP/report/report.json"
+          jq '.plugins[] | {id, status, cause, reason, input, result, requests, findings}' "$r"
+          # No container: the check ran in SiegeKit's own process.
+          jq -e '.environment.engine == null and ([.plugins[] | select(.id == "access-control-write" and .status == "ran")] | length == 1)' "$r"
+          # The app ran on the matrix's engine (rootless Podman or rootful Docker).
+          test "$("$APP_ENGINE" inspect -f '{{.State.Running}}' app)" = true
+          case "${{ matrix.app }}" in
+            juice-shop)
+              # Measured on 10 local runs (ADR 0054): 14 recorded writes and
+              # 17 tried, accounts B and C, 6 high and 4 medium; A's 3
+              # basket items sent again before each of the 3 checkout
+              # replays (ADR 0049 item 2d); the browser's Socket.IO polling
+              # request not replayed (ADR 0050).
+              jq -e '[.plugins[] | select(.id == "access-control-write" and (.input | startswith("a.har, 14 write(s) recorded as account A, 17 tried on A'"'"'s objects; account B from SIEGEKIT_SESSION_B; account C from SIEGEKIT_SESSION_C")) and (.result | contains(": 6 high, 4 medium, 0 low")) and (.result | contains("9 of account A'"'"'s earlier recorded writes sent again first")) and (.result | contains("1 SockJS or Socket.IO polling requests")))] | length == 1' "$r" ;;
+            gitea)
+              # Measured (ADR 0051, ADR 0054): carol refused on every write,
+              # bob's 3 allowed by design (low), every CSRF write sent with
+              # the sender's own token.
+              jq -e '[.plugins[] | select(.id == "access-control-write" and (.input | startswith("a.har, 3 write(s) recorded as account A, 2 tried on A'"'"'s objects")) and (.result | contains(": 0 high, 0 medium, 3 low")) and (.result | contains("3 write(s) were sent with the sender'"'"'s own CSRF token")))] | length == 1' "$r" ;;
+          esac
+      - name: Known answers
+        if: ${{ !cancelled() }}
+        run: |
+          set +e
+          go run ./internal/knownanswers/check -answers "testdata/known-answers/${{ matrix.app }}-writes.json" -report "$RUNNER_TEMP/report/report.json" -observed "$RUNNER_TEMP/observed.json"
+          code=$?
+          set -e
+          echo "::group::Answer of this run"
+          cat "$RUNNER_TEMP/observed.json"
+          echo "::endgroup::"
+          exit $code
+      - name: App log
+        if: failure()
+        run: $APP_ENGINE logs app 2>&1 | tail -50

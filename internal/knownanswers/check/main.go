@@ -41,10 +41,13 @@ func run(answersPath, reportPath, observedPath string) error {
 	if err := json.Unmarshal(b, &r); err != nil {
 		return fmt.Errorf("%s: %w", reportPath, err)
 	}
-	if r.Environment == nil || r.Environment.Engine == nil {
-		return fmt.Errorf("%s names no container engine, so its answers cannot be compared (ADR 0038)", reportPath)
+	eng, err := knownanswers.EngineOf(&r)
+	if err != nil {
+		return fmt.Errorf("%s: %w", reportPath, err)
 	}
-	eng := r.Environment.Engine.Name
+	if r.Environment == nil {
+		r.Environment = &report.Environment{}
+	}
 	if observedPath != "" {
 		fixture := ""
 		if a != nil {

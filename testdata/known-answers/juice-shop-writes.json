@@ -1,0 +1,24 @@
+{
+  "fixture": "juice-shop v20.4.0 by URL (docker.io/bkimminich/juice-shop@sha256:9bbaecc41791f00b002bc65931cc5ff355fbdb941fa72b06558c18dace43197b), write replay from a Chromium recording (.github/gate/record-juice-shop.js)",
+  "measured": "10 local runs on 2026-11-22 on fresh containers (Docker 29.10.0 rootful, cgroup v1, Playwright 1.63.0): 295 requests and the same findings on every run; to be confirmed by the gate of the ADR 0054 PR (app on rootless Podman and rootful Docker)",
+  "checks": {
+    "access-control-write": {
+      "status": "ran",
+      "match": "exact",
+      "why": "all confirmed by hand on Juice Shop (ADR 0049): B or C changes or deletes A's basket item, changes A's address, checks out A's basket, posts a review in A's name, deletes A's feedback; medium: A's review edited, feedback in A's name as C and with no login, a product changed. The count is before findings at one URL and CWE are merged (PUT and DELETE of the basket item give one finding)",
+      "findings": [
+        "cross-account-write /api/Addresss/7",
+        "cross-account-write /api/BasketItems/9",
+        "cross-account-write /api/Feedbacks/",
+        "cross-account-write /api/Feedbacks/9",
+        "cross-account-write /api/Products/1",
+        "cross-account-write /rest/basket/6/checkout",
+        "cross-account-write /rest/products/1/reviews",
+        "cross-account-write /rest/products/reviews",
+        "no-login-write /api/Feedbacks/"
+      ],
+      "count": 10,
+      "minRequests": 265
+    }
+  }
+}
