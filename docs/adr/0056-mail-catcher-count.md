@@ -8,7 +8,7 @@
 
 The harm a password-reset page does is the emails or texts it sends. ADR 0055 judges a reset only by its answers, so a reset that answers the same each time is reported as not limited even when the app limits its emails: Gitea 1.24.6 answered 200 to 20 resets and sent 1 email (measured 2026-11-22). The approved design (Q2 C) keeps answers as the default and counts the emails at a local mail catcher when the person gives one; this is the design's PR 2. The design names Mailpit and a Gitea plus Mailpit fixture in CI.
 
-Texts are not counted here. The one app measured sending texts, Ory Kratos 1.3.1 (through its HTTP courier to a local stand-in), has no SMS password reset (its config accepts only email for recovery), so a text count changes no finding there. Whether to count texts is brought to the owner (2026-11-23).
+Texts are not counted here. The one app measured sending texts, Ory Kratos 1.3.1 (through its HTTP courier to a local stand-in), has no SMS password reset (its config accepts only email for recovery), so a text count changes no finding there. The owner chose emails only (2026-11-23, "Emails only, as designed"); counting texts moves to the follow-up for send-a-code pages (SMS pumping).
 
 ## Decision
 
@@ -39,7 +39,7 @@ Environment for every local measurement: Claude's sandbox, 4 CPUs, cgroup v1; Do
 
 - A reset whose app limits its emails is no longer reported when the person gives a Mailpit; without one, nothing changes from ADR 0055, and the finding names the flag.
 - A count of 0 falls back to the answers. Measured: Gitea sends an account no second reset email for a few minutes (none 103 s and 167 s after one, one 273 s after), so a run soon after another reports `reset-not-limited` with "no email arrived" in its message.
-- Not covered: texts (owner decision pending); mail catchers other than Mailpit, and a Mailpit API behind a password (the check fails with the reason); emails that arrive more than 5 s after the previous one; an app that sends mail elsewhere and copies it to Mailpit.
+- Not covered: texts (owner 2026-11-23: emails only; texts go with the send-a-code follow-up); mail catchers other than Mailpit, and a Mailpit API behind a password (the check fails with the reason); emails that arrive more than 5 s after the previous one; an app that sends mail elsewhere and copies it to Mailpit.
 - A per-address email limit is not a per-client one: an attacker who resets many addresses still sends one email each. The result says only that this address's emails were limited.
 
 ## Alternatives considered
