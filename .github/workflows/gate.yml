@@ -6,7 +6,8 @@ name: Real-repo gate
 # ADR 0054: write replay (access-control-write) on Juice Shop and Gitea from
 # Chromium recordings.
 # ADR 0056: emails counted at Mailpit on Gitea. ADR 0057: reset, sign-up and
-# code pages on Juice Shop from a Chromium recording.
+# code pages on Juice Shop from a Chromium recording. ADR 0059: the storage
+# write test on the Firebase Storage emulator and a local Supabase Storage.
 on:
   workflow_dispatch:
   schedule:
@@ -644,3 +645,47 @@ jobs:
       - name: App log
         if: failure()
         run: $APP_ENGINE logs app 2>&1 | tail -50
+
+  storage:
+    # ADR 0059: the storage write test (ADR 0058) against the Firebase
+    # Storage emulator and a local Supabase Storage, 7 rule or policy sets
+    # each, with the storage on the matrix's engine. The check runs in
+    # SiegeKit's own process. gate.sh checks each run against its known
+    # answer and its measured result (.github/gate/storage/results.txt), and
+    # that the files left behind in the storage are exactly the ones the
+    # report names.
+    name: Storage write on ${{ matrix.backend }} (storage on ${{ matrix.engine }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        backend: [firebase, supabase]
+        engine: [podman, docker]
+    env:
+      BACKEND: ${{ matrix.backend }}
+      APP_ENGINE: ${{ matrix.engine }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: false
+      - name: Build
+        run: CGO_ENABLED=0 go build -o "$RUNNER_TEMP/siegekit" ./cmd/siegekit
+      - name: Emulator and app tools
+        # Pinned in package-lock.json: firebase-tools, the firebase and
+        # supabase-js SDKs the apps are built from, and esbuild.
+        working-directory: .github/gate/storage
+        run: |
+          node -e 'process.exit(Number(process.versions.node.split(".")[0]) >= 20 ? 0 : 1)'
+          npm ci --ignore-scripts --no-audit --no-fund
+      - name: Start the storage and the app
+        run: SK="$RUNNER_TEMP/siegekit" W="$RUNNER_TEMP/storage" REPO="$GITHUB_WORKSPACE" .github/gate/storage/gate.sh start
+      - name: Scan each rule set
+        run: SK="$RUNNER_TEMP/siegekit" W="$RUNNER_TEMP/storage" REPO="$GITHUB_WORKSPACE" .github/gate/storage/gate.sh scan
+      - name: Storage log
+        if: failure()
+        run: SK="$RUNNER_TEMP/siegekit" W="$RUNNER_TEMP/storage" REPO="$GITHUB_WORKSPACE" .github/gate/storage/gate.sh logs

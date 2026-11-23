@@ -1,0 +1,16 @@
+{
+  "fixture": "Firebase Storage emulator (firebase-tools 15.37.0, rules runtime 1.1.3) in library/eclipse-temurin@sha256:d77e090ae1f6970c047b443c6f0a6c1358b0426d44432bb5a7753408cd43de0d, rule set v5 (.github/gate/storage/firebase/v5.rules.txt, also given as storage.rules with --source), app = .github/gate/storage/app/fb.js bundled with esbuild 0.25.0 --minify (gate.yml job storage)",
+  "measured": "MEASURED_PLACEHOLDER",
+  "checks": {
+    "storage-write": {
+      "status": "ran",
+      "match": "exact",
+      "findings": [
+        "storage-public-write gs://demo-siegekit.appspot.com/uploads/"
+      ],
+      "count": 1,
+      "minRequests": 7,
+      "why": "open under /uploads/ only: the root is refused, uploads/ (a folder from storage.rules through --source) is open"
+    }
+  }
+}

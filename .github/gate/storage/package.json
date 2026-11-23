@@ -1,0 +1,12 @@
+{
+  "name": "siegekit-gate-storage",
+  "private": true,
+  "description": "Firebase Storage emulator and the two small apps of the storage write gate (ADR 0059). Not part of SiegeKit.",
+  "license": "Apache-2.0",
+  "dependencies": {
+    "@supabase/supabase-js": "2.49.4",
+    "esbuild": "0.25.0",
+    "firebase": "12.19.0",
+    "firebase-tools": "15.37.0"
+  }
+}
