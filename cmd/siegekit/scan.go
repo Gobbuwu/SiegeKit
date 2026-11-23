@@ -154,6 +154,14 @@ Flags:
                     sign-up page: up to 20 accounts are made). Without
                     these flags, the pages are taken from --har when the
                     recording used them
+  --mail-catcher URL
+                    a local Mailpit (its web address, such as
+                    http://127.0.0.1:8025/) that the app sends its mail
+                    to: reset-limit and signup-limit count the emails that
+                    arrive there for the addresses they sent, and a reset
+                    that answers the same each time but sends fewer emails
+                    than requests counts as limited. SiegeKit only reads
+                    Mailpit's list of messages
   --backend-url URL the Supabase or Firebase Realtime Database URL the app
                     reads from the browser, for the backend-live check: one
                     GET per table or path with the app's own public key.
@@ -206,6 +214,7 @@ func scan(args []string, stdout, stderr io.Writer) int {
 		fl.StringVar(&f.body, string(p)+"-body", "", "")
 		pages[p] = f
 	}
+	mailCatcher := fl.String("mail-catcher", "", "")
 	har := fl.String("har", "", "")
 	harUser := fl.String("har-user", "", "")
 	replayWrites := fl.Bool("replay-writes", false, "")
@@ -301,11 +310,11 @@ func scan(args []string, stdout, stderr io.Writer) int {
 			reportDir: *reportDir, noSave: *noSave, consent: consent{yes: *yes, none: *noInstall},
 			requireAll: *requireAll, openAPI: *openAPI, profile: *profile, login: lf,
 			har: *har, harUser: *harUser, replayWrites: *replayWrites, rateLimit: rl, pageFlags: pages,
-			backendURL: *backendURL, source: *source,
+			mailCatcher: *mailCatcher, backendURL: *backendURL, source: *source,
 		}, stdout, stderr)
 	}
-	if *deployed || *authorizedHost != "" || *openAPI != "" || lf.url != "" || attemptsSet || *har != "" || *replayWrites || rl.url != "" || anyPage || *backendURL != "" || *source != "" {
-		fmt.Fprint(stderr, "siegekit scan: --deployed, --authorized-host, --openapi, --har, --replay-writes, --backend-url, --source, the --login flags, the --rate-limit flags and the --reset, --signup and --code flags only apply to URL targets\n")
+	if *deployed || *authorizedHost != "" || *openAPI != "" || lf.url != "" || attemptsSet || *har != "" || *replayWrites || rl.url != "" || anyPage || *mailCatcher != "" || *backendURL != "" || *source != "" {
+		fmt.Fprint(stderr, "siegekit scan: --deployed, --authorized-host, --openapi, --har, --replay-writes, --backend-url, --source, --mail-catcher, the --login flags, the --rate-limit flags and the --reset, --signup and --code flags only apply to URL targets\n")
 		return exitUsage
 	}
 	target, err := resolveDir(pos[0])

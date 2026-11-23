@@ -403,6 +403,23 @@ func vulnApp() http.Handler {
 		}
 		io.WriteString(w, "If the address has an account, we sent it an email.")
 	})
+	// Resets that answer the same each time, with their emails sent from
+	// a queue a little later to vulnMail, a mail catcher (ADR 0056): one
+	// emails every request (CWE-799), one emails an address once, as
+	// Gitea 1.24.6 does for a few minutes (not an issue).
+	mailed := func(once bool) http.HandlerFunc {
+		var sent sync.Map
+		return func(w http.ResponseWriter, r *http.Request) {
+			r.ParseForm()
+			to := r.Form.Get("email")
+			if _, again := sent.LoadOrStore(to, true); to != "" && (!again || !once) {
+				go func() { time.Sleep(200 * time.Millisecond); vulnMail.add(to) }()
+			}
+			io.WriteString(w, "If the address has an account, we sent it an email.")
+		}
+	}
+	mux.HandleFunc("POST /account/forgot-password-mailed", mailed(false))
+	mux.HandleFunc("POST /account/forgot-password-mail-limited", mailed(true))
 	// Sign-ups with no limit (CWE-799): each new user name makes an
 	// account; a name taken already is refused.
 	var accounts sync.Map
@@ -526,7 +543,8 @@ var vulnAppIssues = map[string]map[string]string{
 	// The page checks and spraying run in the test process
 	// (TestPagesFindPlantedIssues, ADR 0055).
 	"reset-limit": {
-		"reset-not-limited /account/forgot-password": "password resets are not limited at POST /account/forgot-password",
+		"reset-not-limited /account/forgot-password":        "password resets are not limited at POST /account/forgot-password",
+		"reset-not-limited /account/forgot-password-mailed": "POST /account/forgot-password-mailed answers the same each time and emails every request",
 	},
 	"signup-limit": {
 		"signup-not-limited /account/sign-up": "sign-ups are not limited at POST /account/sign-up",

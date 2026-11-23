@@ -1,0 +1,61 @@
+{
+  "total": 22,
+  "unread": 22,
+  "count": 2,
+  "messages_count": 22,
+  "messages_unread": 22,
+  "start": 20,
+  "tags": [],
+  "messages": [
+    {
+      "ID": "VSmMR8dzkFpdtfDZQXrAZA",
+      "MessageID": "autogen-1795405599058-95a4b45e61e8341b@localhost",
+      "Read": false,
+      "From": {
+        "Name": "",
+        "Address": "gitea@siegekit.test"
+      },
+      "To": [
+        {
+          "Name": "bob",
+          "Address": "bob@siegekit.test"
+        }
+      ],
+      "Cc": null,
+      "Bcc": null,
+      "ReplyTo": [],
+      "Subject": "Recover your account",
+      "Created": "2026-11-23T03:46:40.284Z",
+      "Username": "",
+      "Tags": [],
+      "Size": 2314,
+      "Attachments": 0,
+      "Snippet": "Hi bob, Please click the following link to recover your account within 3 hours: http://127.0.0.1:3001/user/recover_account?code=0000000000000000 Not wor..."
+    },
+    {
+      "ID": "UCmwrdwLE6vYKK289Fdq3o",
+      "MessageID": "autogen-1795405315505-2d30cd2c28ff7683@localhost",
+      "Read": false,
+      "From": {
+        "Name": "",
+        "Address": "gitea@siegekit.test"
+      },
+      "To": [
+        {
+          "Name": "alice",
+          "Address": "alice@siegekit.test"
+        }
+      ],
+      "Cc": null,
+      "Bcc": null,
+      "ReplyTo": [],
+      "Subject": "Recover your account",
+      "Created": "2026-11-23T03:41:57.04Z",
+      "Username": "",
+      "Tags": [],
+      "Size": 2338,
+      "Attachments": 0,
+      "Snippet": "Hi alice, Please click the following link to recover your account within 3 hours: http://127.0.0.1:3001/user/recover_account?code=0000000000000000 N..."
+    }
+  ]
+}

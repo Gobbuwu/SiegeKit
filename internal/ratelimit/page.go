@@ -14,6 +14,7 @@ import (
 	"unicode"
 
 	"github.com/Gobbuwu/SiegeKit/internal/findings"
+	"github.com/Gobbuwu/SiegeKit/internal/mailcatcher"
 	"github.com/Gobbuwu/SiegeKit/internal/target"
 )
 
@@ -710,8 +711,22 @@ func pageFindings(e *Endpoint, r Result, planned int) []findings.Finding {
 	}
 	switch e.Page {
 	case Reset:
+		if r.MailLimited() {
+			return nil
+		}
+		head := fmt.Sprintf("%d password-reset requests to this page, one per second, with wrong answers where the page asks for one, all answered %d, with no 429 or 503 answer and no rate-limit header.", r.Requests, r.Baseline)
+		tail := fmt.Sprintf(" Limit reset requests per account and per client. SiegeKit does not see a limit set above %d requests or one per IP address.", planned)
+		if m := r.Mail; m != nil && m.Settled && m.Emails > 0 {
+			return mk("reset-not-limited", "Password-reset requests are not rate limited",
+				head+fmt.Sprintf(" The app sent an email for each: %s. Anyone can flood an address with reset emails (and texts, if the app sends them), and guess reset answers.", m.said(r))+tail,
+				findings.Low, "CWE-799")
+		}
+		why := " The answers do not show whether the app sent an email or a text each time: it may still limit those (Gitea answered 200 to 40 such requests and sent 1 email). Give " + mailcatcher.Flag + " with a local Mailpit the app sends its mail to, and SiegeKit counts them."
+		if m := r.Mail; m != nil {
+			why = " The answers do not show whether the app sent an email or a text each time, and the mail catcher did not settle it: " + m.said(r) + "."
+		}
 		return mk("reset-not-limited", "Password-reset requests are not rate limited",
-			fmt.Sprintf("%d password-reset requests to this page, one per second, with wrong answers where the page asks for one, all answered %d, with no 429 or 503 answer and no rate-limit header. The answers do not show whether the app sent an email or a text each time: it may still limit those (Gitea answered 200 to 40 such requests and sent 1 email). If it does not, anyone can flood an address with reset messages, run up the cost of texts, and guess reset answers. Limit reset requests per account and per client. SiegeKit does not see a limit set above %d requests or one per IP address.", r.Requests, r.Baseline, planned),
+			head+why+" If it does not limit them, anyone can flood an address with reset messages, run up the cost of texts, and guess reset answers."+tail,
 			findings.Low, "CWE-799")
 	case SignUp:
 		return mk("signup-not-limited", "Sign-ups are not rate limited",

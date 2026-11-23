@@ -12,11 +12,13 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 	"time"
 
 	"github.com/Gobbuwu/SiegeKit/internal/egress"
 	"github.com/Gobbuwu/SiegeKit/internal/findings"
+	"github.com/Gobbuwu/SiegeKit/internal/mailcatcher"
 	"github.com/Gobbuwu/SiegeKit/internal/target"
 )
 
@@ -119,10 +121,69 @@ type Result struct {
 	// Accepted counts answers below 400: on a sign-up page each may have
 	// made an account, on a reset page each may have sent an email.
 	Accepted int
+	// To lists the email addresses the requests of a reset or sign-up page
+	// held, once each, for counting their emails (ADR 0056).
+	To []string
+	// Mail is the count at the mail catcher, nil when none was given.
+	Mail *Mail
+}
+
+// Mail is what a mail catcher received during a reset or sign-up page
+// check (ADR 0056).
+type Mail struct {
+	Catcher string // the catcher, as the report names it
+	Emails  int    // emails that arrived for the addresses in To
+	// Settled is false when emails were still arriving when SiegeKit
+	// stopped waiting, so Emails is the count so far.
+	Settled bool
+	// Any is set when the requests held no address, so every email that
+	// arrived was counted.
+	Any bool
+}
+
+// MailLimited reports whether the answers showed no limit but fewer emails
+// arrived than requests were accepted: the app limits its emails, which
+// is what a reset page's limit protects (design Q2 B, ADR 0056 item 4).
+func (r Result) MailLimited() bool {
+	m := r.Mail
+	return m != nil && !r.Limited && m.Settled && m.Emails > 0 && m.Emails < r.Accepted
+}
+
+// said describes the count in a phrase.
+func (m *Mail) said(r Result) string {
+	to := " to the addresses sent"
+	if m.Any {
+		to = " to any address (the requests held none)"
+	}
+	es := func(n int) string {
+		if n == 1 {
+			return "1 email"
+		}
+		return fmt.Sprintf("%d emails", n)
+	}
+	switch {
+	case !m.Settled:
+		return fmt.Sprintf("%s had arrived at the mail catcher %s%s when SiegeKit stopped waiting after %s, and more were still arriving", es(m.Emails), m.Catcher, to, mailcatcher.Max)
+	case r.MailLimited():
+		return fmt.Sprintf("but only %s arrived at the mail catcher %s%s for the %d requests answered below 400: the app limits these emails", es(m.Emails), m.Catcher, to, r.Accepted)
+	case m.Emails == 0:
+		return fmt.Sprintf("no email arrived at the mail catcher %s%s: the app sent none for these requests, or does not send its mail there", m.Catcher, to)
+	}
+	return fmt.Sprintf("%s arrived at the mail catcher %s%s for %d requests answered below 400", es(m.Emails), m.Catcher, to, r.Accepted)
 }
 
 // Summary says the result in one line, for reports.
 func (r Result) Summary(planned int) string {
+	if r.Mail == nil {
+		return r.summary(planned)
+	}
+	if r.MailLimited() {
+		return fmt.Sprintf("no 429, 503 or rate-limit header in %d requests, all answered %d, %s", r.Requests, r.Baseline, r.Mail.said(r))
+	}
+	return r.summary(planned) + "; " + r.Mail.said(r)
+}
+
+func (r Result) summary(planned int) string {
 	if r.Limited {
 		s := fmt.Sprintf("limit seen after %d of %d requests: %s", r.Requests, planned, r.Signal)
 		switch {
@@ -185,7 +246,15 @@ func Check(ctx context.Context, cfg egress.Config, e *Endpoint, n int) (Result, 
 			}
 		}
 		last = now()
-		a, err := send(ctx, cfg, e.Method, e.Path, e.ContentType(), e.next(), MaxAnswer)
+		body := e.next()
+		if e.Page == Reset || e.Page == SignUp {
+			for _, to := range mailcatcher.Addresses(body, e.Method == http.MethodPost && !e.json) {
+				if !slices.Contains(r.To, to) && len(r.To) < MaxRequests {
+					r.To = append(r.To, to)
+				}
+			}
+		}
+		a, err := send(ctx, cfg, e.Method, e.Path, e.ContentType(), body, MaxAnswer)
 		if a == nil || err != nil && !errors.Is(err, egress.ErrTooLarge) {
 			if ctx.Err() != nil {
 				return r, ctx.Err()

@@ -28,6 +28,7 @@ import (
 	"github.com/Gobbuwu/SiegeKit/internal/egress"
 	"github.com/Gobbuwu/SiegeKit/internal/findings"
 	"github.com/Gobbuwu/SiegeKit/internal/login"
+	"github.com/Gobbuwu/SiegeKit/internal/mailcatcher"
 	"github.com/Gobbuwu/SiegeKit/internal/manifest"
 	"github.com/Gobbuwu/SiegeKit/internal/openapi"
 	"github.com/Gobbuwu/SiegeKit/internal/publicmaps"
@@ -100,6 +101,7 @@ type urlScan struct {
 	replayWrites   bool   // --replay-writes (ADR 0049)
 	rateLimit      rateLimitFlags
 	pageFlags      map[ratelimit.Page]*pageFlag // --reset-url and the like (ADR 0055)
+	mailCatcher    string                       // --mail-catcher (ADR 0056)
 	backendURL     string                       // --backend-url (ADR 0037)
 	source         string                       // --source: the app's repository (ADR 0037)
 
@@ -114,6 +116,10 @@ type urlScan struct {
 	// Read from the page flags, else from --har, before any request.
 	pageEndpoints map[ratelimit.Page]*ratelimit.Endpoint
 	harPages      ratelimit.HARPages
+	// Read from --mail-catcher before any request; opened when a reset or
+	// sign-up check will run.
+	catcherURL *target.URL
+	catcher    *mailcatcher.Catcher
 	// Read from --backend-url and --source before any request.
 	backend *backend.Backend
 	repo    *checks.Source
@@ -180,11 +186,14 @@ func pageMade(p ratelimit.Page, r ratelimit.Result) string {
 		return ""
 	case p == ratelimit.SignUp:
 		return fmt.Sprintf("; %d answered below 400, so up to %d accounts were made, named siegekit-new-...", r.Accepted, r.Accepted)
-	case p == ratelimit.Reset:
+	case p == ratelimit.Reset && r.Mail == nil:
 		return fmt.Sprintf("; %d answered below 400, so the app may have sent up to %d emails or texts", r.Accepted, r.Accepted)
 	}
 	return ""
 }
+
+// openCatcher opens the mail catcher; tests replace it.
+var openCatcher = mailcatcher.Open
 
 // sprayCheck runs the spraying check; tests replace it.
 var sprayCheck = login.Spray
@@ -269,6 +278,12 @@ func scanURL(raw string, o urlScan, stdout, stderr io.Writer) int {
 			if o.pageEndpoints[p], err = ratelimit.ParsePage(p, f.url, f.body, u); err != nil {
 				return refuse("%v", err)
 			}
+		}
+	}
+	// So is the mail catcher (ADR 0056).
+	if o.mailCatcher != "" {
+		if o.catcherURL, err = mailcatcher.Parse(o.mailCatcher); err != nil {
+			return refuse("%v", err)
 		}
 	}
 	// So are the backend URL and the repository (ADR 0037).
@@ -640,6 +655,28 @@ func runURL(ctx context.Context, u *target.URL, addrs []netip.Addr, mode target.
 			unavailable[p.ID()] = runner.Fail(report.CausePlatform, "active tests run only on Linux for now (ADR 0018)")
 		}
 	}
+	// The mail catcher is opened (one GET of Mailpit's version) only when
+	// a reset or sign-up check will run; one that does not answer fails
+	// them before they send anything (ADR 0056 item 2).
+	if o.catcherURL != nil {
+		var mailPages []ratelimit.Page
+		for _, p := range []ratelimit.Page{ratelimit.Reset, ratelimit.SignUp} {
+			if _, off := unavailable[p.ID()]; pageSelected[p] && !off {
+				mailPages = append(mailPages, p)
+			}
+		}
+		if len(mailPages) > 0 {
+			rctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+			c, err := openCatcher(rctx, resolver, o.catcherURL, version)
+			cancel()
+			if err != nil {
+				for _, p := range mailPages {
+					unavailable[p.ID()] = runner.Fail("", fmt.Sprintf("%v; no request was sent to the %s", err, p.What()))
+				}
+			}
+			o.catcher = c
+		}
+	}
 	var bp *backendPlan
 	if backendSelected {
 		switch {
@@ -739,6 +776,9 @@ func runURL(ctx context.Context, u *target.URL, addrs []netip.Addr, mode target.
 		what := map[ratelimit.Page]string{ratelimit.Reset: "with wrong answers", ratelimit.SignUp: "each with a new user name (siegekit-new-...)", ratelimit.Code: "with wrong codes"}[p]
 		fmt.Fprintf(stdout, "  %-20s siegekit %s: up to %d requests %s, %s, one per second, stopping at the first sign of a limit\n",
 			p.ID(), version, ratelimit.DefaultRequests, pageInput(e), what)
+		if o.catcher != nil && p != ratelimit.Code {
+			fmt.Fprintf(stdout, "  %-20s then counts the emails that arrive at %s, waiting up to %s\n", "", o.catcher, mailcatcher.Max)
+		}
 		if n := o.harPages.More[p]; n > 0 && !strings.HasPrefix(e.From, "--") {
 			fmt.Fprintf(stdout, "  %-20s only the first of the %d %ss recorded is tested\n", "", n+1, p.What())
 		}
@@ -1168,7 +1208,29 @@ func runURL(ctx context.Context, u *target.URL, addrs []netip.Addr, mode target.
 			e, n := o.pageEndpoints[p], ratelimit.DefaultRequests
 			pr.Input = pageInput(e)
 			fmt.Fprintf(stdout, "%s: sending up to %d requests to the %s, one per second.\n", p.ID(), n, p.What())
-			res, err := rateLimitCheck(ctx, egress.Config{Target: u, Addrs: addrs, VerifyTLS: o.deployed, Version: version, ReadOnly: o.deployed}, e, n)
+			counted := o.catcher != nil && p != ratelimit.Code
+			var mark mailcatcher.Mark
+			var markErr error
+			if counted {
+				pr.Input += "; emails counted at " + o.catcher.String()
+				mark, markErr = o.catcher.Mark(ctx)
+			}
+			var res ratelimit.Result
+			var err error
+			if markErr != nil {
+				err = fmt.Errorf("%v; no request was sent to the %s", markErr, p.What())
+			} else {
+				res, err = rateLimitCheck(ctx, egress.Config{Target: u, Addrs: addrs, VerifyTLS: o.deployed, Version: version, ReadOnly: o.deployed}, e, n)
+			}
+			if err == nil && counted && res.Accepted > 0 {
+				fmt.Fprintf(stdout, "%s: counting the emails at %s.\n", p.ID(), o.catcher)
+				t, cerr := o.catcher.Settle(ctx, mark, res.To)
+				if cerr != nil {
+					err = fmt.Errorf("the requests were sent, but %v", cerr)
+				} else {
+					res.Mail = &ratelimit.Mail{Catcher: o.catcher.URL.String(), Emails: t.Emails, Settled: t.Settled, Any: len(res.To) == 0}
+				}
+			}
 			if ctx.Err() != nil {
 				return fail(errors.New("interrupted; no report written"))
 			}
