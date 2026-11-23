@@ -2,6 +2,7 @@
 
 - Status: Accepted
 - Date: 2026-11-20
+- Amended by: [0055](0055-rate-limit-pages.md) (spraying), [0062](0062-form-logins.md) (logins that are page forms, the right-password guard, limits seen in the redirect)
 - Amends: [0010](0010-login-checks.md) (deployed mode, how the login is given, what counts as a limit), [0029](0029-check-selection.md) (what `--profile quick` leaves out)
 
 ## Context

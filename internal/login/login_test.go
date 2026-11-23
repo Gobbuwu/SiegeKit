@@ -75,11 +75,18 @@ func TestParse(t *testing.T) {
 	}
 }
 
-// fake replaces send and sleep: answer(i) answers the i-th login (from 0).
+// right is the test account's right password in these tests.
+const right = "right-pw"
+
+// fake replaces send and sleep: answer(i) answers the i-th login with a
+// wrong password (from 0); a login with the right password gets 200.
 type fake struct {
 	mu     sync.Mutex
-	bodies []string
+	bodies []string // the wrong-password logins
+	rights int      // the right-password logins
 	waits  []time.Duration
+	// rightAnswer, when set, answers the right-password login.
+	rightAnswer *egress.Answer
 }
 
 func (f *fake) install(t *testing.T, answer func(i int) (*egress.Answer, error)) {
@@ -87,11 +94,18 @@ func (f *fake) install(t *testing.T, answer func(i int) (*egress.Answer, error))
 	t.Cleanup(func() { send, sleep, now = oldSend, oldSleep, oldNow })
 	start := time.Now()
 	now = func() time.Time { return start }
-	send = func(ctx context.Context, cfg egress.Config, method, path, ct string, body []byte, max int64) (*egress.Answer, error) {
+	send = func(ctx context.Context, cfg egress.Config, method, path string, h http.Header, body []byte, max int64) (*egress.Answer, error) {
 		f.mu.Lock()
 		defer f.mu.Unlock()
-		if method != http.MethodPost || path != "/login" || max != MaxAnswer {
-			t.Errorf("sent %s %s max %d", method, path, max)
+		if method != http.MethodPost || path != "/login" || max != MaxAnswer || !strings.HasPrefix(h.Get("Content-Type"), "application/") {
+			t.Errorf("sent %s %s %v max %d", method, path, h, max)
+		}
+		if strings.Contains(string(body), right) {
+			f.rights++
+			if f.rightAnswer != nil {
+				return f.rightAnswer, nil
+			}
+			return &egress.Answer{Status: 200, Header: http.Header{}, Body: []byte(`{"token":"x"}`)}, nil
 		}
 		f.bodies = append(f.bodies, string(body))
 		a, err := answer(len(f.bodies) - 1)
@@ -123,14 +137,15 @@ func TestCheckNoLimit(t *testing.T) {
 	l, cfg := testLogin(t)
 	var f fake
 	f.install(t, func(int) (*egress.Answer, error) { return answer(401, `{"error":"Invalid email or password."}`), nil })
-	r, err := Check(context.Background(), cfg, l, DefaultAttempts)
+	r, err := Check(context.Background(), cfg, l, DefaultAttempts, right)
 	if err != nil || r.Limited || r.Attempts != DefaultAttempts || r.Baseline != 401 {
 		t.Fatalf("%+v %v", r, err)
 	}
-	// Exactly the planned number of logins, each with a new wrong password
-	// for the test account, and a wait before each one after the first.
-	if len(f.bodies) != DefaultAttempts || len(f.waits) != DefaultAttempts-1 {
-		t.Fatalf("%d logins, %d waits", len(f.bodies), len(f.waits))
+	// One login with the right password, then exactly the planned number
+	// of logins, each with a new wrong password for the test account, and a
+	// wait before each one after the first.
+	if f.rights != 1 || len(f.bodies) != DefaultAttempts || len(f.waits) != DefaultAttempts || r.Requests != DefaultAttempts+1 {
+		t.Fatalf("%d right and %d wrong logins, %d waits, %d requests", f.rights, len(f.bodies), len(f.waits), r.Requests)
 	}
 	seen := map[string]bool{}
 	for _, b := range f.bodies {
@@ -183,7 +198,7 @@ func TestCheckLimited(t *testing.T) {
 				}
 				return answer(401, "Invalid password"), nil
 			})
-			r, err := Check(context.Background(), cfg, l, DefaultAttempts)
+			r, err := Check(context.Background(), cfg, l, DefaultAttempts, right)
 			if err != nil || !r.Limited || r.Attempts != 4 || !strings.Contains(r.Signal, c.want) {
 				t.Fatalf("%+v %v, want signal %q", r, err, c.want)
 			}
@@ -207,7 +222,7 @@ func TestCheckLimited(t *testing.T) {
 		}
 		return a, nil
 	})
-	if r, err := Check(context.Background(), cfg, l, 5); err != nil || r.Limited || r.Attempts != 5 {
+	if r, err := Check(context.Background(), cfg, l, 5, right); err != nil || r.Limited || r.Attempts != 5 {
 		t.Errorf("%+v %v", r, err)
 	}
 }
@@ -222,25 +237,25 @@ func TestCheckFails(t *testing.T) {
 		{"404", func(int) (*egress.Answer, error) { return answer(404, ""), nil }, "answered 404 to a POST", 1},
 		{"405", func(int) (*egress.Answer, error) { return answer(405, ""), nil }, "answered 405", 1},
 		{"500 first", func(int) (*egress.Answer, error) { return answer(500, ""), nil }, "check --login-body", 1},
-		{"no answer", func(int) (*egress.Answer, error) { return nil, io.EOF }, "did not answer", 1},
+		{"no answer", func(int) (*egress.Answer, error) { return nil, io.EOF }, "stopped answering after 1 login(s)", 1},
 		{"500 later", func(i int) (*egress.Answer, error) {
 			if i == 2 {
 				return answer(500, ""), nil
 			}
 			return answer(401, ""), nil
-		}, "answered 500 (a server error) after 2 login(s)", 3},
+		}, "answered 500 (a server error) after 3 login(s)", 3},
 		{"stops answering", func(i int) (*egress.Answer, error) {
 			if i == 2 {
 				return nil, io.EOF
 			}
 			return answer(401, ""), nil
-		}, "stopped answering after 2 login(s)", 3},
+		}, "stopped answering after 3 login(s)", 3},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			l, cfg := testLogin(t)
 			var f fake
 			f.install(t, c.answer)
-			if _, err := Check(context.Background(), cfg, l, DefaultAttempts); err == nil || !strings.Contains(err.Error(), c.want) {
+			if _, err := Check(context.Background(), cfg, l, DefaultAttempts, right); err == nil || !strings.Contains(err.Error(), c.want) {
 				t.Errorf("%v, want %q", err, c.want)
 			}
 			if len(f.bodies) != c.sent {
@@ -250,11 +265,25 @@ func TestCheckFails(t *testing.T) {
 	}
 	// Limited at the very first login: said so, with no finding.
 	l, cfg := testLogin(t)
-	var f fake
+	f := fake{rightAnswer: answer(429, "")}
 	f.install(t, func(int) (*egress.Answer, error) { return answer(429, ""), nil })
-	r, err := Check(context.Background(), cfg, l, DefaultAttempts)
-	if err != nil || !r.Limited || r.Attempts != 1 || !strings.Contains(r.Signal, "already at the first attempt") {
+	r, err := Check(context.Background(), cfg, l, DefaultAttempts, right)
+	if err != nil || !r.Limited || r.Attempts != 0 || r.Requests != 1 || !strings.Contains(r.Signal, "already at the first login") {
 		t.Errorf("%+v %v", r, err)
+	}
+	// The right password got no answer, or a wrong URL: the check fails.
+	for _, c := range []struct {
+		a    *egress.Answer
+		want string
+	}{
+		{answer(404, ""), "answered 404 to a POST; check --login-url"},
+		{answer(500, ""), "a server error) to a login with the right password"},
+	} {
+		f := fake{rightAnswer: c.a}
+		f.install(t, func(int) (*egress.Answer, error) { return answer(401, ""), nil })
+		if _, err := Check(context.Background(), cfg, l, DefaultAttempts, right); err == nil || !strings.Contains(err.Error(), c.want) || len(f.bodies) != 0 {
+			t.Errorf("%v, want %q", err, c.want)
+		}
 	}
 }
 
@@ -265,19 +294,19 @@ func TestCheckLimits(t *testing.T) {
 	var f fake
 	f.install(t, func(int) (*egress.Answer, error) { return answer(401, ""), nil })
 	for _, n := range []int{-1, 0, 1, MaxAttempts + 1, 1000} {
-		if _, err := Check(context.Background(), cfg, l, n); err == nil {
+		if _, err := Check(context.Background(), cfg, l, n, right); err == nil {
 			t.Errorf("%d attempts accepted", n)
 		}
 	}
 	cfg.ReadOnly = true
-	if _, err := Check(context.Background(), cfg, l, DefaultAttempts); err == nil || !strings.Contains(err.Error(), "does not allow") {
+	if _, err := Check(context.Background(), cfg, l, DefaultAttempts, right); err == nil || !strings.Contains(err.Error(), "does not allow") {
 		t.Errorf("read-only target: %v", err)
 	}
 	if len(f.bodies) != 0 {
 		t.Errorf("%d logins sent", len(f.bodies))
 	}
 	cfg.ReadOnly = false
-	if r, err := Check(context.Background(), cfg, l, MaxAttempts); err != nil || r.Attempts != MaxAttempts || len(f.bodies) != MaxAttempts {
+	if r, err := Check(context.Background(), cfg, l, MaxAttempts, right); err != nil || r.Attempts != MaxAttempts || len(f.bodies) != MaxAttempts {
 		t.Errorf("%+v %v, %d sent", r, err, len(f.bodies))
 	}
 }
@@ -293,6 +322,9 @@ func TestCheckRate(t *testing.T) {
 		if r.Method != http.MethodPost || r.URL.Path != "/login" || r.Header.Get("Content-Type") != "application/json" {
 			t.Errorf("%s %s %s", r.Method, r.URL, r.Header.Get("Content-Type"))
 		}
+		if b, _ := io.ReadAll(r.Body); strings.Contains(string(b), right) {
+			return
+		}
 		w.WriteHeader(http.StatusUnauthorized)
 	}))
 	defer srv.Close()
@@ -302,11 +334,11 @@ func TestCheckRate(t *testing.T) {
 		t.Fatal(err)
 	}
 	cfg := egress.Config{Target: tu, Addrs: []netip.Addr{netip.MustParseAddr("127.0.0.1")}, Version: "test"}
-	r, err := Check(context.Background(), cfg, l, 3)
+	r, err := Check(context.Background(), cfg, l, 3, right)
 	if err != nil || r.Limited || r.Attempts != 3 {
 		t.Fatalf("%+v %v", r, err)
 	}
-	if len(times) != 3 {
+	if len(times) != 4 {
 		t.Fatalf("%d logins arrived", len(times))
 	}
 	for i := 1; i < len(times); i++ {
@@ -317,7 +349,7 @@ func TestCheckRate(t *testing.T) {
 	// Interrupting the run stops the wait.
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if _, err := Check(ctx, cfg, l, 3); err == nil {
+	if _, err := Check(ctx, cfg, l, 3, right); err == nil {
 		t.Error("a cancelled run kept going")
 	}
 }
@@ -353,7 +385,7 @@ func TestSpray(t *testing.T) {
 	l, cfg := testLogin(t)
 	var f fake
 	f.install(t, func(int) (*egress.Answer, error) { return answer(401, `{"error":"Invalid user"}`), nil })
-	r, err := Spray(context.Background(), cfg, l, 4)
+	r, err := Spray(context.Background(), cfg, l, 4, Result{})
 	if err != nil || r.Limited || r.Attempts != 4 || r.Baseline != 401 || len(f.waits) != 3 {
 		t.Fatalf("%+v %v waits %v", r, err, f.waits)
 	}
@@ -383,7 +415,7 @@ func TestSpray(t *testing.T) {
 		}
 		return answer(401, ""), nil
 	})
-	if r, err := Spray(context.Background(), cfg, l, 4); err != nil || !r.Limited || r.Attempts != 3 || len(SprayFindings(l, r, 4)) != 0 {
+	if r, err := Spray(context.Background(), cfg, l, 4, Result{}); err != nil || !r.Limited || r.Attempts != 3 || len(SprayFindings(l, r, 4)) != 0 {
 		t.Errorf("limited: %+v %v", r, err)
 	}
 	// An email login gets invented addresses at example.com.

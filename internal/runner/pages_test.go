@@ -115,10 +115,10 @@ func TestPagesFindPlantedIssues(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if r, err := login.Check(context.Background(), cfg, l, n); err != nil || !r.Limited {
+		if r, err := login.Check(context.Background(), cfg, l, n, vulnAppPassword); err != nil || !r.Limited {
 			t.Fatalf("%s: login-throttle %+v %v", c.path, r, err)
 		}
-		r, err := login.Spray(context.Background(), cfg, l, n)
+		r, err := login.Spray(context.Background(), cfg, l, n, login.Result{})
 		fs := login.SprayFindings(l, r, n)
 		if err != nil || r.Limited == c.wantFinding || (len(fs) > 0) != c.wantFinding {
 			t.Errorf("%s: spray %+v %v %v", c.path, r, err, fs)

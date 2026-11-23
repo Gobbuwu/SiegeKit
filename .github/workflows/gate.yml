@@ -9,6 +9,8 @@ name: Real-repo gate
 # code pages on Juice Shop from a Chromium recording. ADR 0059: the storage
 # write test on the Firebase Storage emulator and a local Supabase Storage.
 # ADR 0060: every job also runs on GitHub's ARM Linux runner (ubuntu-24.04-arm).
+# ADR 0062: login checks on a Next.js app whose logins are Server Action
+# forms calling Supabase Auth on the server.
 on:
   workflow_dispatch:
   schedule:
@@ -228,8 +230,10 @@ jobs:
         # test it and report ST103 on POST /b2b/v2/orders (ADR 0046).
         # Juice Shop does not limit failed logins (20 logins for
         # jim@juice-sh.op all answered 401, measured 2026-11-20), so
-        # login-throttle must send 20 logins and report login-not-limited
-        # (ADR 0030). served-secrets must fetch the start page and the 8 files
+        # login-throttle must send 21 logins, the first with jim's password
+        # from Juice Shop's own seed data (data/static/users.yml: ncc-1701;
+        # answered 200, measured 2026-11-23; ADR 0062), and report
+        # login-not-limited (ADR 0030). served-secrets must fetch the start page and the 8 files
         # it links (9 requests, measured 2026-11-20; ADR 0032), plus a
         # <file>.map for each of the 8, none of them a source map (17
         # requests, measured 2026-11-21; ADR 0046).
@@ -262,7 +266,8 @@ jobs:
           chmod +x "$RUNNER_TEMP/gate-scan.sh"
           SIEGEKIT_SESSION_B="$(cat "$RUNNER_TEMP/session-b")"
           SIEGEKIT_SESSION_C="$(cat "$RUNNER_TEMP/session-c")"
-          export SIEGEKIT_SESSION_B SIEGEKIT_SESSION_C
+          SIEGEKIT_LOGIN_PASSWORD=ncc-1701
+          export SIEGEKIT_SESSION_B SIEGEKIT_SESSION_C SIEGEKIT_LOGIN_PASSWORD
           set +e
           printf 'test accounts\n' | script -qec "$RUNNER_TEMP/gate-scan.sh" "$RUNNER_TEMP/scan.log"
           code=$?
@@ -277,7 +282,7 @@ jobs:
           jq -e '[.plugins[] | select(.id == "schemathesis" and .input == "OpenAPI spec http://127.0.0.1:3000/api-docs/swagger-ui-init.js (the spec in the Swagger UI setup script)")] | length == 1' "$r"
           jq -e '[.plugins[] | select(.id == "public-maps" and .requests == 11 and .result == "found 1 API spec(s) at 11 path(s) tried, and 0 source map(s) for 8 script(s) and style(s)")] | length == 1' "$r"
           jq -e '[.findings[] | select(.ruleId == "public-api-spec" and .severity == "low" and .location.uri == "http://127.0.0.1:3000/api-docs/swagger-ui-init.js")] | length == 1' "$r"
-          jq -e '[.plugins[] | select(.id == "login-throttle" and .requests == 20)] | length == 1' "$r"
+          jq -e '[.plugins[] | select(.id == "login-throttle" and .requests == 21 and .result == "no limit seen in 20 attempts, all answered 401; the right password answered 200")] | length == 1' "$r"
           jq -e '[.plugins[] | select(.id == "served-secrets" and .requests >= 9 and (.result | startswith("scanned ")) and (.result | contains("tried <file>.map for 8 file(s) naming no source map, 8 not one")))] | length == 1' "$r"
           jq -e '[.findings[] | select(.ruleId == "login-not-limited" and .location.uri == "http://127.0.0.1:3000/rest/user/login")] | length == 1' "$r"
           jq -e '[.plugins[] | select(.id == "access-control" and .requests == 48 and (.result | contains(": 4 readable by account C or B, 0 only by account B (low),")))] | length == 1' "$r"
@@ -720,3 +725,46 @@ jobs:
       - name: Storage log
         if: failure()
         run: SK="$RUNNER_TEMP/siegekit" W="$RUNNER_TEMP/storage" REPO="$GITHUB_WORKSPACE" .github/gate/storage/gate.sh logs
+
+  logins:
+    # ADR 0062: login-throttle and login-spray on a Next.js 16 app whose
+    # logins are Server Action forms calling Supabase Auth on the server
+    # (Supabase's server-side login guide pattern, and a useActionState
+    # form), with Supabase Auth and its database on the matrix's engine and
+    # the app on the runner's Node. The checks run in SiegeKit's own
+    # process. gate.sh checks each scan against its known answer and its
+    # measured result (.github/gate/logins/results.txt), and counts the
+    # logins Supabase Auth got, so a login the app never ran is seen.
+    name: Form logins on Next.js and Supabase Auth (auth on ${{ matrix.engine }}${{ matrix.os == 'ubuntu-24.04-arm' && ', arm64' || '' }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        engine: [podman, docker]
+        os: [ubuntu-latest, ubuntu-24.04-arm]
+    env:
+      APP_ENGINE: ${{ matrix.engine }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Platform
+        run: test "$(uname -m)" = "${{ matrix.os == 'ubuntu-24.04-arm' && 'aarch64' || 'x86_64' }}"
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: false
+      - name: Build
+        run: CGO_ENABLED=0 go build -o "$RUNNER_TEMP/siegekit" ./cmd/siegekit
+      - name: App dependencies
+        # Pinned in package-lock.json: Next.js, React and Supabase's SDKs.
+        working-directory: .github/gate/logins
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Start Supabase Auth and the app
+        run: SK="$RUNNER_TEMP/siegekit" W="$RUNNER_TEMP/logins" REPO="$GITHUB_WORKSPACE" .github/gate/logins/gate.sh start
+      - name: Scan each login
+        run: SK="$RUNNER_TEMP/siegekit" W="$RUNNER_TEMP/logins" REPO="$GITHUB_WORKSPACE" .github/gate/logins/gate.sh scan
+      - name: Logs
+        if: failure()
+        run: SK="$RUNNER_TEMP/siegekit" W="$RUNNER_TEMP/logins" REPO="$GITHUB_WORKSPACE" .github/gate/logins/gate.sh logs

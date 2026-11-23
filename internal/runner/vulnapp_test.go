@@ -1,6 +1,7 @@
 package runner
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -15,6 +16,10 @@ import (
 
 // vulnAppSpec is the OpenAPI spec of the app's small JSON API, served at
 // /openapi.json. Its operations are relative to the server URL /api.
+// vulnAppPassword is the test account's right password on every login of
+// the vulnerable app (ADR 0062).
+const vulnAppPassword = "right-password-1"
+
 const vulnAppSpec = `{"openapi":"3.0.3","info":{"title":"Shop API","version":"1"},"servers":[{"url":"/api"}],
 "paths":{"/items/{id}":{"get":{"parameters":[{"name":"id","in":"path","required":true,"schema":{"type":"integer","minimum":1}}],
 "responses":{"200":{"description":"The item","content":{"application/json":{"schema":{"type":"object","required":["id","name"],"properties":{"id":{"type":"integer"},"name":{"type":"string"}}}}}},
@@ -160,14 +165,46 @@ func vulnApp() http.Handler {
 	// password gets the same answer, however many there are (ADR 0030).
 	mux.HandleFunc("POST /account/sign-in", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
+		var v struct{ Password string }
+		if json.NewDecoder(r.Body).Decode(&v) == nil && v.Password == vulnAppPassword {
+			io.WriteString(w, `{"token":"t"}`)
+			return
+		}
 		w.WriteHeader(http.StatusUnauthorized)
 		io.WriteString(w, `{"error":"Invalid email or password."}`)
+	})
+	// A login form like a Next.js Server Action's (ADR 0062): the page has
+	// a hidden action field and sets a CSRF cookie; the form is sent as
+	// multipart. Any other POST gets the page back and is never run, as on
+	// Next.js 16 (a false login-not-limited before ADR 0062). Failed
+	// logins are not limited: a planted issue, found with --login-page.
+	const formPage = `<form><input name=email type=email><input name=password type=password><button name="$ACTION_ID_7f3a" formAction="" formEncType="multipart/form-data" formMethod="POST">Log in</button></form>`
+	var csrf atomic.Int32
+	mux.HandleFunc("GET /account/form-sign-in", func(w http.ResponseWriter, r *http.Request) {
+		http.SetCookie(w, &http.Cookie{Name: "csrf", Value: fmt.Sprint(csrf.Add(1)), Path: "/"})
+		page(w, formPage)
+	})
+	mux.HandleFunc("POST /account/form-sign-in", func(w http.ResponseWriter, r *http.Request) {
+		c, err := r.Cookie("csrf")
+		if r.ParseMultipartForm(1<<16) != nil || r.MultipartForm.Value["$ACTION_ID_7f3a"] == nil || err != nil || c.Value == "" {
+			page(w, formPage)
+			return
+		}
+		if r.FormValue("password") == vulnAppPassword {
+			http.Redirect(w, r, "/account/profile", http.StatusSeeOther)
+			return
+		}
+		http.Redirect(w, r, "/account/form-sign-in?error=invalid_credentials", http.StatusSeeOther)
 	})
 	// A login that locks the account after 2 failed attempts: not an issue,
 	// so the check must see the limit and report none.
 	var failed sync.Map
 	mux.HandleFunc("POST /account/sign-in-limited", func(w http.ResponseWriter, r *http.Request) {
 		r.ParseForm()
+		if r.Form.Get("password") == vulnAppPassword {
+			io.WriteString(w, "welcome")
+			return
+		}
 		n, _ := failed.LoadOrStore(r.Form.Get("username"), new(atomic.Int32))
 		if n.(*atomic.Int32).Add(1) > 2 {
 			http.Error(w, "account locked", http.StatusLocked)
@@ -383,6 +420,10 @@ func vulnApp() http.Handler {
 	// so spraying gets past it: a planted issue.
 	var guarded atomic.Int32
 	mux.HandleFunc("POST /account/sign-in-guarded", func(w http.ResponseWriter, r *http.Request) {
+		if r.FormValue("password") == vulnAppPassword {
+			io.WriteString(w, "welcome")
+			return
+		}
 		if guarded.Add(1) > 3 {
 			http.Error(w, "too many attempts", http.StatusTooManyRequests)
 			return
@@ -531,7 +572,8 @@ var vulnAppIssues = map[string]map[string]string{
 		"aws-access-token /static/app.js.map": "an AWS access key in a served source map",
 	},
 	"login-throttle": {
-		"login-not-limited /account/sign-in": "failed logins are not limited at POST /account/sign-in",
+		"login-not-limited /account/sign-in":      "failed logins are not limited at POST /account/sign-in",
+		"login-not-limited /account/form-sign-in": "failed logins are not limited on the form at /account/form-sign-in",
 	},
 	// public-maps runs in the test process (TestPublicMapsFindsPlantedIssues).
 	"public-maps": {

@@ -1,0 +1,17 @@
+{
+  "name": "siegekit-gate-logins",
+  "private": true,
+  "description": "A Next.js app whose logins are Server Action forms calling Supabase Auth on the server, for the form login gate (ADR 0062). Not part of SiegeKit.",
+  "license": "Apache-2.0",
+  "scripts": {
+    "build": "next build",
+    "start": "next start -H 127.0.0.1 -p 3100"
+  },
+  "dependencies": {
+    "@supabase/ssr": "0.12.7",
+    "@supabase/supabase-js": "2.119.2",
+    "next": "16.4.6",
+    "react": "19.3.1",
+    "react-dom": "19.3.1"
+  }
+}

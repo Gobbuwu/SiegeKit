@@ -32,7 +32,7 @@ func useSpray(t *testing.T, res login.Result) *int {
 	t.Helper()
 	n := 0
 	old := sprayCheck
-	sprayCheck = func(_ context.Context, cfg egress.Config, l *login.Login, attempts int) (login.Result, error) {
+	sprayCheck = func(_ context.Context, cfg egress.Config, l *login.Login, attempts int, _ login.Result) (login.Result, error) {
 		n++
 		if cfg.ReadOnly || l.Path != "/rest/user/login" || attempts != 7 {
 			t.Errorf("spray %+v %+v %d", cfg, l, attempts)
