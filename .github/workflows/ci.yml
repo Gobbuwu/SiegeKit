@@ -110,6 +110,7 @@ jobs:
           go test -run='^$' -fuzz=FuzzTokenizeJS -fuzztime=30s ./internal/coderoutes
           go test -run='^$' -fuzz=FuzzGoRoutes -fuzztime=30s ./internal/coderoutes
           go test -run='^$' -fuzz=FuzzParse -fuzztime=30s ./internal/ratelimit
+          go test -run='^$' -fuzz=FuzzPagesFromHAR -fuzztime=30s ./internal/ratelimit
           go test -run='^$' -fuzz=FuzzParse -fuzztime=30s ./internal/backend
           go test -run='^$' -fuzz=FuzzReadScripts -fuzztime=30s ./internal/backend
       - name: Staticcheck

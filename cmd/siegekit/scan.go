@@ -77,7 +77,8 @@ Flags:
   --profile NAME    full (default) runs every check; quick leaves out the
                     attack tests of URL scans (zap-active, nuclei-intrusive,
                     nuclei-default-login, schemathesis, login-throttle,
-                    rate-limit);
+                    login-spray, rate-limit, reset-limit, signup-limit,
+                    code-limit);
                     ZAP's attack scan alone can take 30 minutes
   --fail-on LEVEL   exit 3 if a finding is at or above LEVEL
                     (critical, high, medium, low, info; default high)
@@ -141,6 +142,18 @@ Flags:
   --rate-limit-requests N
                     requests to send, one per second, stopping at the first
                     sign of a limit (default 20, at most 50)
+  --reset-url URL, --reset-body BODY
+  --signup-url URL, --signup-body BODY
+  --code-url URL, --code-body BODY
+                    a password-reset, sign-up or verification-code (second
+                    factor) page, for the reset-limit, signup-limit and
+                    code-limit checks (local targets only): 20 POSTs, one
+                    per second. In the body, {wrong} is filled with a new
+                    wrong answer or code each time (required on a code
+                    page), and {new} with a new user name (required on a
+                    sign-up page: up to 20 accounts are made). Without
+                    these flags, the pages are taken from --har when the
+                    recording used them
   --backend-url URL the Supabase or Firebase Realtime Database URL the app
                     reads from the browser, for the backend-live check: one
                     GET per table or path with the app's own public key.
@@ -186,6 +199,13 @@ func scan(args []string, stdout, stderr io.Writer) int {
 	fl.StringVar(&rl.url, "rate-limit-url", "", "")
 	fl.StringVar(&rl.body, "rate-limit-body", "", "")
 	fl.IntVar(&rl.requests, "rate-limit-requests", ratelimit.DefaultRequests, "")
+	pages := map[ratelimit.Page]*pageFlag{}
+	for _, p := range ratelimit.Pages {
+		f := &pageFlag{}
+		fl.StringVar(&f.url, string(p)+"-url", "", "")
+		fl.StringVar(&f.body, string(p)+"-body", "", "")
+		pages[p] = f
+	}
 	har := fl.String("har", "", "")
 	harUser := fl.String("har-user", "", "")
 	replayWrites := fl.Bool("replay-writes", false, "")
@@ -232,6 +252,15 @@ func scan(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "siegekit scan: %v\n", err)
 		return exitUsage
 	}
+	anyPage := false
+	for _, p := range ratelimit.Pages {
+		f := pages[p]
+		if f.body != "" && f.url == "" {
+			fmt.Fprintf(stderr, "siegekit scan: --%s-body needs --%s-url\n", p, p)
+			return exitUsage
+		}
+		anyPage = anyPage || f.url != ""
+	}
 	threshold, err := findings.ParseSeverity(*failOn)
 	if err != nil {
 		fmt.Fprintf(stderr, "siegekit scan: --fail-on: %v\n", err)
@@ -271,12 +300,12 @@ func scan(args []string, stdout, stderr io.Writer) int {
 			only: splitList(*only), skip: splitList(*skip), threshold: threshold,
 			reportDir: *reportDir, noSave: *noSave, consent: consent{yes: *yes, none: *noInstall},
 			requireAll: *requireAll, openAPI: *openAPI, profile: *profile, login: lf,
-			har: *har, harUser: *harUser, replayWrites: *replayWrites, rateLimit: rl,
+			har: *har, harUser: *harUser, replayWrites: *replayWrites, rateLimit: rl, pageFlags: pages,
 			backendURL: *backendURL, source: *source,
 		}, stdout, stderr)
 	}
-	if *deployed || *authorizedHost != "" || *openAPI != "" || lf.url != "" || attemptsSet || *har != "" || *replayWrites || rl.url != "" || *backendURL != "" || *source != "" {
-		fmt.Fprint(stderr, "siegekit scan: --deployed, --authorized-host, --openapi, --har, --replay-writes, --backend-url, --source, the --login flags and the --rate-limit flags only apply to URL targets\n")
+	if *deployed || *authorizedHost != "" || *openAPI != "" || lf.url != "" || attemptsSet || *har != "" || *replayWrites || rl.url != "" || anyPage || *backendURL != "" || *source != "" {
+		fmt.Fprint(stderr, "siegekit scan: --deployed, --authorized-host, --openapi, --har, --replay-writes, --backend-url, --source, the --login flags, the --rate-limit flags and the --reset, --signup and --code flags only apply to URL targets\n")
 		return exitUsage
 	}
 	target, err := resolveDir(pos[0])

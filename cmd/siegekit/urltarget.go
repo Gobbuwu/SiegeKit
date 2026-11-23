@@ -99,8 +99,9 @@ type urlScan struct {
 	har, harUser   string // --har and --har-user (ADR 0035)
 	replayWrites   bool   // --replay-writes (ADR 0049)
 	rateLimit      rateLimitFlags
-	backendURL     string // --backend-url (ADR 0037)
-	source         string // --source: the app's repository (ADR 0037)
+	pageFlags      map[ratelimit.Page]*pageFlag // --reset-url and the like (ADR 0055)
+	backendURL     string                       // --backend-url (ADR 0037)
+	source         string                       // --source: the app's repository (ADR 0037)
 
 	// Read from --har, SIEGEKIT_SESSION_B and SIEGEKIT_SESSION_C before
 	// any request.
@@ -110,6 +111,9 @@ type urlScan struct {
 	writes      *authz.Writes // read only with --replay-writes
 	// Read from --rate-limit-url and --rate-limit-body before any request.
 	rateEndpoint *ratelimit.Endpoint
+	// Read from the page flags, else from --har, before any request.
+	pageEndpoints map[ratelimit.Page]*ratelimit.Endpoint
+	harPages      ratelimit.HARPages
 	// Read from --backend-url and --source before any request.
 	backend *backend.Backend
 	repo    *checks.Source
@@ -140,8 +144,50 @@ func (f rateLimitFlags) check(requestsSet bool) error {
 	return nil
 }
 
-// rateLimitCheck runs the rate-limit check; tests replace it.
+// rateLimitCheck runs the rate-limit check and the page checks; tests
+// replace it.
 var rateLimitCheck = ratelimit.Check
+
+// pageFlag is a page's URL and body flags, such as --reset-url and
+// --reset-body (ADR 0055).
+type pageFlag struct{ url, body string }
+
+// pageReason says why a page check has no page to test.
+func (o urlScan) pageReason(p ratelimit.Page) string {
+	flags := fmt.Sprintf("pass %s and --%s-body", p.Flag(), p)
+	switch {
+	case o.harPages.Unusable[p] != "":
+		return fmt.Sprintf("the %s recorded in %s cannot be tested (%s); %s", p.What(), filepath.Base(o.har), o.harPages.Unusable[p], flags)
+	case o.har != "":
+		return fmt.Sprintf("no %s was given or found in %s: %s, or use that page while recording", p.What(), filepath.Base(o.har), flags)
+	}
+	return fmt.Sprintf("no %s was given: %s, or --har with a recording that uses it", p.What(), flags)
+}
+
+// pageInput says which page a check tested and where it came from.
+func pageInput(e *ratelimit.Endpoint) string {
+	if strings.HasPrefix(e.From, "--") {
+		return fmt.Sprintf("POST %s (from %s)", e.URL, e.From)
+	}
+	return fmt.Sprintf("POST %s (recorded in %s)", e.URL, e.From)
+}
+
+// pageMade says what a page check's requests may have made, so the person
+// knows what to clean up (design safety rule 6).
+func pageMade(p ratelimit.Page, r ratelimit.Result) string {
+	switch {
+	case r.Accepted == 0:
+		return ""
+	case p == ratelimit.SignUp:
+		return fmt.Sprintf("; %d answered below 400, so up to %d accounts were made, named siegekit-new-...", r.Accepted, r.Accepted)
+	case p == ratelimit.Reset:
+		return fmt.Sprintf("; %d answered below 400, so the app may have sent up to %d emails or texts", r.Accepted, r.Accepted)
+	}
+	return ""
+}
+
+// sprayCheck runs the spraying check; tests replace it.
+var sprayCheck = login.Spray
 
 // loginFlags are the --login flags of the login throttling check
 // (ADR 0030).
@@ -216,6 +262,15 @@ func scanURL(raw string, o urlScan, stdout, stderr io.Writer) int {
 			return refuse("%v", err)
 		}
 	}
+	// So are the reset, sign-up and code pages (ADR 0055).
+	o.pageEndpoints = map[ratelimit.Page]*ratelimit.Endpoint{}
+	for _, p := range ratelimit.Pages {
+		if f := o.pageFlags[p]; f != nil && f.url != "" {
+			if o.pageEndpoints[p], err = ratelimit.ParsePage(p, f.url, f.body, u); err != nil {
+				return refuse("%v", err)
+			}
+		}
+	}
 	// So are the backend URL and the repository (ADR 0037).
 	if o.backendURL != "" {
 		if o.backend, err = backend.Parse(o.backendURL); err != nil {
@@ -241,6 +296,15 @@ func scanURL(raw string, o urlScan, stdout, stderr io.Writer) int {
 		}
 		if o.harRequests, err = authz.ParseHAR(data, u); err != nil {
 			return refuse("--har: %v", err)
+		}
+		// A page given by its flags wins over the recorded one.
+		if o.harPages, err = ratelimit.PagesFromHAR(data, u, filepath.Base(o.har)); err != nil {
+			return refuse("--har: %v", err)
+		}
+		for p, e := range o.harPages.Pages {
+			if o.pageEndpoints[p] == nil {
+				o.pageEndpoints[p] = e
+			}
 		}
 		if o.replayWrites {
 			if o.writes, err = authz.ParseWrites(data, u); err != nil {
@@ -430,7 +494,11 @@ func runURL(ctx context.Context, u *target.URL, addrs []netip.Addr, mode target.
 	// selected like plugins.
 	selected, own, err := runner.Select(all, []checks.Check{
 		{ID: login.ID, Name: login.Name, Family: login.Family, Targets: []string{"url"}},
+		{ID: login.SprayID, Name: login.SprayName, Family: login.Family, Targets: []string{"url"}},
 		{ID: ratelimit.ID, Name: ratelimit.Name, Family: ratelimit.Family, Targets: []string{"url"}},
+		{ID: ratelimit.ResetID, Name: ratelimit.Reset.Name(), Family: ratelimit.Family, Targets: []string{"url"}},
+		{ID: ratelimit.SignUpID, Name: ratelimit.SignUp.Name(), Family: ratelimit.Family, Targets: []string{"url"}},
+		{ID: ratelimit.CodeID, Name: ratelimit.Code.Name(), Family: ratelimit.Family, Targets: []string{"url"}},
 		{ID: served.ID, Name: served.Name, Family: served.Family, Targets: []string{"url"}},
 		{ID: publicmaps.ID, Name: publicmaps.Name, Family: publicmaps.Family, Targets: []string{"url"}},
 		{ID: backend.ID, Name: backend.Name, Family: backend.Family, Targets: []string{"url"}},
@@ -446,6 +514,11 @@ func runURL(ctx context.Context, u *target.URL, addrs []netip.Addr, mode target.
 	loginSelected, servedSelected, authzSelected := ownSelected(login.ID), ownSelected(served.ID), ownSelected(authz.ID)
 	writeSelected := ownSelected(authz.WriteID)
 	rateSelected, backendSelected, mapsSelected := ownSelected(ratelimit.ID), ownSelected(backend.ID), ownSelected(publicmaps.ID)
+	spraySelected := ownSelected(login.SprayID)
+	pageSelected := map[ratelimit.Page]bool{}
+	for _, p := range ratelimit.Pages {
+		pageSelected[p] = ownSelected(p.ID())
+	}
 	// The served-secrets check runs Gitleaks over the files it fetched
 	// (ADR 0032).
 	var gitleaks *manifest.Manifest
@@ -456,7 +529,7 @@ func runURL(ctx context.Context, u *target.URL, addrs []netip.Addr, mode target.
 		}
 		gitleaks = all[i]
 	}
-	for _, id := range []string{login.ID, ratelimit.ID, authz.WriteID} {
+	for _, id := range []string{login.ID, login.SprayID, ratelimit.ID, ratelimit.ResetID, ratelimit.SignUpID, ratelimit.CodeID, authz.WriteID} {
 		if ownSelected(id) && runner.ProfileSkip(true, o.profile) != "" && slices.Contains(o.only, id) {
 			return fail(fmt.Errorf("--only names %s, which --profile %s does not run", id, o.profile))
 		}
@@ -535,6 +608,38 @@ func runURL(ctx context.Context, u *target.URL, addrs []netip.Addr, mode target.
 			unavailable[ratelimit.ID] = runner.Fail(report.CausePlatform, "active tests run only on Linux for now (ADR 0018)")
 		}
 	}
+	// Spraying runs only after login-throttle, on the same login
+	// (ADR 0055 item 6).
+	if spraySelected {
+		_, loginOff := unavailable[login.ID]
+		switch {
+		case o.deployed:
+			unavailable[login.SprayID] = runner.Skip(report.CauseTargetMode, "runs only on local targets: deployed targets get only GET and HEAD requests until request limits are measured (M2.10)")
+		case runner.ProfileSkip(true, o.profile) != "":
+			unavailable[login.SprayID] = runner.Skip(report.CauseProfile, runner.ProfileSkip(true, o.profile))
+		case lg == nil:
+			unavailable[login.SprayID] = runner.Skip(report.CauseNoInput, "no login was given: pass --login-url, --login-user and --login-body; spraying runs when login-throttle sees a limit on that account")
+		case !loginSelected || loginOff:
+			unavailable[login.SprayID] = runner.Skip(report.CauseNoInput, "runs only after login-throttle sees a limit on one account, and login-throttle does not run")
+		case hostOS != "linux":
+			unavailable[login.SprayID] = runner.Fail(report.CausePlatform, "active tests run only on Linux for now (ADR 0018)")
+		}
+	}
+	for _, p := range ratelimit.Pages {
+		if !pageSelected[p] {
+			continue
+		}
+		switch {
+		case o.deployed:
+			unavailable[p.ID()] = runner.Skip(report.CauseTargetMode, "runs only on local targets until request limits are measured (M2.10)")
+		case runner.ProfileSkip(true, o.profile) != "":
+			unavailable[p.ID()] = runner.Skip(report.CauseProfile, runner.ProfileSkip(true, o.profile))
+		case o.pageEndpoints[p] == nil:
+			unavailable[p.ID()] = runner.Skip(report.CauseNoInput, o.pageReason(p))
+		case hostOS != "linux":
+			unavailable[p.ID()] = runner.Fail(report.CausePlatform, "active tests run only on Linux for now (ADR 0018)")
+		}
+	}
 	var bp *backendPlan
 	if backendSelected {
 		switch {
@@ -610,6 +715,32 @@ func runURL(ctx context.Context, u *target.URL, addrs []netip.Addr, mode target.
 			planned = append(planned, ratelimit.ID)
 			fmt.Fprintf(stdout, "  %-20s siegekit %s: up to %d requests %s %s, one per second, stopping at the first sign of a limit\n",
 				ratelimit.ID, version, o.rateLimit.requests, o.rateEndpoint.Method, o.rateEndpoint.URL)
+		}
+	}
+	if spraySelected {
+		if r, ok := unavailable[login.SprayID]; ok {
+			fmt.Fprintf(stdout, "  %-20s not run - %s\n", login.SprayID, r.Reason)
+		} else {
+			planned = append(planned, login.SprayID)
+			fmt.Fprintf(stdout, "  %-20s siegekit %s: only if login-throttle sees a limit, %d logins for invented user names (%s and on) with one wrong password, POST %s, one per second\n",
+				login.SprayID, version, o.login.attempts, login.SprayUser(lg, 1), lg.URL)
+		}
+	}
+	for _, p := range ratelimit.Pages {
+		if !pageSelected[p] {
+			continue
+		}
+		if r, ok := unavailable[p.ID()]; ok {
+			fmt.Fprintf(stdout, "  %-20s not run - %s\n", p.ID(), r.Reason)
+			continue
+		}
+		planned = append(planned, p.ID())
+		e := o.pageEndpoints[p]
+		what := map[ratelimit.Page]string{ratelimit.Reset: "with wrong answers", ratelimit.SignUp: "each with a new user name (siegekit-new-...)", ratelimit.Code: "with wrong codes"}[p]
+		fmt.Fprintf(stdout, "  %-20s siegekit %s: up to %d requests %s, %s, one per second, stopping at the first sign of a limit\n",
+			p.ID(), version, ratelimit.DefaultRequests, pageInput(e), what)
+		if n := o.harPages.More[p]; n > 0 && !strings.HasPrefix(e.From, "--") {
+			fmt.Fprintf(stdout, "  %-20s only the first of the %d %ss recorded is tested\n", "", n+1, p.What())
 		}
 	}
 	if servedSelected {
@@ -721,6 +852,27 @@ func runURL(ctx context.Context, u *target.URL, addrs []netip.Addr, mode target.
 		if slices.Contains(planned, ratelimit.ID) && o.rateEndpoint.Method != http.MethodGet {
 			destructive = append(destructive, ratelimit.ID)
 			warn = append(warn, fmt.Sprintf("%s sends up to %d POST requests to %s, which can change data.", ratelimit.ID, o.rateLimit.requests, o.rateEndpoint.URL))
+		}
+		// The page checks make accounts and can send real emails or
+		// texts, and spraying sends logins (ADR 0055 item 8).
+		if slices.Contains(planned, login.SprayID) {
+			destructive = append(destructive, login.SprayID)
+			warn = append(warn, fmt.Sprintf("%s may send up to %d logins for invented user names.", login.SprayID, o.login.attempts))
+		}
+		for _, p := range ratelimit.Pages {
+			if !slices.Contains(planned, p.ID()) {
+				continue
+			}
+			destructive = append(destructive, p.ID())
+			n, to := ratelimit.DefaultRequests, o.pageEndpoints[p].URL
+			switch p {
+			case ratelimit.Reset:
+				warn = append(warn, fmt.Sprintf("%s sends up to %d password-reset requests to %s, so the app may send up to %d emails or texts to the address in them.", p.ID(), n, to, n))
+			case ratelimit.SignUp:
+				warn = append(warn, fmt.Sprintf("%s creates up to %d accounts at %s and may send up to %d emails or texts.", p.ID(), n, to, n))
+			case ratelimit.Code:
+				warn = append(warn, fmt.Sprintf("%s sends up to %d wrong codes to %s.", p.ID(), n, to))
+			}
 		}
 		reason := ""
 		switch {
@@ -923,6 +1075,7 @@ func runURL(ctx context.Context, u *target.URL, addrs []netip.Addr, mode target.
 	started := time.Now().UTC()
 	var loginResult *report.PluginResult
 	var loginFindings []findings.Finding
+	loginLimited := false
 	if loginSelected {
 		pr := report.PluginResult{ID: login.ID, Family: login.Family, Tool: "siegekit", Version: version}
 		if r, ok := unavailable[login.ID]; ok {
@@ -939,10 +1092,42 @@ func runURL(ctx context.Context, u *target.URL, addrs []netip.Addr, mode target.
 				pr.Status, pr.Reason = report.Failed, err.Error()
 			} else {
 				loginFindings = login.Findings(lg, res, o.login.attempts)
+				loginLimited = res.Limited
 				pr.Status, pr.Result, pr.Findings = report.Ran, res.Summary(o.login.attempts), len(loginFindings)
 			}
 		}
 		loginResult = &pr
+	}
+	// Spraying runs right after, and only when login-throttle saw a
+	// limit on one account (ADR 0055 item 6).
+	var sprayResult *report.PluginResult
+	var sprayFindings []findings.Finding
+	if spraySelected {
+		pr := report.PluginResult{ID: login.SprayID, Family: login.Family, Tool: "siegekit", Version: version}
+		r, off := unavailable[login.SprayID]
+		switch {
+		case off:
+			pr.Status, pr.Cause, pr.Reason = r.Status, r.Cause, r.Reason
+		case loginResult.Status != report.Ran:
+			pr.Status, pr.Cause, pr.Reason = report.Skipped, report.CauseNoInput, "runs only after login-throttle sees a limit on one account, and login-throttle did not finish"
+		case !loginLimited:
+			pr.Status, pr.Cause, pr.Reason = report.Skipped, report.CauseNoInput, "login-throttle saw no limit on one account, so many accounts from the same address cannot be limited either; nothing to add"
+		default:
+			pr.Input = fmt.Sprintf("POST %s as %s and on", lg.URL, login.SprayUser(lg, 1))
+			fmt.Fprintf(stdout, "%s: sending %d logins for invented user names, one per second.\n", login.SprayID, o.login.attempts)
+			res, err := sprayCheck(ctx, egress.Config{Target: u, Addrs: addrs, VerifyTLS: o.deployed, Version: version, ReadOnly: o.deployed}, lg, o.login.attempts)
+			if ctx.Err() != nil {
+				return fail(errors.New("interrupted; no report written"))
+			}
+			pr.Requests = res.Attempts
+			if err != nil {
+				pr.Status, pr.Reason = report.Failed, err.Error()
+			} else {
+				sprayFindings = login.SprayFindings(lg, res, o.login.attempts)
+				pr.Status, pr.Result, pr.Findings = report.Ran, res.Summary(o.login.attempts), len(sprayFindings)
+			}
+		}
+		sprayResult = &pr
 	}
 	// The rate-limit check runs next, before the other checks' traffic.
 	var rateResult *report.PluginResult
@@ -968,6 +1153,35 @@ func runURL(ctx context.Context, u *target.URL, addrs []netip.Addr, mode target.
 			}
 		}
 		rateResult = &pr
+	}
+	// Then the reset, sign-up and code pages (ADR 0055).
+	var pageResults []*report.PluginResult
+	var pageFindings []findings.Finding
+	for _, p := range ratelimit.Pages {
+		if !pageSelected[p] {
+			continue
+		}
+		pr := report.PluginResult{ID: p.ID(), Family: ratelimit.Family, Tool: "siegekit", Version: version}
+		if r, ok := unavailable[p.ID()]; ok {
+			pr.Status, pr.Cause, pr.Reason = r.Status, r.Cause, r.Reason
+		} else {
+			e, n := o.pageEndpoints[p], ratelimit.DefaultRequests
+			pr.Input = pageInput(e)
+			fmt.Fprintf(stdout, "%s: sending up to %d requests to the %s, one per second.\n", p.ID(), n, p.What())
+			res, err := rateLimitCheck(ctx, egress.Config{Target: u, Addrs: addrs, VerifyTLS: o.deployed, Version: version, ReadOnly: o.deployed}, e, n)
+			if ctx.Err() != nil {
+				return fail(errors.New("interrupted; no report written"))
+			}
+			pr.Requests = res.Requests
+			if err != nil {
+				pr.Status, pr.Reason = report.Failed, err.Error()+pageMade(p, res)
+			} else {
+				fs := ratelimit.Findings(e, res, n)
+				pageFindings = append(pageFindings, fs...)
+				pr.Status, pr.Result, pr.Findings = report.Ran, res.Summary(n)+pageMade(p, res), len(fs)
+			}
+		}
+		pageResults = append(pageResults, &pr)
 	}
 	// The start page and the files it links are fetched once, for the
 	// served-secrets, backend-live and public-maps checks.
@@ -1135,7 +1349,7 @@ func runURL(ctx context.Context, u *target.URL, addrs []netip.Addr, mode target.
 		return fail(err)
 	}
 	var first []report.PluginResult
-	for _, pr := range []*report.PluginResult{loginResult, rateResult, servedResult, backendResult, mapsResult, authzResult, writeResult} {
+	for _, pr := range slices.Concat([]*report.PluginResult{loginResult, sprayResult, rateResult}, pageResults, []*report.PluginResult{servedResult, backendResult, mapsResult, authzResult, writeResult}) {
 		if pr != nil {
 			first = append(first, *pr)
 		}
@@ -1143,7 +1357,7 @@ func runURL(ctx context.Context, u *target.URL, addrs []netip.Addr, mode target.
 	if len(first) > 0 {
 		run.Started = started
 		run.Plugins = append(first, run.Plugins...)
-		if run.Findings = findings.Dedupe(slices.Concat(loginFindings, rateFindings, servedFindings, backendFindings, mapsFindings, authzFindings, writeFindings, run.Findings)); run.Findings == nil {
+		if run.Findings = findings.Dedupe(slices.Concat(loginFindings, sprayFindings, rateFindings, pageFindings, servedFindings, backendFindings, mapsFindings, authzFindings, writeFindings, run.Findings)); run.Findings == nil {
 			run.Findings = []findings.Finding{}
 		}
 	}

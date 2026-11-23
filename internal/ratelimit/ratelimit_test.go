@@ -16,7 +16,7 @@ import (
 	"github.com/Gobbuwu/SiegeKit/internal/target"
 )
 
-func mustTarget(t *testing.T, raw string) *target.URL {
+func mustTarget(t testing.TB, raw string) *target.URL {
 	t.Helper()
 	u, err := target.Parse(raw)
 	if err != nil {
