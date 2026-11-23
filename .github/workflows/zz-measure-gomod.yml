@@ -5,6 +5,7 @@ name: Measure Go module download (temporary)
 # from copies of the module files only, then gosec with the cache mounted
 # read-only and no network. Compared with gosec offline and gosec online in
 # the same image, under SiegeKit's sandbox flags, on both engines.
+# Round 3: Adisk and online put GOTMPDIR on the disk scratch too (option 2B).
 on:
   pull_request:
     paths:
@@ -68,15 +69,17 @@ jobs:
             local code=$?
             echo "SCAN $n exit=$code s=$(echo "$(date +%s.%N) - $t0" | bc) oom=$($E inspect --format '{{.State.OOMKilled}}' m-$n)"
             $E rm m-$n > /dev/null
+            echo "  SSA_SKIPS $(grep -c 'Error building the SSA' $T/$n.err) NO_SPACE $(grep -c 'no space left' $T/$n.err)"
             python3 -c "import json,sys; d=json.load(open('$T/out/$n.json')); e=d.get('Golang errors') or {}; [print('  ERR', k.replace('/target/',''), str(v[0].get('error'))[:160]) for k, v in list(e.items())[:3]]" || true; }
           mkdir -p $T/gc-disk $T/gc-online; chmod 777 $T/gc-disk $T/gc-online
           mod="--mount type=bind,source=$T/gomod,target=/data/gomod,readonly --env GOMODCACHE=/data/gomod --env GOPROXY=off"
           scan offline --network none --tmpfs /tmp:rw,nosuid,nodev,noexec,size=256m --memory 2048m --memory-swap 2048m
           scan A --network none $mod --tmpfs /tmp:rw,nosuid,nodev,noexec,size=256m --memory 2048m --memory-swap 2048m
           scan Atmp --network none $mod --tmpfs /tmp:rw,nosuid,nodev,noexec,size=2048m --memory 4096m --memory-swap 4096m
-          scan Adisk --network none $mod --tmpfs /tmp:rw,nosuid,nodev,noexec,size=256m --memory 2048m --memory-swap 2048m --mount type=bind,source=$T/gc-disk,target=/data/gocache --env GOCACHE=/data/gocache
+          mkdir -p $T/gc-disk/tmp $T/gc-online/tmp; chmod 777 $T/gc-disk/tmp $T/gc-online/tmp
+          scan Adisk --network none $mod --tmpfs /tmp:rw,nosuid,nodev,noexec,size=256m --memory 2048m --memory-swap 2048m --mount type=bind,source=$T/gc-disk,target=/data/gocache --env GOCACHE=/data/gocache --env GOTMPDIR=/data/gocache/tmp
           echo "GOCACHE_DISK_BYTES $(sudo du -sb $T/gc-disk | cut -f1)"
-          scan online --tmpfs /tmp:rw,nosuid,nodev,noexec,size=256m --memory 2048m --memory-swap 2048m --mount type=bind,source=$T/gomod-online,target=/data/gomod --env GOMODCACHE=/data/gomod --mount type=bind,source=$T/gc-online,target=/data/gocache --env GOCACHE=/data/gocache
+          scan online --tmpfs /tmp:rw,nosuid,nodev,noexec,size=256m --memory 2048m --memory-swap 2048m --mount type=bind,source=$T/gomod-online,target=/data/gomod --env GOMODCACHE=/data/gomod --mount type=bind,source=$T/gc-online,target=/data/gocache --env GOCACHE=/data/gocache --env GOTMPDIR=/data/gocache/tmp
           python3 - "$T/out" <<'PY'
           import json, sys
           o = sys.argv[1]
