@@ -1,0 +1,21 @@
+{
+  "fixture": "gitea 1.24.6 by URL (docker.io/gitea/gitea@sha256:2edc102cbb636ae1ddac5fa0c715aa5b03079dee13ac6800b2cef6d4e912e718), its mail sent to Mailpit v1.27.11 (docker.io/axllent/mailpit@sha256:e22dce5b36f93c77082e204a3942fb6b283b7896e057458400a4c88344c3df68), reset and sign-up pages from flags with --mail-catcher (gate.yml job mail)",
+  "measured": "3 local runs on 2026-11-23 on fresh containers (Docker 29.10.0 rootful twice, rootless Podman 4.9.3 once, cgroup v1): 20 requests per check and the same answer each time; Mailpit read by curl: 1 reset email and 20 activation emails. Minimum requests are 90% of the fewest",
+  "checks": {
+    "reset-limit": {
+      "status": "ran",
+      "minRequests": 18,
+      "why": "every reset answers 200, and Gitea emails an account once in a few minutes (none 167 s after an email, one 273 s after, measured), so 1 email arrives for the 20 requests: limited by the count (ADR 0056), no finding"
+    },
+    "signup-limit": {
+      "status": "ran",
+      "match": "exact",
+      "findings": [
+        "signup-not-limited /user/sign_up"
+      ],
+      "count": 1,
+      "minRequests": 18,
+      "why": "20 sign-ups made 20 accounts and 20 activation emails; a sign-up's count is reported and changes no finding (ADR 0056 item 5)"
+    }
+  }
+}

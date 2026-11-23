@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -475,5 +476,86 @@ func TestWindow(t *testing.T) {
 		if got := Window(c.h, now); got != c.want {
 			t.Errorf("Window(%v) = %s, want %s", c.h, got, c.want)
 		}
+	}
+}
+
+// TestMailCount covers the mail-catcher count (ADR 0056): the addresses
+// a check sent, and what a count makes of a reset that answers the same
+// each time (design Q2 B).
+func TestMailCount(t *testing.T) {
+	// The addresses sent: the reset's one address once, each sign-up's
+	// new one; none from a code page or --rate-limit-url.
+	e, cfg := pageEndpoint(t, Reset, "email=Tester%40shop.test&answer={wrong}")
+	installPage(t, e, func(int) *egress.Answer { return answer(200, nil) })
+	r, err := Check(context.Background(), cfg, e, 5)
+	if err != nil || !slices.Equal(r.To, []string{"tester@shop.test"}) {
+		t.Errorf("reset: %q %v", r.To, err)
+	}
+	e, cfg = pageEndpoint(t, SignUp, `{"email":"{new}@example.com"}`)
+	installPage(t, e, func(int) *egress.Answer { return answer(201, nil) })
+	r, err = Check(context.Background(), cfg, e, 5)
+	if err != nil || len(r.To) != 5 || !strings.HasPrefix(r.To[0], "siegekit-new-") || r.To[0] == r.To[1] {
+		t.Errorf("sign-up: %q %v", r.To, err)
+	}
+	e, cfg = pageEndpoint(t, Code, `{"email":"me@x.test","code":"{wrong}"}`)
+	installPage(t, e, func(int) *egress.Answer { return answer(401, nil) })
+	if r, err = Check(context.Background(), cfg, e, 5); err != nil || r.To != nil {
+		t.Errorf("code: %q %v", r.To, err)
+	}
+
+	tu := mustTarget(t, "http://localhost:3000/")
+	reset, err := ParsePage(Reset, "http://localhost:3000/forgot", "email=tester%40shop.test", tu)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const catcher = "http://127.0.0.1:8025/"
+	same := Result{Requests: 20, Baseline: 200, Accepted: 20, To: []string{"tester@shop.test"}}
+	with := func(m Mail) Result { r := same; m.Catcher = catcher; r.Mail = &m; return r }
+	for _, c := range []struct {
+		name    string
+		r       Result
+		limited bool
+		finding string // a text of the finding's message, "" for none
+		summary string
+	}{
+		// Gitea 1.24.6: 1 email for 20 resets (measured).
+		{"one email", with(Mail{Emails: 1, Settled: true}), true, "",
+			"no 429, 503 or rate-limit header in 20 requests, all answered 200, but only 1 email arrived at the mail catcher http://127.0.0.1:8025/ to the addresses sent for the 20 requests answered below 400: the app limits these emails"},
+		{"19 emails", with(Mail{Emails: 19, Settled: true}), true, "", "but only 19 emails arrived"},
+		// Mattermost 12.0.2: 20 emails for 20 resets (measured).
+		{"every email", with(Mail{Emails: 20, Settled: true}), false, "The app sent an email for each: 20 emails arrived at the mail catcher",
+			"no limit seen in 20 requests, all answered 200 with no rate-limit header; 20 emails arrived at the mail catcher http://127.0.0.1:8025/ to the addresses sent for 20 requests answered below 400"},
+		{"more emails", with(Mail{Emails: 23, Settled: true}), false, "The app sent an email for each", "23 emails arrived"},
+		// No email: the app may not send there, so the answers decide.
+		{"none", with(Mail{Settled: true}), false, "the mail catcher did not settle it: no email arrived", "no email arrived at the mail catcher"},
+		// Still arriving at the end of the wait: not limited by a count
+		// that may be short.
+		{"arriving", with(Mail{Emails: 7}), false, "7 emails had arrived at the mail catcher", "when SiegeKit stopped waiting after 30s, and more were still arriving"},
+		{"any address", with(Mail{Emails: 1, Settled: true, Any: true}), true, "", "to any address (the requests held none)"},
+		// No catcher: as PR 1, pointing at the flag.
+		{"no catcher", same, false, "Give --mail-catcher with a local Mailpit", "no limit seen in 20 requests, all answered 200"},
+	} {
+		fs := Findings(reset, c.r, 20)
+		if c.r.MailLimited() != c.limited || (c.finding == "") != (len(fs) == 0) ||
+			len(fs) == 1 && (fs[0].RuleID != "reset-not-limited" || !strings.Contains(fs[0].Message, c.finding)) ||
+			!strings.Contains(c.r.Summary(20), c.summary) {
+			t.Errorf("%s: limited %v, %+v, %q", c.name, c.r.MailLimited(), fs, c.r.Summary(20))
+		}
+	}
+	// A limit in the answers stays the limit; the count is added.
+	lim := with(Mail{Settled: true})
+	lim.Requests, lim.Limited, lim.Signal, lim.Accepted = 1, true, "answered 429", 0
+	if lim.MailLimited() || len(Findings(reset, lim, 20)) != 0 || !strings.HasPrefix(lim.Summary(20), "limit seen after 1 of 20 requests: answered 429; no email arrived") {
+		t.Errorf("answers limited: %q", lim.Summary(20))
+	}
+	// A sign-up's count is reported and changes nothing else.
+	su, _ := ParsePage(SignUp, "http://localhost:3000/join", "u={new}", tu)
+	sr := with(Mail{Emails: 20, Settled: true})
+	if fs := Findings(su, sr, 20); len(fs) != 1 || fs[0].RuleID != "signup-not-limited" || !strings.Contains(sr.Summary(20), "; 20 emails arrived") {
+		t.Errorf("sign-up: %+v %q", fs, sr.Summary(20))
+	}
+	sr.Mail.Emails = 1
+	if fs := Findings(su, sr, 20); len(fs) != 1 {
+		t.Errorf("sign-up with 1 email: %+v", fs)
 	}
 }

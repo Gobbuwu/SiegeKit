@@ -446,3 +446,98 @@ jobs:
       - name: App log
         if: failure()
         run: $APP_ENGINE logs app 2>&1 | tail -50
+
+  mail:
+    # ADR 0056: reset-limit and signup-limit count the emails the app sends
+    # to a mail catcher (--mail-catcher). Gitea 1.24.6 answers every reset
+    # the same but emails an account once in a few minutes, so its reset
+    # counts as limited only from the count (design Q2 B); each sign-up
+    # sends an activation email. The checks run in SiegeKit's own process,
+    # so the engine in the matrix is the one the app and Mailpit run under.
+    name: Mail count on Gitea (app on ${{ matrix.engine }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        engine: [podman, docker]
+    env:
+      APP_ENGINE: ${{ matrix.engine }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: false
+      - name: Build
+        run: CGO_ENABLED=0 go build -o "$RUNNER_TEMP/siegekit" ./cmd/siegekit
+      - name: Start Mailpit and Gitea
+        # Images pinned to the digests measured on 2026-11-23 (Mailpit
+        # v1.27.11, MIT; Gitea: the writes job's). Gitea sends its mail to
+        # Mailpit over their own network; only Mailpit's web port and
+        # Gitea's are published, on 127.0.0.1.
+        run: |
+          set -euo pipefail
+          if [ "$APP_ENGINE" = podman ]; then test "$(podman info --format '{{.Host.Security.Rootless}}')" = true; fi
+          "$APP_ENGINE" network create mail
+          "$APP_ENGINE" run -d --name mailpit --network mail -p 127.0.0.1:8025:8025 \
+            docker.io/axllent/mailpit@sha256:e22dce5b36f93c77082e204a3942fb6b283b7896e057458400a4c88344c3df68
+          "$APP_ENGINE" run -d --name app --network mail -p 127.0.0.1:3001:3000 -e GITEA__security__INSTALL_LOCK=true \
+            -e GITEA__database__DB_TYPE=sqlite3 -e GITEA__server__ROOT_URL=http://127.0.0.1:3001/ \
+            -e GITEA__mailer__ENABLED=true -e GITEA__mailer__PROTOCOL=smtp -e GITEA__mailer__SMTP_ADDR=mailpit \
+            -e GITEA__mailer__SMTP_PORT=1025 -e GITEA__mailer__FROM=gitea@siegekit.test -e GITEA__service__REGISTER_EMAIL_CONFIRM=true \
+            docker.io/gitea/gitea@sha256:2edc102cbb636ae1ddac5fa0c715aa5b03079dee13ac6800b2cef6d4e912e718
+          up=
+          for i in $(seq 1 90); do
+            if curl -sf -o /dev/null http://127.0.0.1:3001/ && curl -sf -o /dev/null http://127.0.0.1:8025/api/v1/info; then up=1; break; fi
+            sleep 2
+          done
+          if [ -z "$up" ]; then "$APP_ENGINE" logs app; "$APP_ENGINE" logs mailpit; exit 1; fi
+          "$APP_ENGINE" exec -u git app gitea admin user create --username alice --password 'Gate-mail-count-1' --email alice@siegekit.test --must-change-password=false
+          # No email yet, so every one counted below came from the scan.
+          test "$(curl -sf 'http://127.0.0.1:8025/api/v1/messages?limit=1' | jq .total)" = 0
+      - name: Scan
+        # --authorized-host stands for the typed yes (ADR 0023); the gate
+        # made the app, the account and the mail catcher.
+        run: |
+          set +e
+          "$RUNNER_TEMP/siegekit" scan --yes --authorized-host 127.0.0.1 --no-save --report-dir "$RUNNER_TEMP/report" \
+            --only reset-limit,signup-limit --mail-catcher http://127.0.0.1:8025/ \
+            --reset-url http://127.0.0.1:3001/user/forgot_password --reset-body 'email=alice%40siegekit.test' \
+            --signup-url http://127.0.0.1:3001/user/sign_up \
+            --signup-body 'user_name={new}&email={new}%40example.com&password=Gate-mail-count-1&retype=Gate-mail-count-1' \
+            http://127.0.0.1:3001/
+          code=$?
+          set -e
+          echo "exit code $code"
+          if [ "$code" -ne 0 ] && [ "$code" -ne 3 ]; then exit 1; fi
+          r="$RUNNER_TEMP/report/report.json"
+          jq '.plugins[] | {id, status, cause, reason, input, result, requests, findings}' "$r"
+          # Measured on Docker and rootless Podman (ADR 0056): 20 resets
+          # answered 200 and 1 email arrived; 20 sign-ups and 20 emails.
+          jq -e '[.plugins[] | select(.id == "reset-limit" and .findings == 0 and (.input | endswith("; emails counted at http://127.0.0.1:8025/ (Mailpit v1.27.11)")) and (.result == "no 429, 503 or rate-limit header in 20 requests, all answered 200, but only 1 email arrived at the mail catcher http://127.0.0.1:8025/ to the addresses sent for the 20 requests answered below 400: the app limits these emails"))] | length == 1' "$r"
+          jq -e '[.plugins[] | select(.id == "signup-limit" and .findings == 1 and (.result | contains("; 20 emails arrived at the mail catcher http://127.0.0.1:8025/ to the addresses sent for 20 requests answered below 400")))] | length == 1' "$r"
+          # The count again, read from Mailpit by the gate itself.
+          curl -sf 'http://127.0.0.1:8025/api/v1/messages?limit=100' > "$RUNNER_TEMP/mail.json"
+          jq -r '.messages[] | "\(.To[0].Address) \(.Subject)"' "$RUNNER_TEMP/mail.json" | sort | uniq -c
+          test "$(jq '[.messages[] | select(.To[0].Address == "alice@siegekit.test")] | length' "$RUNNER_TEMP/mail.json")" = 1
+          test "$(jq '[.messages[] | select(.To[0].Address | test("^siegekit-new-[a-z0-9]{12}@example\\.com$"))] | length' "$RUNNER_TEMP/mail.json")" = 20
+          test "$(jq .total "$RUNNER_TEMP/mail.json")" = 21
+      - name: Known answers
+        if: ${{ !cancelled() }}
+        run: |
+          set +e
+          go run ./internal/knownanswers/check -answers testdata/known-answers/gitea-mail.json -report "$RUNNER_TEMP/report/report.json" -observed "$RUNNER_TEMP/observed.json"
+          code=$?
+          set -e
+          echo "::group::Answer of this run"
+          cat "$RUNNER_TEMP/observed.json"
+          echo "::endgroup::"
+          exit $code
+      - name: App log
+        if: failure()
+        run: |
+          $APP_ENGINE logs app 2>&1 | tail -50
+          $APP_ENGINE logs mailpit 2>&1 | tail -20

@@ -1,0 +1,18 @@
+{
+  "Version": "v1.27.11",
+  "LatestVersion": "",
+  "Database": "/tmp/mailpit-1795405305156046664.db",
+  "DatabaseSize": 155648,
+  "Messages": 22,
+  "Unread": 22,
+  "Tags": {},
+  "RuntimeStats": {
+    "Uptime": 374,
+    "Memory": 14899464,
+    "MessagesDeleted": 0,
+    "SMTPAccepted": 22,
+    "SMTPAcceptedSize": 58112,
+    "SMTPRejected": 0,
+    "SMTPIgnored": 0
+  }
+}
