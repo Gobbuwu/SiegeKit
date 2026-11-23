@@ -1,0 +1,99 @@
+name: Measure Go module download edge cases (temporary)
+
+# Temporary, removed before merge. Q1A on synthetic fixtures: go.work,
+# a replace to a folder inside the repository, and a committed vendor/.
+on:
+  pull_request:
+    paths:
+      - .github/workflows/zz-measure-edge.yml
+
+permissions:
+  contents: read
+
+jobs:
+  edge:
+    name: edge cases (${{ matrix.engine }}, ${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, ubuntu-24.04-arm]
+        engine: [podman, docker]
+    env:
+      E: ${{ matrix.engine }}
+      IMG: ghcr.io/securego/gosec@sha256:7bcf1edbab3e80d8006a28d53e7031a9c9775be8eec30679e4adc1f51d272121
+    steps:
+      - name: Measure
+        run: |
+          set -u +e
+          T=$RUNNER_TEMP
+          $E pull -q "$IMG" > /dev/null
+          ro=--read-only; [ "$E" = podman ] && ro="--read-only --read-only-tmpfs=false"
+          common="--rm --pull never --user $(id -u):$(id -g) --cap-drop ALL --security-opt no-new-privileges $ro --tmpfs /tmp:rw,nosuid,nodev,noexec,size=256m --tmpfs /dev/shm:rw,nosuid,nodev,noexec,size=64m --pids-limit 256 --memory 2048m --memory-swap 2048m --cpus 2 --env HOME=/tmp --workdir /tmp --env GOPATH=/tmp/go --env GOTOOLCHAIN=local"
+          gen() { local d=$1; shift; chmod -R a+rwX $T/fx 2>/dev/null; $E run $common --mount type=bind,source=$T/fx,target=/fx --workdir /fx/$d --entrypoint go "$IMG" "$@"; echo "GEN $d go $* exit=$?"; }
+          mkdir -p $T/fx; chmod 777 $T/fx
+          # Fixtures, synthetic: each has a G115 (an SSA rule) in a package that imports github.com/google/uuid,
+          # so the finding appears only when the dependency type-checks.
+          gofile() { cat > "$1" <<GO
+          package $2
+
+          import (
+          	"os"
+
+          	"github.com/google/uuid"$3
+          )
+
+          func $4() int16 {
+          	n := len(os.Args) + len(uuid.NewString())$5
+          	return int16(n)
+          }
+          $6
+          GO
+          }
+          # 1. go.work with two modules (a uses b through the workspace).
+          mkdir -p $T/fx/work/a $T/fx/work/b; chmod -R 777 $T/fx
+          printf 'module example.com/a\n\ngo 1.24\n' > $T/fx/work/a/go.mod; printf 'module example.com/b\n\ngo 1.24\n' > $T/fx/work/b/go.mod
+          gen work/a get github.com/google/uuid@v1.6.0; gen work/b get github.com/google/uuid@v1.6.0
+          printf 'go 1.24\n\nuse (\n\t./a\n\t./b\n)\n' > $T/fx/work/go.work
+          gofile $T/fx/work/a/main.go main '; b "example.com/b"' F ' + int(b.N())' 'func main() { _ = F() }'
+          gofile $T/fx/work/b/b.go b '' N '' ''
+          # 2. replace to a folder inside the repository.
+          mkdir -p $T/fx/rep/sub; chmod -R 777 $T/fx
+          printf 'module example.com/r\n\ngo 1.24\n' > $T/fx/rep/go.mod; printf 'module example.com/sub\n\ngo 1.24\n' > $T/fx/rep/sub/go.mod
+          gen rep/sub get github.com/google/uuid@v1.6.0; gen rep get github.com/google/uuid@v1.6.0
+          gen rep mod edit -require=example.com/sub@v0.0.0 -replace=example.com/sub=./sub
+          gofile $T/fx/rep/main.go main '; sub "example.com/sub"' F ' + int(sub.N())' 'func main() { _ = F() }'
+          gofile $T/fx/rep/sub/sub.go sub '' N '' ''
+          # 3. vendor/ committed.
+          mkdir -p $T/fx/ven; chmod -R 777 $T/fx
+          printf 'module example.com/v\n\ngo 1.24\n' > $T/fx/ven/go.mod
+          gen ven get github.com/google/uuid@v1.6.0
+          gofile $T/fx/ven/main.go main '' F '' 'func main() { _ = F() }'
+          gen ven mod tidy; gen ven mod vendor
+          chmod -R a+rX $T/fx
+          for f in $(find $T/fx -name '*.go' -not -path '*/vendor/*') $(find $T/fx -name 'go.mod' -o -name go.work | grep -v vendor); do echo "== $f"; cat $f; done
+          for fx in work rep ven; do
+            echo "### $fx"
+            S=$T/s-$fx; G=$T/m-$fx; O=$T/o-$fx; mkdir -p $S $G $T/gmo-$fx $O; chmod 777 $G $T/gmo-$fx $O
+            (cd $T/fx/$fx && find . \( -name .git -o -name vendor \) -prune -o \( -name go.mod -o -name go.sum -o -name go.work -o -name go.work.sum \) -type f -print) | while read f; do mkdir -p "$S/$(dirname "$f")"; cp "$T/fx/$fx/$f" "$S/$f"; done
+            for m in $(cd $S && find . -name go.mod -printf '%h\n' | sort); do
+              $E run $common --env GOMODCACHE=/data/gomod --env GOPROXY=https://proxy.golang.org --env GOFLAGS=-mod=mod --env 'GOVCS=*:off' \
+                --mount type=bind,source=$S,target=/data/stage,readonly --mount type=bind,source=$G,target=/data/gomod \
+                --workdir /data/stage/$m --entrypoint go "$IMG" mod download > $T/dl.log 2>&1
+              echo "DOWNLOAD $fx/$m exit=$? $(tail -c 300 $T/dl.log | tr '\n' ' ')"
+            done
+            for v in offline A online; do
+              mkdir -p $T/gc-$fx-$v/tmp; chmod -R 777 $T/gc-$fx-$v
+              case $v in
+                offline) x="--network none --env GOPROXY=off" ;;
+                A) x="--network none --mount type=bind,source=$G,target=/data/gomod,readonly --env GOMODCACHE=/data/gomod --env GOPROXY=off" ;;
+                online) x="--mount type=bind,source=$T/gmo-$fx,target=/data/gomod --env GOMODCACHE=/data/gomod" ;;
+              esac
+              $E run $common $x --mount type=bind,source=$T/gc-$fx-$v,target=/data/gocache --env GOCACHE=/data/gocache --env GOTMPDIR=/data/gocache/tmp \
+                --mount type=bind,source=$T/fx/$fx,target=/target,readonly --mount type=bind,source=$O,target=/out \
+                "$IMG" -concurrency 1 -fmt json -out /out/$v.json -no-fail /target/... > /dev/null 2> $T/err-$fx-$v
+              echo "SCAN $fx $v exit=$? SSA_SKIPS $(grep -c 'Error building the SSA' $T/err-$fx-$v)"
+              python3 -c "import json; d=json.load(open('$O/$v.json')); print('RESULT $fx $v', sorted((i['rule_id'], i['file'].replace('/target/',''), i['line']) for i in d.get('Issues') or []), 'pkgerrs', {k.replace('/target/',''): str(e[0].get('error'))[:120] for k, e in (d.get('Golang errors') or {}).items()})"
+            done
+          done
