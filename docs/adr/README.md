@@ -63,6 +63,7 @@ Each significant design decision is recorded as a short ADR before code is writt
 | [0057](0057-page-checks-known-answers.md) | Known answers for the reset, sign-up and code pages on Juice Shop, and no answer that depends on map order (amends 0055, 0036) | Accepted |
 | [0058](0058-storage-write-test.md) | The storage write test: one test file uploaded, read back and deleted in Firebase and Supabase Storage buckets (amends 0037, 0044) | Accepted |
 | [0059](0059-storage-write-known-answers.md) | Known answers for the storage write test on the Firebase emulator and local Supabase Storage, on both engines (amends 0058) | Accepted |
+| [0060](0060-arm-linux-ci.md) | The CI test job on GitHub's ARM Linux runner, rootless Podman and Docker (amends 0039) | Accepted |
 
 ADRs 0002 to 0011 were accepted at the M0 design sign-off on 2026-11-18.
 
