@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -285,22 +286,9 @@ func TestSupabaseSQLLinear(t *testing.T) {
 		}
 		return []byte(b.String())
 	}
-	best := func(data []byte) time.Duration {
-		var d time.Duration
-		for i := 0; i < 3; i++ {
-			start := time.Now()
-			supabaseSQL(map[string][]byte{"supabase/migrations/1.sql": data})
-			if e := time.Since(start); i == 0 || e < d {
-				d = e
-			}
-		}
-		return d
-	}
-	small, large := best(gen(MaxFileSize/4)), best(gen(MaxFileSize))
-	t.Logf("256 KiB %v, 1 MiB %v", small, large)
-	if large > 8*small+50*time.Millisecond {
-		t.Fatalf("4x the input took %v vs %v: not linear", large, small)
-	}
+	assertLinear(t, gen, func(data []byte) {
+		supabaseSQL(map[string][]byte{"supabase/migrations/1.sql": data})
+	})
 }
 
 // The same for Firebase rules: many allow statements and a long chain of
@@ -317,20 +305,38 @@ func TestFirebaseRulesLinear(t *testing.T) {
 		}
 		return []byte(b.String())
 	}
+	assertLinear(t, gen, func(data []byte) { firebaseRules("firestore.rules", data) })
+}
+
+// assertLinear fails when run on a 1 MiB input from gen costs more than 8
+// times run on a 256 KiB one (4x is linear). It counts this process's CPU
+// time, best of 3 each, not the wall clock: other test packages run beside
+// this one, and load that comes and goes between the two measurements made
+// a linear run look 8x slower on CI (PR #74, reproduced with busy loops).
+// No test in this package runs in parallel, so the CPU time is run's.
+func assertLinear(t *testing.T, gen func(size int) []byte, run func([]byte)) {
+	t.Helper()
+	cpu := func() time.Duration {
+		var r syscall.Rusage
+		if err := syscall.Getrusage(syscall.RUSAGE_SELF, &r); err != nil {
+			t.Fatal(err)
+		}
+		return time.Duration(r.Utime.Nano() + r.Stime.Nano())
+	}
 	best := func(data []byte) time.Duration {
 		var d time.Duration
 		for i := 0; i < 3; i++ {
-			start := time.Now()
-			firebaseRules("firestore.rules", data)
-			if e := time.Since(start); i == 0 || e < d {
+			start := cpu()
+			run(data)
+			if e := cpu() - start; i == 0 || e < d {
 				d = e
 			}
 		}
 		return d
 	}
 	small, large := best(gen(MaxFileSize/4)), best(gen(MaxFileSize))
-	t.Logf("256 KiB %v, 1 MiB %v", small, large)
+	t.Logf("CPU time: 256 KiB %v, 1 MiB %v", small, large)
 	if large > 8*small+50*time.Millisecond {
-		t.Fatalf("4x the input took %v vs %v: not linear", large, small)
+		t.Fatalf("4x the input took %v vs %v of CPU time: not linear", large, small)
 	}
 }
