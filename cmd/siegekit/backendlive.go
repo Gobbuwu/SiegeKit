@@ -18,8 +18,12 @@ import (
 	"github.com/Gobbuwu/SiegeKit/internal/target"
 )
 
-// backendCheck runs the backend-live check; tests replace it.
-var backendCheck = backend.Check
+// backendCheck runs the backend-live check, and keyCheck the one GET that
+// shows a project accepts SIEGEKIT_SUPABASE_KEY; tests replace them.
+var (
+	backendCheck = backend.Check
+	keyCheck     = backend.KeyAccepted
+)
 
 // backendPlan is a backend that passed the address rules (ADR 0037).
 type backendPlan struct {
@@ -132,8 +136,9 @@ func (c *collected) read() (map[string][]byte, error) {
 // runBackend reads the backend's kind, public key and table names from the
 // fetched files, adds the names from --source, and sends one GET per name
 // (ADR 0037). Nothing is sent to the backend when its host is not on this
-// machine and the app's files do not name it.
-func runBackend(ctx context.Context, p *backendPlan, c *collected, src *checks.Source, extraRequests int, pr report.PluginResult) (report.PluginResult, []findings.Finding) {
+// machine and neither the app's files name it nor the project accepts the
+// key from SIEGEKIT_SUPABASE_KEY (ADR 0061).
+func runBackend(ctx context.Context, p *backendPlan, c *collected, src *checks.Source, envKey string, extraRequests int, pr report.PluginResult) (report.PluginResult, []findings.Finding) {
 	failed := func(format string, a ...any) (report.PluginResult, []findings.Finding) {
 		pr.Status, pr.Reason = report.Failed, fmt.Sprintf(format, a...)
 		return pr, nil
@@ -148,19 +153,32 @@ func runBackend(ctx context.Context, p *backendPlan, c *collected, src *checks.S
 		return failed("%v", err)
 	}
 	sc := backend.ReadScripts(p.b, files)
-	if p.remote && !sc.HostSeen {
-		return failed("%s does not appear in the app's start page or scripts (%d file(s) fetched), so SiegeKit cannot tell it is this app's backend; nothing was sent to it", p.b.URL.Host, len(files))
+	kind, kindFrom := sc.Kind, ""
+	if kind == "" {
+		if kind = sourceKind(src); kind != "" {
+			kindFrom = " (from --source)"
+		}
 	}
-	if sc.Kind == "" {
-		return failed("cannot tell whether %s is Supabase or Firebase: the app's scripts name neither", p.b)
+	var key publicKey
+	if kind == backend.Supabase {
+		key = supabaseKey(sc.Key, sc.KeyFile, !p.remote || sc.HostSeen, envKey)
+	}
+	if p.remote && !sc.HostSeen && key.from != backend.KeyEnv {
+		return failed("%s does not appear in the app's start page or scripts (%d file(s) fetched), so SiegeKit cannot tell it is this app's backend; nothing was sent to it%s", p.b.URL.Host, len(files), keyHint(kind))
+	}
+	if kind == "" {
+		return failed("cannot tell whether %s is Supabase or Firebase: the app's scripts name neither%s", p.b, sourceHint(src))
+	}
+	if key.from == backend.KeyEnv && !backend.KeyForHost(key.key, p.b.URL.Host) {
+		return failed("the anon key in %s is another project's, not %s's; nothing was sent to it", backend.KeyEnv, p.b.URL.Host)
 	}
 	fromScripts, fromSource := sc.Tables, []string(nil)
-	if sc.Kind == backend.Firebase {
+	if kind == backend.Firebase {
 		fromScripts = sc.Paths
 	}
 	if src != nil {
 		fromSource = src.Tables
-		if sc.Kind == backend.Firebase {
+		if kind == backend.Firebase {
 			fromSource = nil
 			for _, s := range src.Paths {
 				if fp := backend.FirebasePath(s); fp != "" {
@@ -170,15 +188,23 @@ func runBackend(ctx context.Context, p *backendPlan, c *collected, src *checks.S
 		}
 	}
 	names, over := backend.Names(fromScripts, fromSource)
-	pr.Input = fmt.Sprintf("%s %s; %d name(s) from the app's scripts", sc.Kind, p.b, len(fromScripts))
+	pr.Input = fmt.Sprintf("%s%s %s; %d name(s) from the app's scripts", kind, kindFrom, p.b, len(fromScripts))
 	if src != nil {
 		pr.Input += fmt.Sprintf(", %d from --source", len(fromSource))
 	}
-	if sc.Kind == backend.Supabase && sc.Key != "" {
-		pr.Input += "; public key from " + sc.KeyFile
-	}
+	pr.Input += key.input(envKey)
 	cfg := egress.Config{Target: p.b.URL, Addrs: p.addrs, VerifyTLS: p.public, Version: version, ReadOnly: true}
-	res, err := backendCheck(ctx, cfg, p.b, sc.Kind, sc.Key, names, over)
+	// A key the person gave is checked first on a host not on this
+	// machine: there it is what ties a backend the scripts do not name
+	// to the app, and a wrong key would read as every table refused.
+	if key.from == backend.KeyEnv && p.remote {
+		n, err := keyCheck(ctx, cfg, key.key)
+		pr.Requests += n
+		if err != nil {
+			return failed("%v", err)
+		}
+	}
+	res, err := backendCheck(ctx, cfg, p.b, kind, key.key, names, over)
 	pr.Requests += res.Requests
 	if err != nil {
 		return failed("%v", err)
@@ -186,6 +212,66 @@ func runBackend(ctx context.Context, p *backendPlan, c *collected, src *checks.S
 	fs := backend.Findings(p.b, res)
 	pr.Status, pr.Result, pr.Findings = report.Ran, res.Summary(), len(fs)
 	return pr, fs
+}
+
+// publicKey is the Supabase public key a check uses, and where it came
+// from: a served file's name, or SIEGEKIT_SUPABASE_KEY.
+type publicKey struct{ key, from string }
+
+// supabaseKey picks the key (ADR 0061): the key in the app's scripts when
+// the scripts are tied to this host (it is on this machine, or they name
+// it), else the key from SIEGEKIT_SUPABASE_KEY, if any.
+func supabaseKey(scriptKey, scriptFile string, tied bool, envKey string) publicKey {
+	switch {
+	case scriptKey != "" && tied:
+		return publicKey{scriptKey, scriptFile}
+	case envKey != "":
+		return publicKey{envKey, backend.KeyEnv}
+	}
+	return publicKey{}
+}
+
+// input says where the key came from, for the report; never the key.
+func (k publicKey) input(envKey string) string {
+	switch {
+	case k.from == "":
+		return ""
+	case k.from != backend.KeyEnv && envKey != "":
+		return "; public key from " + k.from + " (" + backend.KeyEnv + " not used: the app's scripts have a key)"
+	}
+	return "; public key from " + k.from
+}
+
+// keyHint says how a Supabase backend the scripts do not name can still be
+// tested.
+func keyHint(kind backend.Kind) string {
+	if kind != backend.Supabase {
+		return ""
+	}
+	return fmt.Sprintf(". For an app that calls Supabase only from its server, set %s to the project's anon or publishable key: the project must accept it", backend.KeyEnv)
+}
+
+// sourceKind is the backend the repository is set up for (ADR 0061), or ""
+// when it shows neither or both.
+func sourceKind(src *checks.Source) backend.Kind {
+	switch {
+	case src == nil || src.Supabase == src.Firebase:
+		return ""
+	case src.Supabase:
+		return backend.Supabase
+	}
+	return backend.Firebase
+}
+
+// sourceHint says what --source would have told.
+func sourceHint(src *checks.Source) string {
+	switch {
+	case src == nil:
+		return "; pass --source with the app's repository (a supabase/ directory or firebase.json tells)"
+	case src.Supabase && src.Firebase:
+		return ", and --source has both a supabase/ directory and Firebase files"
+	}
+	return ", and --source has neither a supabase/ directory nor Firebase files"
 }
 
 // readSource reads --source before any request (answers 1a and 6a). The

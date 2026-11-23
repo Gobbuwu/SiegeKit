@@ -64,6 +64,7 @@ Each significant design decision is recorded as a short ADR before code is writt
 | [0058](0058-storage-write-test.md) | The storage write test: one test file uploaded, read back and deleted in Firebase and Supabase Storage buckets (amends 0037, 0044) | Accepted |
 | [0059](0059-storage-write-known-answers.md) | Known answers for the storage write test on the Firebase emulator and local Supabase Storage, on both engines (amends 0058) | Accepted |
 | [0060](0060-arm-linux-ci.md) | CI and the gates on GitHub's ARM Linux runner, rootless Podman and Docker (amends 0039) | Accepted |
+| [0061](0061-backends-the-scripts-do-not-name.md) | Backends the app's scripts do not name: `SIEGEKIT_SUPABASE_KEY`, the kind from `--source`, the project must accept the key (amends 0037, 0058, 0059) | Accepted |
 
 ADRs 0002 to 0011 were accepted at the M0 design sign-off on 2026-11-18.
 

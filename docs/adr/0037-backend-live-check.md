@@ -3,7 +3,7 @@
 - Status: Accepted
 - Date: 2026-11-20
 - Amends: [0011](0011-app-logic-and-ai-checks.md) item 3 (live part: which targets, how the backend is confirmed, what is read)
-- Amended by: [0044](0044-typed-confirmations-limit.md) (what the typed confirmation can stop), [0053](0053-routes-from-server-code.md) (on local targets `--source` also gives the route sweep the routes of the server code), [0058](0058-storage-write-test.md) (Firebase and Supabase Storage are tested live, with writes, by `storage-write`)
+- Amended by: [0044](0044-typed-confirmations-limit.md) (what the typed confirmation can stop), [0053](0053-routes-from-server-code.md) (on local targets `--source` also gives the route sweep the routes of the server code), [0058](0058-storage-write-test.md) (Firebase and Supabase Storage are tested live, with writes, by `storage-write`), [0061](0061-backends-the-scripts-do-not-name.md) (a Supabase backend the scripts do not name: the key from `SIEGEKIT_SUPABASE_KEY`, the kind from `--source`, the project must accept the key)
 
 ## Context
 

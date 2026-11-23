@@ -9,7 +9,6 @@ package backend
 
 import (
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -173,10 +172,7 @@ func ReadScripts(b *Backend, files map[string][]byte) Scripts {
 	}
 	tables, paths := map[string]bool{}, map[string]bool{}
 	var jwtKey, jwtFile, pubKey, pubFile string
-	ref := ""
-	if b.Kind == Supabase {
-		ref, _, _ = strings.Cut(b.URL.Host, ".")
-	}
+	ref := ProjectRef(b.URL.Host)
 	for _, n := range names {
 		data := string(files[n])
 		for _, m := range reFrom.FindAllStringSubmatch(data, -1) {
@@ -235,22 +231,8 @@ func detectKind(files map[string][]byte, names []string) Kind {
 // anonKey reports whether k is a Supabase anon JWT, for project ref when
 // ref is known. Its signature is not checked: the backend checks it.
 func anonKey(k, ref string) bool {
-	parts := strings.Split(k, ".")
-	if len(parts) != 3 {
-		return false
-	}
-	b, err := base64.RawURLEncoding.DecodeString(strings.TrimRight(parts[1], "="))
-	if err != nil {
-		return false
-	}
-	var p struct {
-		Role string `json:"role"`
-		Ref  string `json:"ref"`
-	}
-	if json.Unmarshal(b, &p) != nil || p.Role != "anon" {
-		return false
-	}
-	return ref == "" || p.Ref == "" || p.Ref == ref
+	role, r, ok := jwtClaims(k)
+	return ok && role == "anon" && (ref == "" || r == "" || r == ref)
 }
 
 // FirebasePath turns a path from code or rules into at most two segments
@@ -372,12 +354,10 @@ func Check(ctx context.Context, cfg egress.Config, b *Backend, kind Kind, key st
 	switch kind {
 	case Supabase:
 		if key == "" {
-			return r, errors.New("no Supabase public key was found in the app's scripts")
+			return r, ErrNoKey
 		}
-		header = http.Header{"Apikey": {key}, "Accept": {"application/json"}}
-		if strings.HasPrefix(key, "eyJ") {
-			header.Set("Authorization", "Bearer "+key)
-		}
+		header = supabaseHeader(key)
+		header.Set("Accept", "application/json")
 	case Firebase:
 		names = append([]string{""}, slices.DeleteFunc(slices.Clone(names), func(n string) bool { return n == "" })...)
 	default:

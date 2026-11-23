@@ -390,12 +390,9 @@ func WriteStorage(ctx context.Context, cfg egress.Config, kind StorageKind, key 
 	switch kind {
 	case SupabaseStorage:
 		if key == "" {
-			return r, errors.New("no Supabase public key was found in the app's scripts")
+			return r, ErrNoKey
 		}
-		header = http.Header{"Apikey": {key}}
-		if strings.HasPrefix(key, "eyJ") {
-			header.Set("Authorization", "Bearer "+key)
-		}
+		header = supabaseHeader(key)
 	case FirebaseStorage:
 	default:
 		return r, errors.New("cannot tell whether the storage is Supabase or Firebase")
