@@ -1,0 +1,53 @@
+name: Rerun ADR 0045 with Q2B (temporary)
+
+# Temporary, removed before merge. Hypothesis: ADR 0045's go-chi losses at
+# gosec's default concurrency came from the 256 MiB /tmp filling. Today's
+# offline scan (no modules), default concurrency, 20 scans per job:
+#   tmp256  256 MiB /tmp (as in ADR 0045)
+#   disk    GOCACHE+GOTMPDIR in a fresh scratch folder on disk (Q2B)
+on:
+  pull_request:
+    paths:
+      - .github/workflows/zz-measure-chi.yml
+
+permissions:
+  contents: read
+
+jobs:
+  chi:
+    name: go-chi ${{ matrix.engine }} ${{ matrix.var }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        engine: [podman, docker]
+        var: [tmp256, disk]
+    env:
+      E: ${{ matrix.engine }}
+      VAR: ${{ matrix.var }}
+      IMG: ghcr.io/securego/gosec@sha256:7bcf1edbab3e80d8006a28d53e7031a9c9775be8eec30679e4adc1f51d272121
+    steps:
+      - name: Rerun
+        run: |
+          set -u +e
+          T=$RUNNER_TEMP
+          $E pull -q "$IMG" > /dev/null
+          git init -q $T/target && git -C $T/target fetch -q --depth 1 https://github.com/go-chi/chi.git c64ed7d6635f33a8b2feaff7dcfa55677023ac7d && git -C $T/target -c advice.detachedHead=false checkout -q FETCH_HEAD
+          mkdir -p $T/out; chmod 777 $T/out
+          ro=--read-only; [ "$E" = podman ] && ro="--read-only --read-only-tmpfs=false"
+          base="--rm --pull never --user $(id -u):$(id -g) --cap-drop ALL --security-opt no-new-privileges $ro --tmpfs /tmp:rw,nosuid,nodev,noexec,size=256m --tmpfs /dev/shm:rw,nosuid,nodev,noexec,size=64m --pids-limit 256 --memory 2048m --memory-swap 2048m --cpus 2 --env HOME=/tmp --workdir /tmp --env GOPATH=/tmp/go --network none --env GOPROXY=off"
+          for i in $(seq 1 20); do
+            x=""
+            if [ "$VAR" = disk ]; then mkdir -p $T/gc/tmp; chmod -R 777 $T/gc; x="--mount type=bind,source=$T/gc,target=/data/gocache --env GOCACHE=/data/gocache --env GOTMPDIR=/data/gocache/tmp"; fi
+            $E run $base $x --mount type=bind,source=$T/target,target=/target,readonly --mount type=bind,source=$T/out,target=/out \
+              --entrypoint sh "$IMG" -c 'gosec -fmt json -out /out/r.json -no-fail /target/... >/dev/null 2>/out/err.txt; echo "exit=$? tmp_used=$(du -sm /tmp 2>/dev/null | cut -f1)MiB"' > $T/x.txt
+            sudo rm -rf $T/gc
+            python3 - "$T/out/r.json" $i "$(cat $T/x.txt)" "$(grep -c 'Error building the SSA' $T/out/err.txt)" "$(grep -c 'no space left' $T/out/err.txt)" "$(grep 'Error building the SSA' $T/out/err.txt | sed 's/.*package \([^:]*\):.*/\1/' | sort -u | tr '\n' ',')" <<'PY'
+          import json, sys
+          d = json.load(open(sys.argv[1]))
+          got = {(i["rule_id"], i["file"].replace("/target/", ""), str(i["line"])) for i in d.get("Issues") or []}
+          four = {("G705", "_examples/pathvalue/main.go", "24"), ("G710", "middleware/profiler.go", "27"), ("G710", "middleware/profiler.go", "30"), ("G710", "middleware/strip.go", "62")}
+          print(f"RUN {sys.argv[2]}: {sys.argv[3]} total={len(got)} four={len(four & got)} missing={sorted(four - got)} SSA_SKIPS={sys.argv[4]} NO_SPACE={sys.argv[5]} pkgs={sys.argv[6]} golang_errs={len(d.get('Golang errors') or {})}")
+          PY
+          done
