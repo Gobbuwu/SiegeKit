@@ -1,0 +1,1 @@
+create policy t1 on storage.objects for all to anon using (bucket_id = 'files' and (storage.foldername(name))[1] = 'uploads') with check (bucket_id = 'files' and (storage.foldername(name))[1] = 'uploads');

@@ -1,0 +1,17 @@
+# What each run of gate.sh must report (ADR 0059): rule or policy set | requests | the check's result, with the
+# names of the files left behind replaced by NAMES (random each run; gate.sh compares them with the storage's own listing).
+# Measured 2026-11-23 on Docker 29.10.0 rootful and rootless Podman 4.9.3, cgroup v1: the same on both.
+v1 | 7 | 1 location(s) tested: 1 accepted an upload with no login, 1 read back; every test file was deleted
+v2 | 7 | 1 location(s) tested: 1 accepted an upload with no login, 1 read back; every test file was deleted
+v3 | 7 | 1 location(s) tested: 1 accepted an upload with no login, 1 read back; 1 test file(s) may still be there, delete them: NAMES
+v4 | 4 | 1 location(s) tested: 0 accepted an upload with no login, 1 refused
+v5 | 8 | 2 location(s) tested: 1 accepted an upload with no login, 1 read back, 1 refused; every test file was deleted
+v6 | 7 | 1 location(s) tested: 1 accepted an upload with no login, 1 read back; 1 test file(s) may still be there, delete them: NAMES
+v7 | 7 | 1 location(s) tested: 1 accepted an upload with no login; every test file was deleted
+s1 | 14 | 5 location(s) tested: 2 accepted an upload with no login, 2 read back, 3 bucket not found, 1 over the 5-file limit, not tested; every test file was deleted
+s2 | 14 | 5 location(s) tested: 2 accepted an upload with no login, 2 read back, 3 bucket not found, 1 over the 5-file limit, not tested; every test file was deleted
+s3 | 14 | 5 location(s) tested: 2 accepted an upload with no login, 3 bucket not found, 1 over the 5-file limit, not tested; 2 test file(s) may still be there, delete them: NAMES
+s4 | 8 | 5 location(s) tested: 0 accepted an upload with no login, 2 refused, 3 bucket not found, 1 over the 5-file limit, not tested
+s5 | 11 | 5 location(s) tested: 1 accepted an upload with no login, 1 read back, 1 refused, 3 bucket not found, 1 over the 5-file limit, not tested; every test file was deleted
+s6 | 14 | 5 location(s) tested: 2 accepted an upload with no login, 2 read back, 3 bucket not found, 1 over the 5-file limit, not tested; 2 test file(s) may still be there, delete them: NAMES
+s7 | 14 | 5 location(s) tested: 2 accepted an upload with no login, 3 bucket not found, 1 over the 5-file limit, not tested; 2 test file(s) may still be there, delete them: NAMES

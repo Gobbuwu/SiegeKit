@@ -1,0 +1,17 @@
+{
+  "fixture": "Supabase Storage: supabase/storage-api@sha256:8a211c1024d661aafee98178d26a2da8d1f43d0b9cddb76b0d6445bee70acdaa (v1.94.2) on supabase/postgres@sha256:d15ecf03474e4f5437002f3951f758b8fbfb182c3be311a998873c768ff53d37 (15.19.0.019) behind a /storage/v1 proxy, private bucket files, policy set s2 (.github/gate/storage/supabase/s2.sql, also a migration under --source), app = .github/gate/storage/app/sb.js bundled with esbuild 0.25.0 --minify, naming buckets files and avatars (avatars does not exist) (gate.yml job storage)",
+  "measured": "7 local runs on 2026-11-23 (rounds 2 and 5 to 10 of the PR record), each on a fresh storage and app bundle, with the storage on Docker 29.10.0 rootful and on rootless Podman 4.9.3, cgroup v1; CI gate runs 45189172949 and 45192466982 (ubuntu-latest, cgroup v2), storage on podman 5.7.0 rootless and on docker 29.4.2 rootful: the same answer and 14 requests on every run. Minimum requests are 90% of the fewest",
+  "checks": {
+    "storage-write": {
+      "status": "ran",
+      "match": "exact",
+      "findings": [
+        "storage-public-write /storage/v1/object/files/",
+        "storage-public-write /storage/v1/object/files/uploads/"
+      ],
+      "count": 2,
+      "minRequests": 12,
+      "why": "all to public on bucket files: the same as s1"
+    }
+  }
+}

@@ -60,6 +60,11 @@ These run only in SiegeKit's own CI. They are not shipped or downloaded by Siege
 | Fixture | Image | Tag resolved | License |
 | --- | --- | --- | --- |
 | [OWASP Juice Shop](https://github.com/juice-shop/juice-shop), scanned by URL in the [real-repo gate](.github/workflows/gate.yml) (M2.4b) | `docker.io/bkimminich/juice-shop@sha256:9bbaecc41791f00b002bc65931cc5ff355fbdb941fa72b06558c18dace43197b` (published under the maintainer's Docker Hub account; image labels name OWASP as vendor and source revision `266448a`, the commit the gate's source scan pins) | `v20.4.0` (resolved 2026-11-19; the app inside reports `20.4.0-SNAPSHOT`) | MIT (image label and `package.json`) |
+| Firebase Storage emulator's runtime, in the [storage gate](.github/gate/storage/gate.sh) (ADR 0059) | `docker.io/library/eclipse-temurin@sha256:d77e090ae1f6970c047b443c6f0a6c1358b0426d44432bb5a7753408cd43de0d` (Docker official image; `IMPLEMENTOR="Eclipse Adoptium"`) | `21-jre`, Java `21.0.13.1+2-LTS` (resolved 2026-11-23) | GPL-2.0 with the Classpath Exception (`legal/java.base/LICENSE` in the image) |
+| Firebase Storage emulator, storage gate (ADR 0059) | npm `firebase-tools`, pinned in [`package-lock.json`](.github/gate/storage/package-lock.json), with its rules runtime `cloud-storage-rules-runtime-v1.1.3.jar` checked by SHA-256 | `15.37.0` | MIT (npm) |
+| The storage gate's two apps, built with esbuild (ADR 0059) | npm `firebase`, `@supabase/supabase-js`, `esbuild`, pinned in the same lockfile | `12.19.0`, `2.49.4`, `0.25.0` | Apache-2.0, MIT, MIT (npm) |
+| Supabase Storage, storage gate (ADR 0059) | `docker.io/supabase/storage-api@sha256:8a211c1024d661aafee98178d26a2da8d1f43d0b9cddb76b0d6445bee70acdaa` | `v1.94.2` | ISC (`/app/package.json` in the image) |
+| Supabase's database, storage gate (ADR 0059) | `docker.io/supabase/postgres@sha256:d15ecf03474e4f5437002f3951f758b8fbfb182c3be311a998873c768ff53d37` | `15.19.0.019` (PostgreSQL 15.19) | PostgreSQL itself: PostgreSQL License; the image has no license file of its own (unverified beyond that) |
 
 Trivy's vulnerability database is not pinned: `siegekit update` lets Trivy download it from its publisher (ADR 0014).
 

@@ -1,0 +1,16 @@
+{
+  "fixture": "Firebase Storage emulator (firebase-tools 15.37.0, rules runtime 1.1.3) in library/eclipse-temurin@sha256:d77e090ae1f6970c047b443c6f0a6c1358b0426d44432bb5a7753408cd43de0d, rule set v6 (.github/gate/storage/firebase/v6.rules.txt, also given as storage.rules with --source), app = .github/gate/storage/app/fb.js bundled with esbuild 0.25.0 --minify (gate.yml job storage)",
+  "measured": "7 local runs on 2026-11-23 (rounds 2 and 5 to 10 of the PR record), each on a fresh storage and app bundle, with the storage on Docker 29.10.0 rootful and on rootless Podman 4.9.3, cgroup v1; CI gate runs 45189172949 and 45192466982 (ubuntu-latest, cgroup v2), storage on podman 5.7.0 rootless and on docker 29.4.2 rootful: the same answer and 7 requests on every run. Minimum requests are 90% of the fewest",
+  "checks": {
+    "storage-write": {
+      "status": "ran",
+      "match": "exact",
+      "findings": [
+        "storage-public-write gs://demo-siegekit.appspot.com/"
+      ],
+      "count": 1,
+      "minRequests": 6,
+      "why": "read and create allowed, delete: if false: the file stays and is named"
+    }
+  }
+}
