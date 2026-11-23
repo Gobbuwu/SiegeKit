@@ -1,0 +1,67 @@
+name: Measure proxy CA and registry mirror (temporary)
+
+# Temporary, removed before merge. SK-8 options for the network containers
+# (Trivy's DB update, the Go module download):
+#   - Does SSL_CERT_FILE pointing at one extra CA keep the image's own roots
+#     (real, uninspected chains still verify)? Pinned Trivy and gosec images.
+#   - Engine-level registry mirror for pinned docker.io digests:
+#     Podman registries.conf and Docker daemon.json, mirror.gcr.io.
+on:
+  pull_request:
+    paths:
+      - .github/workflows/zz-measure-net.yml
+
+permissions:
+  contents: read
+
+jobs:
+  net:
+    name: ${{ matrix.engine }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        engine: [podman, docker]
+    env:
+      E: ${{ matrix.engine }}
+      TRIVY: docker.io/aquasec/trivy@sha256:8f6bb947dbc528902e11f2f5be52f7b519f6a39d5d148f41166f2040499768fb
+      GOSEC: ghcr.io/securego/gosec@sha256:7bcf1edbab3e80d8006a28d53e7031a9c9775be8eec30679e4adc1f51d272121
+    steps:
+      - name: Measure
+        run: |
+          set -u +e
+          T=$RUNNER_TEMP
+          openssl req -x509 -newkey rsa:2048 -nodes -keyout $T/k.pem -out $T/ca.pem -days 1 -subj /CN=siegekit-throwaway-ca 2>/dev/null; chmod 644 $T/ca.pem
+          ro=--read-only; [ "$E" = podman ] && ro="--read-only --read-only-tmpfs=false"
+          base="--rm --pull never --user $(id -u):$(id -g) --cap-drop ALL --security-opt no-new-privileges $ro --tmpfs /tmp:rw,nosuid,nodev,noexec,size=1024m --memory 2048m --memory-swap 2048m --cpus 2 --pids-limit 256 --env HOME=/tmp"
+          CA="--mount type=bind,source=$T/ca.pem,target=/etc/siegekit-ca.pem,readonly --env SSL_CERT_FILE=/etc/siegekit-ca.pem"
+          echo "### 1. Mirror for pinned docker.io digests"
+          if [ "$E" = podman ]; then
+            mkdir -p ~/.config/containers
+            printf '[[registry]]\nprefix = "docker.io"\nlocation = "docker.io"\n\n[[registry.mirror]]\nlocation = "mirror.gcr.io"\n' > ~/.config/containers/registries.conf
+            podman rmi -f $TRIVY > /dev/null 2>&1
+            podman --log-level debug pull $TRIVY > $T/pull.log 2>&1; echo "pull exit=$?"
+            echo "hosts tried: $(grep -o 'Trying to access \\\?"[^"\\]*' $T/pull.log | sort | uniq -c | tr '\n' ' ')"
+            grep -i "mirror.gcr.io\|registry-1.docker.io\|docker.io/aquasec" $T/pull.log | grep -i "trying\|GET\|HEAD" | cut -c1-200 | head -5
+          else
+            echo '{"registry-mirrors": ["https://mirror.gcr.io"], "debug": true}' | sudo tee /etc/docker/daemon.json > /dev/null
+            sudo systemctl restart docker; sleep 3
+            docker info --format 'mirrors={{.RegistryConfig.Mirrors}}'
+            docker rmi -f $TRIVY > /dev/null 2>&1; since=$(date '+%Y-%m-%d %H:%M:%S')
+            docker pull -q $TRIVY; echo "pull exit=$?"
+            sudo journalctl -u docker --since "$since" --no-pager | grep -o 'https://[a-z0-9.-]*/v2/[a-z/]*' | sort | uniq -c | head
+          fi
+          $E run --rm --pull never $TRIVY --version | head -1
+          echo "### 2. One extra CA via SSL_CERT_FILE: do real chains still verify?"
+          $E pull -q $GOSEC > /dev/null
+          echo "gosec image cert locations: $($E run --rm --pull never --entrypoint sh $GOSEC -c 'ls -d /etc/ssl/certs /etc/ssl/cert.pem /etc/pki/tls/certs 2>/dev/null; ls /etc/ssl/certs 2>/dev/null | wc -l' | tr '\n' ' ')"
+          echo "trivy image cert locations: $($E run --rm --pull never --entrypoint sh $TRIVY -c 'ls -d /etc/ssl/certs /etc/ssl/cert.pem /etc/pki/tls/certs 2>/dev/null; ls /etc/ssl/certs 2>/dev/null | wc -l' | tr '\n' ' ')"
+          for v in none extra; do
+            x=""; [ $v = extra ] && x="$CA"
+            $E run $base $x --env GOPATH=/tmp/go --env GOTOOLCHAIN=local --env GOPROXY=https://proxy.golang.org --env 'GOVCS=*:off' --workdir /tmp --entrypoint go $GOSEC mod download -json github.com/google/uuid@v1.6.0 > $T/g.json 2>&1
+            echo "gosec go mod download, CA=$v: exit=$? $(grep -o '"Error": "[^"]*' $T/g.json | cut -c1-160)"
+            mkdir -p $T/db-$v; chmod 777 $T/db-$v
+            $E run $base $x --mount type=bind,source=$T/db-$v,target=/tmp/trivy/db $TRIVY image --cache-dir /tmp/trivy --download-db-only --no-progress > $T/t.log 2>&1
+            echo "trivy update, CA=$v: exit=$? db_bytes=$(sudo du -sb $T/db-$v | cut -f1) $(grep -E 'x509|FATAL' $T/t.log | cut -c1-160 | tail -1)"
+          done
