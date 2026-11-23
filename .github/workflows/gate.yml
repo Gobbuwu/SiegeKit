@@ -39,8 +39,8 @@ env:
 
 jobs:
   scan:
-    name: Scan ${{ matrix.repo }} (${{ matrix.engine }})
-    runs-on: ubuntu-latest
+    name: Scan ${{ matrix.repo }} (${{ matrix.engine }}${{ matrix.os == 'ubuntu-24.04-arm' && ', arm64' || '' }})
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 40
     env:
       SIEGEKIT_ENGINE: ${{ matrix.engine }}
@@ -75,11 +75,16 @@ jobs:
         # Both engines on the runner (ADR 0039); a result holds only for
         # the engine it ran on (ADR 0038).
         engine: [podman, docker]
+        # GitHub's ARM Linux runner too (ADR 0060, owner 2026-11-23).
+        os: [ubuntu-latest, ubuntu-24.04-arm]
     steps:
       # Actions are pinned to full commit SHAs (ADR 0008). Tag shown for reference only.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - name: Platform
+        # The runner is the matrix's architecture (ADR 0060).
+        run: test "$(uname -m)" = "${{ matrix.os == 'ubuntu-24.04-arm' && 'aarch64' || 'x86_64' }}"
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: ${{ env.GO_VERSION }}
@@ -141,13 +146,15 @@ jobs:
     # vulnerable app, running on this runner's loopback (local mode). The
     # image is pinned to the multi-architecture index digest of tag v20.4.0,
     # resolved with `docker buildx imagetools inspect` on 2026-11-19.
-    name: Scan OWASP Juice Shop by URL (${{ matrix.engine }})
-    runs-on: ubuntu-latest
+    name: Scan OWASP Juice Shop by URL (${{ matrix.engine }}${{ matrix.os == 'ubuntu-24.04-arm' && ', arm64' || '' }})
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 40
     strategy:
       fail-fast: false
       matrix:
         engine: [podman, docker]
+        # GitHub's ARM Linux runner too (ADR 0060, owner 2026-11-23).
+        os: [ubuntu-latest, ubuntu-24.04-arm]
     env:
       SIEGEKIT_ENGINE: ${{ matrix.engine }}
       EXPECT_ENGINE: ${{ matrix.engine == 'podman' && 'podman rootless' || 'docker rootful' }}
@@ -155,6 +162,9 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - name: Platform
+        # The runner is the matrix's architecture (ADR 0060).
+        run: test "$(uname -m)" = "${{ matrix.os == 'ubuntu-24.04-arm' && 'aarch64' || 'x86_64' }}"
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: ${{ env.GO_VERSION }}
@@ -307,20 +317,25 @@ jobs:
     # an account B that may write (a collaborator) next to an outsider C.
     # The check runs in SiegeKit's own process and starts no container, so
     # the engine in the matrix is the one the app runs under.
-    name: Write replay on ${{ matrix.app }} (app on ${{ matrix.engine }})
-    runs-on: ubuntu-latest
+    name: Write replay on ${{ matrix.app }} (app on ${{ matrix.engine }}${{ matrix.os == 'ubuntu-24.04-arm' && ', arm64' || '' }})
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
         app: [juice-shop, gitea]
         engine: [podman, docker]
+        # GitHub's ARM Linux runner too (ADR 0060, owner 2026-11-23).
+        os: [ubuntu-latest, ubuntu-24.04-arm]
     env:
       APP_ENGINE: ${{ matrix.engine }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - name: Platform
+        # The runner is the matrix's architecture (ADR 0060).
+        run: test "$(uname -m)" = "${{ matrix.os == 'ubuntu-24.04-arm' && 'aarch64' || 'x86_64' }}"
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: ${{ env.GO_VERSION }}
@@ -457,19 +472,24 @@ jobs:
     # counts as limited only from the count (design Q2 B); each sign-up
     # sends an activation email. The checks run in SiegeKit's own process,
     # so the engine in the matrix is the one the app and Mailpit run under.
-    name: Mail count on Gitea (app on ${{ matrix.engine }})
-    runs-on: ubuntu-latest
+    name: Mail count on Gitea (app on ${{ matrix.engine }}${{ matrix.os == 'ubuntu-24.04-arm' && ', arm64' || '' }})
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
         engine: [podman, docker]
+        # GitHub's ARM Linux runner too (ADR 0060, owner 2026-11-23).
+        os: [ubuntu-latest, ubuntu-24.04-arm]
     env:
       APP_ENGINE: ${{ matrix.engine }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - name: Platform
+        # The runner is the matrix's architecture (ADR 0060).
+        run: test "$(uname -m)" = "${{ matrix.os == 'ubuntu-24.04-arm' && 'aarch64' || 'x86_64' }}"
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: ${{ env.GO_VERSION }}
@@ -553,13 +573,15 @@ jobs:
     # pages (X-RateLimit-Limit 100 per 5 minutes) and not its sign-up. The
     # checks run in SiegeKit's own process, so the engine in the matrix is
     # the one the app runs under.
-    name: Reset, sign-up and code pages on Juice Shop (app on ${{ matrix.engine }})
-    runs-on: ubuntu-latest
+    name: Reset, sign-up and code pages on Juice Shop (app on ${{ matrix.engine }}${{ matrix.os == 'ubuntu-24.04-arm' && ', arm64' || '' }})
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
         engine: [podman, docker]
+        # GitHub's ARM Linux runner too (ADR 0060, owner 2026-11-23).
+        os: [ubuntu-latest, ubuntu-24.04-arm]
     env:
       APP_ENGINE: ${{ matrix.engine }}
       BASE: http://127.0.0.1:3000
@@ -567,6 +589,9 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - name: Platform
+        # The runner is the matrix's architecture (ADR 0060).
+        run: test "$(uname -m)" = "${{ matrix.os == 'ubuntu-24.04-arm' && 'aarch64' || 'x86_64' }}"
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: ${{ env.GO_VERSION }}
@@ -654,14 +679,16 @@ jobs:
     # answer and its measured result (.github/gate/storage/results.txt), and
     # that the files left behind in the storage are exactly the ones the
     # report names.
-    name: Storage write on ${{ matrix.backend }} (storage on ${{ matrix.engine }})
-    runs-on: ubuntu-latest
+    name: Storage write on ${{ matrix.backend }} (storage on ${{ matrix.engine }}${{ matrix.os == 'ubuntu-24.04-arm' && ', arm64' || '' }})
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
         backend: [firebase, supabase]
         engine: [podman, docker]
+        # GitHub's ARM Linux runner too (ADR 0060, owner 2026-11-23).
+        os: [ubuntu-latest, ubuntu-24.04-arm]
     env:
       BACKEND: ${{ matrix.backend }}
       APP_ENGINE: ${{ matrix.engine }}
@@ -669,6 +696,9 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - name: Platform
+        # The runner is the matrix's architecture (ADR 0060).
+        run: test "$(uname -m)" = "${{ matrix.os == 'ubuntu-24.04-arm' && 'aarch64' || 'x86_64' }}"
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: ${{ env.GO_VERSION }}
