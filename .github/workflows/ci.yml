@@ -100,6 +100,7 @@ jobs:
           go test -run='^$' -fuzz='^FuzzParse$' -fuzztime=60s ./internal/manifest
           go test -run='^$' -fuzz='^FuzzSARIF$' -fuzztime=60s ./internal/sarif
           go test -run='^$' -fuzz='^FuzzBandit$' -fuzztime=30s ./internal/bandit
+          go test -run='^$' -fuzz='^FuzzTrivy$' -fuzztime=30s ./internal/trivy
           go test -run='^$' -fuzz='^FuzzGosecErrors$' -fuzztime=30s ./internal/gosec
           go test -run='^$' -fuzz='^FuzzNuclei$' -fuzztime=30s ./internal/nuclei
           go test -run='^$' -fuzz='^FuzzFFUF$' -fuzztime=30s ./internal/ffuf

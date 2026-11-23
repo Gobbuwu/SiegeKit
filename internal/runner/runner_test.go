@@ -405,7 +405,7 @@ func TestRunSkipsGitPluginOutsideRepository(t *testing.T) {
 	if err != nil || r.Plugins[0].Status != report.Ran || len(f.specs) != 1 {
 		t.Fatalf("in a repository: %+v %v", r.Plugins, err)
 	}
-	if env := f.specs[0].Env; env["GITLEAKS_CONFIG_TOML"] == "" || env["GIT_CONFIG_VALUE_0"] != sandbox.TargetMount {
+	if env := f.specs[0].Env; env["GITLEAKS_CONFIG"] != sandbox.ConfigMountTOML || env["GIT_CONFIG_VALUE_0"] != sandbox.TargetMount {
 		t.Errorf("environment not passed: %v", env)
 	}
 }
@@ -422,9 +422,6 @@ func TestRunReportsRepoIgnores(t *testing.T) {
 	o := opts(t)
 	write(t, o.TargetDir, ".gitleaksignore", "x\n")
 	write(t, o.TargetDir, "a.py", "k = 1  # gitleaks:allow\n")
-	if err := os.Mkdir(filepath.Join(o.TargetDir, ".gitleaks.toml"), 0o755); err != nil { // not a file: not listed
-		t.Fatal(err)
-	}
 	r, err := Run(context.Background(), f, []*manifest.Manifest{builtin(t, "gitleaks")}, o)
 	if err != nil {
 		t.Fatal(err)

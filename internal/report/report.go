@@ -190,15 +190,18 @@ func (e *Environment) String() string {
 
 // Comparison says what changed since the last saved run of the same target
 // (ADR 0013). A finding that disappeared counts as fixed only if a plugin
-// that reported it ran to completion in this run; otherwise it is listed as
-// not checked again, so a failed check cannot make problems look fixed.
+// that reported it ran to completion in this run. Otherwise it is listed as
+// not run, when the person left every such check out of this run (ADR
+// 0063), or as not checked again, when a check could not run or did not
+// complete, so a failed check cannot make problems look fixed.
 type Comparison struct {
 	PreviousRun     string             `json:"previousRun"`
 	PreviousStarted time.Time          `json:"previousStarted"`
 	PreviousVersion string             `json:"previousVersion"`
 	New             []string           `json:"new"` // fingerprints of findings the previous run did not report
 	Fixed           []findings.Finding `json:"fixed"`
-	NotRechecked    []findings.Finding `json:"notRechecked"` // gone from this run, but no plugin that reported them completed
+	NotRechecked    []findings.Finding `json:"notRechecked"` // gone from this run, but a check that reported them could not run or did not complete
+	NotRun          []findings.Finding `json:"notRun"`       // gone from this run, but every check that reported them was left out by --only, --skip or --profile
 	StillPresent    int                `json:"stillPresent"` // reported by both runs
 }
 
@@ -206,8 +209,11 @@ type Comparison struct {
 func (c *Comparison) Summary() string {
 	s := fmt.Sprintf("Since the last scan of this target (%s): %d new, %d fixed, %d still present",
 		c.PreviousStarted.UTC().Format("2006-01-02 15:04 UTC"), len(c.New), len(c.Fixed), c.StillPresent)
+	if n := len(c.NotRun); n > 0 {
+		s += fmt.Sprintf(", %d not run this time because their check was left out (--only, --skip or --profile)", n)
+	}
 	if n := len(c.NotRechecked); n > 0 {
-		s += fmt.Sprintf(", %d not checked again because their check did not run to completion", n)
+		s += fmt.Sprintf(", %d not checked again because their check could not run or did not complete", n)
 	}
 	return s + "."
 }
@@ -233,6 +239,7 @@ var NotTested = []string{
 	"The running application, unless you scanned its URL: a directory scan only reads files. A URL scan crawls the app with ZAP and runs ZAP's passive checks, runs Nuclei's templates for known issues, exposed files and misconfigurations, and asks for common paths with ffuf. Attack tests (ZAP's attack scan, Nuclei's intrusive and default-login templates, Schemathesis's API tests) run only on local targets; deployed targets get only GET and HEAD requests until request limits are measured. ZAP's crawler follows HTML links, so pages that a single-page app builds in JavaScript are mostly not reached. Nuclei runs only its HTTP templates (its TCP, DNS, SSL and JavaScript templates cannot pass SiegeKit's proxy), without out-of-band callbacks (so blind flaws such as blind SSRF are not found), and without its denial-of-service, fuzzing and brute-force templates; its default-login templates, which try each vendor's documented factory logins once, run only on local targets. ffuf guesses 4,751 common paths on local targets but only 210 on deployed targets, so exposed files with other names are missed there. Schemathesis tests an API only with an OpenAPI or Swagger 2.0 spec, given with --openapi or found at one of 11 common paths; APIs without one are not tested by it, and its random inputs can miss bugs. The login throttling check runs only on local targets and only with a login given by --login-url, --login-user and --login-body; it does not see a limit set above the number of attempts it sends (20 by default), one per IP address, or one across many accounts. The rate-limit check runs only on local targets, on one URL given by --rate-limit-url that answers without a login; it does not see a limit set above the number of requests it sends (20 by default), one per IP address, one that only slows answers, or one that shows no 429 or 503 and no rate-limit header. ZAP's attack scan sends request bodies (XML, JSON, forms) only for the requests of a --har recording, so XML external entities (XXE) and flaws in writes the recording does not hold are not tested, and SAML is not tested. The public-maps check looks for an API spec only at 11 common paths (a spec elsewhere, Swagger UI mounted elsewhere than /api-docs and GraphQL schemas are not found) and for the source maps of the files the start page links. The served-secrets check scans for keys only the start page and the same-origin scripts, styles, JSON files and source maps it links (at most 200 requests, 10 MiB each), with Gitleaks' rules: scripts loaded later by other scripts, other pages, files on other origins such as CDNs, inline source maps and files behind a login are not scanned. sqlmap and Nikto are planned for M2.",
 	"The source code, unless you scanned its directory: a URL scan only sends requests to the running app.",
 	"Code in languages without an analyzer: Python (bandit) and Go (gosec) code is analyzed; JavaScript, TypeScript and other languages are not yet (planned for M2). Secrets, dependencies and configuration files are checked in any language.",
+	"Development dependencies in pnpm lockfiles older than version 9: Trivy leaves them out of its results, so their vulnerabilities are not reported. Other development dependencies are scanned, and a finding says when the package is one (measured for npm, Yarn, Bun and uv lockfiles).",
 	"Access control: whether every request checks that this user may access this record. The access-control check (URL scans with --har) replays only the GET and HEAD requests of a browser recording made as one test account, plus OpenAPI routes without path parameters, as a second account and with no login; it reports an answer only when the second account gets exactly the first account's answer while a request with no login is refused, or when a request with no login gets the first account's answer with its login name in it, or a JSON answer with a field named like a password, hash, secret, key or token that holds a value. It does not test pages the recording did not reach, other IDs than the recorded ones, changes (POST, PUT, PATCH, DELETE), answers that differ on every request, secrets given only to logged-in accounts, or data readable with no login that neither names the first account nor has a field named like a secret. Without --har, access control is not tested.",
 	"Business logic: skipping steps, replaying actions, tampering with prices or limits.",
 	"Authentication and session design decisions that need human judgement.",
@@ -480,8 +487,10 @@ code,pre{font:13px ui-monospace,monospace;white-space:pre-wrap;word-break:break-
 {{with $.VersionNote}}<p class="warn">{{.}}</p>{{end}}
 {{if .Fixed}}<p>Fixed: the check that reported each one ran to completion and did not report it again. An ignore setting added to the repository also hides a finding; each check's ignore counts are under "What was tested".</p>
 <ul>{{range .Fixed}}<li>[{{.Severity}}] {{.Title}} · <code>{{.Location.URI}}{{if .Location.StartLine}}:{{.Location.StartLine}}{{end}}</code></li>{{end}}</ul>{{end}}
-{{if .NotRechecked}}<p class="warn">Not checked again, because their check did not complete in this run:</p>
+{{if .NotRechecked}}<p class="warn">Not checked again, because their check could not run or did not complete in this run:</p>
 <ul>{{range .NotRechecked}}<li>[{{.Severity}}] {{.Title}} · <code>{{.Location.URI}}{{if .Location.StartLine}}:{{.Location.StartLine}}{{end}}</code></li>{{end}}</ul>{{end}}
+{{if .NotRun}}<p>Not run this time, because their check was left out with --only, --skip or --profile. They are still open from the last scan:</p>
+<ul>{{range .NotRun}}<li>[{{.Severity}}] {{.Title}} · <code>{{.Location.URI}}{{if .Location.StartLine}}:{{.Location.StartLine}}{{end}}</code></li>{{end}}</ul>{{end}}
 {{end}}
 <h2>What was tested</h2>
 <table>

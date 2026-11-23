@@ -316,6 +316,11 @@
           },
           "description": "Exit codes other than 0 with which the tool says it ran and found issues (ADR 0028). The report is still read and checked."
         },
+        "gitleaksRules": {
+          "type": "string",
+          "maxLength": 16384,
+          "description": "SiegeKit's own Gitleaks rules as TOML [[rules]] tables, each with its id written as id = \"name\" on its own line. SiegeKit appends them to the scanned repository's .gitleaks.toml, or to Gitleaks' default rules when there is none, and points GITLEAKS_CONFIG at the result (ADR 0063). Only for Gitleaks plugins whose only target is repo; repoIgnores.files must list .gitleaks.toml."
+        },
         "recordedRequests": {
           "type": "boolean",
           "description": "SiegeKit adds a ZAP import job, before the first spider job, for the requests of the person's HAR file, mounted read-only at /siegekit/files/recorded (ADR 0047). Only for destructive, local-only ZAP plugins."
@@ -421,7 +426,8 @@
             "bandit-json",
             "nuclei-jsonl",
             "ffuf-json",
-            "schemathesis-json"
+            "schemathesis-json",
+            "trivy-json"
           ]
         },
         "file": {

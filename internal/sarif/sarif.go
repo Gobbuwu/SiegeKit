@@ -190,7 +190,7 @@ func ToFindings(l *Log, opt Options) ([]findings.Finding, error) {
 				RuleID:   ruleID,
 				Title:    title(rule, ruleID),
 				Message:  stripMount(res.Message.Text, opt.MountPath),
-				Severity: adjust(opt.Parser, severity(res, rule)),
+				Severity: adjust(opt.Parser, ruleID, severity(res, rule)),
 				CWEs:     cwes(rule),
 				HelpURI:  findings.SafeHelpURI(helpURI(opt.Parser, rule)),
 				Family:   opt.Family,
@@ -202,6 +202,9 @@ func ToFindings(l *Log, opt Options) ([]findings.Finding, error) {
 				if pl.Region.Snippet != nil {
 					f.Snippet = pl.Region.Snippet.Text
 				}
+			}
+			if opt.Parser == "sarif-gitleaks" && ruleID == PublishableKeyRule {
+				f.Message = publishableKeyMessage
 			}
 			if opt.Family == "secrets" {
 				// Never carry a secret value forward (ADR 0007, threat model T9).
@@ -229,15 +232,26 @@ func helpURI(parser string, r Rule) string {
 	return ""
 }
 
+// PublishableKeyRule is SiegeKit's Gitleaks rule for Supabase publishable
+// keys (ADR 0063), which are public by design.
+const PublishableKeyRule = "siegekit-supabase-publishable-key"
+
+const publishableKeyMessage = "A Supabase publishable key (sb_publishable_). It is meant to be public, so this is not a leak: anyone can use it to call the project's API, and only Row Level Security keeps each table's rows private. Check that every table the key can reach has Row Level Security enabled with policies that limit rows to their owners."
+
 // adjust applies tool-specific severity rules.
 //
 // Gitleaks results carry no level or score, but every one is a credential in
-// the code, so they are high. Checkov's open-source edition marks every failed
-// check "error" and has no severity data, so its results are capped at medium
-// rather than all being reported as high.
-func adjust(parser string, s findings.Severity) findings.Severity {
+// the code, so they are high, except SiegeKit's own rule for Supabase
+// publishable keys, which are public by design and info (ADR 0063).
+// Checkov's open-source edition marks every failed check "error" and has no
+// severity data, so its results are capped at medium rather than all being
+// reported as high.
+func adjust(parser, ruleID string, s findings.Severity) findings.Severity {
 	switch parser {
 	case "sarif-gitleaks":
+		if ruleID == PublishableKeyRule {
+			return findings.Info
+		}
 		return findings.High
 	case "sarif-checkov":
 		return min(s, findings.Medium)
