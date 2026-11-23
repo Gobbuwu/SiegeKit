@@ -138,6 +138,11 @@
       "reason": "no sign-up page was given or found in a.har",
       "cause": "no-input"
     },
+    "storage-write": {
+      "status": "skipped",
+      "reason": "off unless asked for, because it uploads files: pass --storage-url (the Supabase project URL, or https://firebasestorage.googleapis.com or a local emulator for Firebase) to test whether anyone can upload to the app's storage buckets",
+      "cause": "no-input"
+    },
     "zap": {
       "status": "ran",
       "byRule": true,
