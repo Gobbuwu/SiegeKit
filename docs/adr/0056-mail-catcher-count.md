@@ -32,6 +32,7 @@ Environment for every local measurement: Claude's sandbox, 4 CPUs, cgroup v1; Do
 | The rules hold when broken | `TestCount` (pages, Cc and Bcc, any case, arrivals during the read, a missing mark, over 500), `TestSettle` (fixed clock: quiet, still arriving at 30 s, cancel), `TestOpen` (public and link-local addresses, non-Mailpit answers, a closed port; GET only), `TestAddresses` and `FuzzAddresses` (30 s, about 321,000 runs locally), `TestMailCount` (every case of item 4), `TestScanURLMailCatcher` (flag mistakes refused before any request or audit entry; a non-Mailpit catcher fails the two checks before they send; an unused catcher is never asked). |
 | Planted cases are found | `TestPagesFindPlantedIssues` (test app, real clock): a reset that emails every request is reported, one that emails an address once is not. Changing item 4's `<` to `<=` makes it miss the planted one (checked); dropping the "settled" condition fails `TestMailCount` (checked). |
 | The gate's answer | The gate job's steps run locally on fresh Docker containers met `gitea-mail.json`; the same report without `--mail-catcher` fails it (`reset-not-limited` new). |
+| The gate on cgroup v2 | CI gate run 45110478104 on 66b8eaf: the `mail` job met `gitea-mail.json` with the app on rootless Podman 5.7.0 and on Docker 29.4.2 (cgroup v2), and the gate's own read of Mailpit found 1 reset email and 20 activation emails on both. |
 | Time added | 5.0 s per counted check (Gitea reset: 19.0 s without, 24.1 s with). |
 
 ## Consequences
