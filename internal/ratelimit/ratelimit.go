@@ -5,6 +5,7 @@
 package ratelimit
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -167,6 +168,7 @@ func Check(ctx context.Context, cfg egress.Config, e *Endpoint, n int) (Result, 
 	}
 	var r Result
 	var last time.Time
+	var baseWords []string // limit words the first answer already had
 	for i := range n {
 		if i > 0 {
 			if err := sleep(ctx, Interval-now().Sub(last)); err != nil {
@@ -195,6 +197,15 @@ func Check(ctx context.Context, cfg egress.Config, e *Endpoint, n int) (Result, 
 			}
 			return r, nil
 		}
+		if i > 0 {
+			// Many apps say so in words with the same status (Ory
+			// Kratos: 400 "The request was submitted too often" after 5
+			// wrong codes), as login-throttle reads them.
+			if w := NewWord(LimitWords(a.Body), baseWords); w != "" {
+				r.Limited, r.Signal = true, fmt.Sprintf("the answer says %q", w)
+				return r, nil
+			}
+		}
 		if i == 0 {
 			guess := e.Page == Reset || e.Page == Code
 			switch {
@@ -207,7 +218,7 @@ func Check(ctx context.Context, cfg egress.Config, e *Endpoint, n int) (Result, 
 			case e.Page == SignUp && a.Status >= 400:
 				return r, fmt.Errorf("the sign-up answered %d, so it made no account and its limit cannot be tested; check %s", a.Status, e.source())
 			}
-			r.Baseline = a.Status
+			r.Baseline, baseWords = a.Status, LimitWords(a.Body)
 			continue
 		}
 		if a.Status != r.Baseline {
@@ -218,6 +229,36 @@ func Check(ctx context.Context, cfg egress.Config, e *Endpoint, n int) (Result, 
 		}
 	}
 	return r, nil
+}
+
+// limitWords are words that an answer about a limit uses, in lower case.
+// "too often" is Ory Kratos's (1.3.1, measured 2026-11-23).
+var limitWords = []string{"captcha", "too many", "too often", "locked", "lockout", "try again later", "rate limit", "rate-limit", "throttl"}
+
+// LimitWords lists the limit words that body holds.
+func LimitWords(body []byte) []string {
+	lower := bytes.ToLower(body)
+	var out []string
+	for _, w := range limitWords {
+		if bytes.Contains(lower, []byte(w)) {
+			out = append(out, w)
+		}
+	}
+	return out
+}
+
+// NewWord returns a word of now that base does not hold, or "".
+func NewWord(now, base []string) string {
+	for _, w := range now {
+		found := false
+		for _, b := range base {
+			found = found || b == w
+		}
+		if !found {
+			return w
+		}
+	}
+	return ""
 }
 
 // Signal names a status or header that shows a rate limit (answer 7a): a

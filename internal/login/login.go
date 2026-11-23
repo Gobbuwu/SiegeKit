@@ -6,7 +6,6 @@
 package login
 
 import (
-	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/json"
@@ -21,6 +20,7 @@ import (
 
 	"github.com/Gobbuwu/SiegeKit/internal/egress"
 	"github.com/Gobbuwu/SiegeKit/internal/findings"
+	"github.com/Gobbuwu/SiegeKit/internal/ratelimit"
 	"github.com/Gobbuwu/SiegeKit/internal/target"
 )
 
@@ -244,7 +244,7 @@ func run(ctx context.Context, cfg egress.Config, l *Login, attempts int, body fu
 			case a.Status >= 500:
 				return r, fmt.Errorf("the login URL answered %d (a server error) to a login with a wrong password; check --login-body", a.Status)
 			}
-			base, baseWords, r.Baseline = a, limitWords(a.Body), a.Status
+			base, baseWords, r.Baseline = a, ratelimit.LimitWords(a.Body), a.Status
 			continue
 		}
 		if a.Status >= 500 {
@@ -253,8 +253,8 @@ func run(ctx context.Context, cfg egress.Config, l *Login, attempts int, body fu
 		switch {
 		case a.Status != base.Status:
 			r.Limited, r.Signal = true, fmt.Sprintf("answered %d instead of %d", a.Status, base.Status)
-		case newWord(limitWords(a.Body), baseWords) != "":
-			r.Limited, r.Signal = true, fmt.Sprintf("the answer says %q", newWord(limitWords(a.Body), baseWords))
+		case ratelimit.NewWord(ratelimit.LimitWords(a.Body), baseWords) != "":
+			r.Limited, r.Signal = true, fmt.Sprintf("the answer says %q", ratelimit.NewWord(ratelimit.LimitWords(a.Body), baseWords))
 		case a.Took >= 3*base.Took && a.Took >= time.Second:
 			r.Limited, r.Signal = true, fmt.Sprintf("answered in %s instead of %s", a.Took.Round(time.Millisecond), base.Took.Round(time.Millisecond))
 		}
@@ -272,33 +272,6 @@ func limitStatus(a *egress.Answer) string {
 		return fmt.Sprintf("answered %d", a.Status)
 	case a.Header.Get("Retry-After") != "":
 		return "answered with a Retry-After header"
-	}
-	return ""
-}
-
-// words that an answer about a limit uses, in lower case.
-var words = []string{"captcha", "too many", "locked", "lockout", "try again later", "rate limit", "rate-limit", "throttl"}
-
-func limitWords(body []byte) []string {
-	lower := bytes.ToLower(body)
-	var out []string
-	for _, w := range words {
-		if bytes.Contains(lower, []byte(w)) {
-			out = append(out, w)
-		}
-	}
-	return out
-}
-
-func newWord(now, base []string) string {
-	for _, w := range now {
-		found := false
-		for _, b := range base {
-			found = found || b == w
-		}
-		if !found {
-			return w
-		}
 	}
 	return ""
 }

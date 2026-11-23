@@ -321,8 +321,23 @@ func TestCheckPage(t *testing.T) {
 	if r, err := Check(context.Background(), gcfg, g, 3); err != nil || r.Changed != 1 || len(Findings(g, r, 3)) != 0 {
 		t.Errorf("rate-limit changed: %+v %v", r, err)
 	}
-	// A header's limit number is kept.
+	// A limit said in words with the same status (Ory Kratos 1.3.1's
+	// SMS code page, measured 2026-11-23) is a limit; words the first
+	// answer already had are not.
 	c, ccfg := pageEndpoint(t, Code, `{"code":"{wrong}"}`)
+	installPage(t, c, func(i int) *egress.Answer {
+		a := answer(400, nil)
+		a.Body = []byte(`{"text":"The login code is invalid. Too many people use this app."}`)
+		if i >= 5 {
+			a.Body = []byte(`{"text":"The request was submitted too often. Please request another code."}`)
+		}
+		return a
+	})
+	r, err = Check(context.Background(), ccfg, c, 20)
+	if err != nil || !r.Limited || r.Requests != 6 || r.Signal != `the answer says "too often"` || len(Findings(c, r, 20)) != 0 {
+		t.Errorf("words: %+v %v", r, err)
+	}
+	// A header's limit number is kept.
 	installPage(t, c, func(int) *egress.Answer { return answer(401, http.Header{"X-Ratelimit-Limit": {"100"}}) })
 	r, err = Check(context.Background(), ccfg, c, 5)
 	if err != nil || !r.Limited || r.Limit != 100 || r.Requests != 1 || !strings.HasSuffix(r.Summary(5), "(limit 100)") {
