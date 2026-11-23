@@ -17,7 +17,7 @@ const [base, email, password, newPassword, out] = process.argv.slice(2);
 const answer = 'gate-answer';
 const tfaUser = 'wurstbrot@juice-sh.op';
 const tfaPassword = 'EinBelegtesBrotMitSchinkenSCHINKEN!';
-const tfaSecret = 'IFTXE3SPOEYVURT2MRYGI52TKJ4HC3KH';
+const tfaSecret = 'IFTXE3SPOEYVURT2MRYGI52TKJ4HC3KH'; // gitleaks:allow (Juice Shop's own public seed value, users.yml)
 
 // RFC 6238 TOTP (SHA-1, 30 s, 6 digits) from a base32 secret (RFC 4648).
 function totp(secret, now) {
