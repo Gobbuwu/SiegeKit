@@ -184,7 +184,7 @@ func (o *urlScan) confirmStorage(p *storagePlan, kind backend.StorageKind, locs 
 	if left > 0 {
 		fmt.Fprintf(stdout, "  (%d more location(s) over the %d-file limit are not tested)\n", left, backend.MaxFiles)
 	}
-	fmt.Fprintf(stdout, "Where the rules allow the upload but refuse the delete, the file stays, and SiegeKit lists it for you to delete. An upload can also start the app's own storage triggers, such as functions that resize images or send messages. Type %q to upload them: ", writeTestFiles)
+	fmt.Fprintf(stdout, "Where the rules allow the upload but refuse the delete, the file stays, and SiegeKit lists it for you to delete. An upload and a delete can also start the app's own storage triggers, such as functions that resize images, record uploads or send messages; SiegeKit does not see or delete what they create. Type %q to upload them: ", writeTestFiles)
 	line, _ := o.in.ReadString('\n')
 	if strings.TrimSpace(line) != writeTestFiles {
 		return "", "", fmt.Sprintf("not confirmed: %q was not typed", writeTestFiles)

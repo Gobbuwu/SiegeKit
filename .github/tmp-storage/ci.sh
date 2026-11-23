@@ -15,7 +15,7 @@ echo "cgroup: $(stat -fc %T /sys/fs/cgroup) | docker $(docker version -f '{{.Ser
 npm init -y >/dev/null; npm i --silent firebase-tools@15.37.0 firebase@12.19.0 esbuild@0.25.0 @supabase/supabase-js@2.49.4 >/dev/null
 SEC=$(python3 -c "import secrets;print(secrets.token_hex(32))"); ANON=$(python3 $H/jwt.py $SEC anon); SERVICE=$(python3 $H/jwt.py $SEC service_role)
 mkdir -p fbapp sbapp; cp $H/app/fb.html fbapp/index.html; cp $H/app/sb.html sbapp/index.html
-npx esbuild $H/app/fb.js --bundle --minify --format=esm --outfile=fbapp/fb.min.js --log-level=warning
+cp $H/app/fb.js fb-app.js; npx esbuild fb-app.js --bundle --minify --format=esm --outfile=fbapp/fb.min.js --log-level=warning
 sed "s/ANONKEY/$ANON/" $H/app/sb.js > sb-real.js; npx esbuild sb-real.js --bundle --minify --format=esm --outfile=sbapp/main.js --log-level=warning
 python3 -m http.server 8080 --bind 127.0.0.1 --directory fbapp >/dev/null 2>&1 &
 python3 -m http.server 8081 --bind 127.0.0.1 --directory sbapp >/dev/null 2>&1 &

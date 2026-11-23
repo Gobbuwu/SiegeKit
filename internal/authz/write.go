@@ -253,16 +253,18 @@ func ParseWrites(data []byte, t *target.URL) (*Writes, error) {
 		if u.RawQuery != "" {
 			p += "?" + u.RawQuery
 		}
+		// A socket transport first: its session ID is random and can
+		// split into a lockout word (gate run 45139300556).
+		if socketTransport(p) {
+			w.Transport++
+			continue
+		}
 		if why := lockoutReason(method, p); why != "" {
 			w.Lockout++
 			name := method + " " + strings.SplitN(p, "?", 2)[0]
 			if !containsString(w.LockoutPaths, name) {
 				w.LockoutPaths = append(w.LockoutPaths, name)
 			}
-			continue
-		}
-		if socketTransport(p) {
-			w.Transport++
 			continue
 		}
 		var body []byte
