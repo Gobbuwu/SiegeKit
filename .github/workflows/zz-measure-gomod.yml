@@ -1,0 +1,81 @@
+name: Measure Go module download (temporary)
+
+# Temporary measurement for the Go module download design (1.0 item 6).
+# Removed before merge. Option A: `go mod download` in the pinned gosec image
+# from copies of the module files only, then gosec with the cache mounted
+# read-only and no network. Compared with gosec offline and gosec online in
+# the same image, under SiegeKit's sandbox flags, on both engines.
+on:
+  pull_request:
+    paths:
+      - .github/workflows/zz-measure-gomod.yml
+
+permissions:
+  contents: read
+
+jobs:
+  measure:
+    name: ${{ matrix.repo }} (${{ matrix.engine }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        engine: [podman, docker]
+        repo:
+          - docker/awesome-compose@30f4b7f6a6c3b0c0ecf4d4efb0de203c48d11562
+          - caddyserver/caddy@16618f454ca6f78f37dfd85a90573d8ffd43c1c8
+          - spf13/cobra@adbc8813901bba65827259daa8e22ff94ec1f30e
+          - gin-gonic/gin@0f09c3a9b4626d9fe9979cf4d0521d6ae32ab646
+          - go-chi/chi@c64ed7d6635f33a8b2feaff7dcfa55677023ac7d
+          - gotify/server@912af9f37414ab08fae0cfcc3941c4fd95c183aa
+          - kubernetes/examples@22934a040acbb0c0aa103023ccbd871507bf17f6
+          - pocketbase/pocketbase@7f2773ec234b62d0b80ca47c508397cb3d0da3ea
+          - go-shiori/shiori@aebb4021a56048eed4c8feb325399be5f46e5470
+          - traefik/whoami@1ce75d01b6978863647da42557a707a479da3a51
+    env:
+      E: ${{ matrix.engine }}
+      REPO: ${{ matrix.repo }}
+      IMG: ghcr.io/securego/gosec@sha256:7bcf1edbab3e80d8006a28d53e7031a9c9775be8eec30679e4adc1f51d272121
+    steps:
+      - name: Measure
+        run: |
+          set -u
+          T=$RUNNER_TEMP
+          if [ "$E" = podman ]; then echo "rootless=$(podman info --format '{{.Host.Security.Rootless}}') cgroup=$(podman info --format '{{.Host.CgroupsVersion}}') $(podman --version)"; else echo "$(docker --version) cgroup=$(docker info --format '{{.CgroupVersion}}')"; fi
+          $E pull -q "$IMG" > /dev/null
+          echo "IMAGE: $($E run --rm --entrypoint go "$IMG" version) | $($E run --rm --entrypoint go "$IMG" env GOTOOLCHAIN GOPROXY GOFLAGS GOROOT GOPATH | tr '\n' ' ')"
+          name=${REPO%@*}; sha=${REPO#*@}
+          git init -q $T/target && git -C $T/target fetch -q --depth 1 "https://github.com/$name.git" "$sha" && git -C $T/target -c advice.detachedHead=false checkout -q FETCH_HEAD
+          mkdir -p $T/stage $T/gomod $T/gomod-online $T/out; chmod 777 $T/gomod $T/gomod-online $T/out
+          (cd $T/target && find . \( -name .git -o -name vendor \) -prune -o \( -name go.mod -o -name go.sum -o -name go.work -o -name go.work.sum \) -type f -print) | while read f; do mkdir -p "$T/stage/$(dirname "$f")"; cp "$T/target/$f" "$T/stage/$f"; done
+          ro=--read-only; [ "$E" = podman ] && ro="--read-only --read-only-tmpfs=false"
+          common="--rm --pull never --user $(id -u):$(id -g) --cap-drop ALL --security-opt no-new-privileges $ro --tmpfs /tmp:rw,nosuid,nodev,noexec,size=256m --tmpfs /dev/shm:rw,nosuid,nodev,noexec,size=64m --pids-limit 256 --memory 2048m --memory-swap 2048m --cpus 2 --env HOME=/tmp --workdir /tmp --env GOPATH=/tmp/go"
+          # Download: network, no target, module files only, read-only.
+          t0=$(date +%s.%N)
+          for m in $(cd $T/stage && find . -name go.mod -printf '%h\n' | sort); do
+            $E run $common --env GOMODCACHE=/data/gomod --env GOTOOLCHAIN=local --env GOPROXY=https://proxy.golang.org --env GOFLAGS=-mod=mod \
+              --mount type=bind,source=$T/stage,target=/data/stage,readonly --mount type=bind,source=$T/gomod,target=/data/gomod \
+              --workdir /data/stage/$m --entrypoint go "$IMG" mod download > $T/dl.log 2>&1
+            echo "DOWNLOAD $m exit=$? $(tail -c 300 $T/dl.log | tr '\n' ' ')"
+          done
+          echo "DOWNLOAD_S $(echo "$(date +%s.%N) - $t0" | bc) CACHE_BYTES $(sudo du -sb $T/gomod | cut -f1) ZIPS $(sudo find $T/gomod/cache/download -name '*.zip' 2>/dev/null | wc -l)"
+          scan() { local n=$1; shift; local t0=$(date +%s.%N)
+            $E run $common "$@" --mount type=bind,source=$T/target,target=/target,readonly --mount type=bind,source=$T/out,target=/out \
+              "$IMG" -concurrency 1 -fmt json -out /out/$n.json -no-fail -track-suppressions /target/... > /dev/null 2> $T/$n.err
+            echo "SCAN $n exit=$? s=$(echo "$(date +%s.%N) - $t0" | bc)"; }
+          scan offline --network none
+          scan A --network none --mount type=bind,source=$T/gomod,target=/data/gomod,readonly --env GOMODCACHE=/data/gomod --env GOPROXY=off
+          scan online --mount type=bind,source=$T/gomod-online,target=/data/gomod --env GOMODCACHE=/data/gomod
+          python3 - "$T/out" <<'PY'
+          import json, sys
+          o = sys.argv[1]
+          def load(n):
+              d = json.load(open(f"{o}/{n}.json"))
+              return {(i["rule_id"], i["file"], i["line"]) for i in d.get("Issues") or []}, len(d.get("Golang errors") or {}), d["Stats"]["files"]
+          on = load("online")
+          for n in ["online", "offline", "A"]:
+              s, e, f = load(n)
+              print(f"RESULT {n}: {len(s)} found, {len(on[0]-s)} missed, {len(s-on[0])} extra, {e} pkg errs, {f} files")
+          PY
+          grep -h "Golang errors\|requires go\|toolchain" $T/A.err | head -5 || true
