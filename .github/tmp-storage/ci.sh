@@ -6,8 +6,10 @@
 set -euo pipefail
 H=$(cd "$(dirname "$0")" && pwd); W=$RUNNER_TEMP/sw; mkdir -p $W; cd $W
 SK=$W/siegekit; FAIL=0
-PG=mirror.gcr.io/supabase/postgres@sha256:d15ecf03474e4f5437002f3951f758b8fbfb182c3be311a998873c768ff53d37
-ST=mirror.gcr.io/supabase/storage-api@sha256:8a211c1024d661aafee98178d26a2da8d1f43d0b9cddb76b0d6445bee70acdaa
+PG=supabase/postgres@sha256:d15ecf03474e4f5437002f3951f758b8fbfb182c3be311a998873c768ff53d37
+ST=supabase/storage-api@sha256:8a211c1024d661aafee98178d26a2da8d1f43d0b9cddb76b0d6445bee70acdaa
+# Pull by digest from Docker Hub, then mirror.gcr.io (each can answer 429); tag the digest locally.
+pull() { local E=$1 ref=$2 n; for n in 1 2 3; do for reg in docker.io mirror.gcr.io; do $E pull -q $reg/$ref >/dev/null 2>&1 && { $E tag $reg/$ref local/${ref%%@*}:pinned; return 0; }; done; sleep 20; done; echo "pull failed: $ref"; return 1; }
 JRE=mirror.gcr.io/library/eclipse-temurin:21-jre
 echo "cgroup: $(stat -fc %T /sys/fs/cgroup) | docker $(docker version -f '{{.Server.Version}}') $(docker info -f 'cgroup={{.CgroupVersion}}') | podman $(podman version -f '{{.Version}}') $(podman info -f 'cgroup={{.Host.CgroupsVersion}} rootless={{.Host.Security.Rootless}}') | node $(node --version) | $(uname -m)"
 
@@ -28,7 +30,7 @@ NODE=$(dirname "$(dirname "$(readlink -f "$(which node)")")")
 mkdir -p fb fbcache; printf '{"storage":{"rules":"storage.rules"},"emulators":{"storage":{"host":"0.0.0.0","port":9199},"ui":{"enabled":false},"singleProjectMode":true}}' > fb/firebase.json
 cp $H/fb-rules/v1 fb/storage.rules; ln -s $W/node_modules fb/node_modules
 WANT_FB=(1 1 1 0 1 1 1); DELTA_FB=(0 0 1 0 0 1 0)
-fbcount() { curl -s -H "Authorization: Bearer owner" "http://127.0.0.1:9199/v0/b/demo-siegekit.appspot.com/o?prefix=$1" | python3 -c "import json,sys;print(len(json.load(sys.stdin).get('items',[])))"; }
+fbcount() { curl -s -H "Authorization: Bearer owner" "http://127.0.0.1:9199/v0/b/demo-siegekit.appspot.com/o?prefix=${1:-}" | python3 -c "import json,sys;print(len(json.load(sys.stdin).get('items',[])))"; }
 for E in docker podman; do
   $E pull -q $JRE >/dev/null
   $E run -d --name fbemu -p 127.0.0.1:9199:9199 -v $NODE:/opt/node:ro -v $W:$W -v $W/fbcache:/root/.cache/firebase -w $W/fb \
@@ -49,13 +51,14 @@ done
 WANT_SB=(2 2 2 0 1 2 2); DELTA_SB=(0 0 2 0 0 2 2)
 for E in docker podman; do
   P=$([ $E = docker ] && echo 5000 || echo 5001)
+  pull $E $PG; pull $E $ST
   $E network create sbnet-$E >/dev/null
-  $E run -d --name sbdb-$E --network sbnet-$E -e POSTGRES_PASSWORD=pw $PG >/dev/null
+  $E run -d --name sbdb-$E --network sbnet-$E -e POSTGRES_PASSWORD=pw local/supabase/postgres:pinned >/dev/null
   for i in $(seq 120); do $E exec sbdb-$E pg_isready -U postgres -h localhost >/dev/null 2>&1 && break; sleep 1; done; sleep 5
   $E exec sbdb-$E psql -q -U supabase_admin -h localhost -d postgres -c "alter role supabase_storage_admin with password 'pw'"
   $E run -d --name sbst-$E --network sbnet-$E -p 127.0.0.1:$P:5000 -e ANON_KEY=$ANON -e SERVICE_KEY=$SERVICE -e AUTH_JWT_SECRET=$SEC -e PGRST_JWT_SECRET=$SEC \
     -e AUTH_JWT_ALGORITHM=HS256 -e DATABASE_URL=postgres://supabase_storage_admin:pw@sbdb-$E:5432/postgres -e STORAGE_BACKEND=file -e FILE_STORAGE_BACKEND_PATH=/var/lib/storage \
-    -e TENANT_ID=stub -e REGION=stub -e GLOBAL_S3_BUCKET=stub -e FILE_SIZE_LIMIT=52428800 $ST >/dev/null
+    -e TENANT_ID=stub -e REGION=stub -e GLOBAL_S3_BUCKET=stub -e FILE_SIZE_LIMIT=52428800 local/supabase/storage-api:pinned >/dev/null
   for i in $(seq 90); do curl -sf localhost:$P/status >/dev/null && break; sleep 1; done
   curl -sf -X POST localhost:$P/bucket -H "apikey: $SERVICE" -H "Authorization: Bearer $SERVICE" -H "content-type: application/json" -d '{"id":"files","name":"files","public":false}' >/dev/null
   python3 $H/proxy.py 54321 $P & PROXY=$!; sleep 1
