@@ -30,9 +30,14 @@ jobs:
         # The container tests run on both engines (ADR 0039): the runners
         # have rootless Podman and rootful Docker, and a result holds only
         # for the engine it ran on (ADR 0038).
+        # ubuntu-24.04-arm is GitHub's ARM Linux runner: the arm64 pulls of
+        # the pinned images and the same tests and self-scan (ADR 0060,
+        # owner 2026-11-22, in place of an Apple-chip Mac for now).
         include:
-          - { os: ubuntu-latest, engine: podman, expect: podman rootless }
-          - { os: ubuntu-latest, engine: docker, expect: docker rootful }
+          - { os: ubuntu-latest, engine: podman, expect: podman rootless, arch: amd64 }
+          - { os: ubuntu-latest, engine: docker, expect: docker rootful, arch: amd64 }
+          - { os: ubuntu-24.04-arm, engine: podman, expect: podman rootless, arch: arm64 }
+          - { os: ubuntu-24.04-arm, engine: docker, expect: docker rootful, arch: arm64 }
           - { os: macos-latest }
     runs-on: ${{ matrix.os }}
     # Above the worst case of the steps' own limits (go test -timeout 30m,
@@ -68,6 +73,8 @@ jobs:
         run: go test -race -count=1 -cover -timeout 30m ./...
       - name: Scan SiegeKit itself
         if: runner.os == 'Linux'
+        env:
+          EXPECT_ARCH: ${{ matrix.arch }}
         # Any finding fails CI (owner decision, 2026-11-19): --fail-on info
         # makes every finding exit 3. Fake keys in test data carry
         # gitleaks:allow, which reports count. Exit 3 wins over 4
@@ -84,9 +91,11 @@ jobs:
           if [ "$code" -ne 0 ]; then exit 1; fi
           jq -e --arg e "$SIEGEKIT_ENGINE" '.environment.engine.name == $e' "$RUNNER_TEMP/self-report/report.json"
           jq -e --arg g "go$GO_VERSION" '.environment.go == $g' "$RUNNER_TEMP/self-report/report.json"
+          jq -e --arg a "$EXPECT_ARCH" '.environment.os == "linux" and .environment.arch == $a' "$RUNNER_TEMP/self-report/report.json"
           jq -e '[.plugins[] | select(.status != "ran" and (.status != "skipped" or .cause != "no-files"))] | length == 0' "$RUNNER_TEMP/self-report/report.json"
       - name: Fuzz parsers
-        if: matrix.engine == 'podman'
+        # Once: the parsers are plain Go, with no code per architecture.
+        if: matrix.engine == 'podman' && matrix.arch == 'amd64'
         run: |
           go test -run='^$' -fuzz='^FuzzParse$' -fuzztime=60s ./internal/manifest
           go test -run='^$' -fuzz='^FuzzSARIF$' -fuzztime=60s ./internal/sarif
@@ -118,6 +127,7 @@ jobs:
           go test -run='^$' -fuzz='^FuzzReadStorageScripts$' -fuzztime=30s ./internal/backend
           go test -run='^$' -fuzz='^FuzzStorageRuleFolders$' -fuzztime=30s ./internal/checks
       - name: Staticcheck
+        # On both architectures: each checks the code built for its GOARCH.
         if: matrix.engine == 'podman'
         run: go run honnef.co/go/tools/cmd/staticcheck@${STATICCHECK_VERSION} ./...
       - name: Dead code
