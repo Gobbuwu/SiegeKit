@@ -8,6 +8,7 @@ name: Real-repo gate
 # ADR 0056: emails counted at Mailpit on Gitea. ADR 0057: reset, sign-up and
 # code pages on Juice Shop from a Chromium recording. ADR 0059: the storage
 # write test on the Firebase Storage emulator and a local Supabase Storage.
+# ADR 0060: every job also runs on GitHub's ARM Linux runner (ubuntu-24.04-arm).
 on:
   workflow_dispatch:
   schedule:
