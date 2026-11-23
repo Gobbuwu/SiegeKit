@@ -1,6 +1,6 @@
 # 0058. The storage write test
 
-- Status: Accepted (design approved by the owner 2026-11-21: live write at the root and app paths, Firebase and Supabase, leftovers reported; local targets only: recommended on 2026-11-23, see item 1)
+- Status: Accepted (design approved by the owner 2026-11-21: live write at the root and app paths, Firebase and Supabase, leftovers reported; local targets only until M2.10: chosen by the owner 2026-11-23, see item 1)
 - Date: 2026-11-23
 - Amends: [0037](0037-backend-live-check.md) (Cloud Storage is now tested live, and writes are tested), [0044](0044-typed-confirmations-limit.md) (one more typed phrase)
 
