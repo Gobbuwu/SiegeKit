@@ -61,6 +61,7 @@ Each significant design decision is recorded as a short ADR before code is writt
 | [0055](0055-rate-limit-pages.md) | Rate limits on reset, sign-up and code pages, and password spraying (amends 0029, 0030, 0036) | Accepted |
 | [0056](0056-mail-catcher-count.md) | Emails counted at a mail catcher for the reset and sign-up checks (amends 0055) | Accepted |
 | [0057](0057-page-checks-known-answers.md) | Known answers for the reset, sign-up and code pages on Juice Shop, and no answer that depends on map order (amends 0055, 0036) | Accepted |
+| [0058](0058-storage-write-test.md) | The storage write test: one test file uploaded, read back and deleted in Firebase and Supabase Storage buckets (amends 0037, 0044) | Accepted |
 
 ADRs 0002 to 0011 were accepted at the M0 design sign-off on 2026-11-18.
 

@@ -168,6 +168,17 @@ Flags:
                     A backend that is not on this machine must appear in
                     the app's scripts, and you type its host name in a
                     terminal; no flag skips that
+  --storage-url URL the app's file storage, for the storage-write test
+                    (local targets only): the Supabase project URL, or
+                    https://firebasestorage.googleapis.com or a local
+                    emulator for Firebase. Uploads one 36-byte text file to
+                    the root of each bucket named in the app's scripts and
+                    to folders named there (at most 5 files), reads it back
+                    and deletes it, with the app's public key. You type
+                    "write test files" after reading the list, and the host
+                    name (the bucket name for hosted Firebase) when the
+                    storage is not on this machine; no flag skips that. A
+                    file whose delete is refused stays and is listed
   --source DIR      the app's repository: table names from its Supabase
                     migrations, paths from database.rules.json, and an
                     OpenAPI file for Schemathesis when the app serves none,
@@ -219,6 +230,7 @@ func scan(args []string, stdout, stderr io.Writer) int {
 	harUser := fl.String("har-user", "", "")
 	replayWrites := fl.Bool("replay-writes", false, "")
 	backendURL := fl.String("backend-url", "", "")
+	storageURL := fl.String("storage-url", "", "")
 	source := fl.String("source", "", "")
 	// Allow flags before and after DIR.
 	var pos []string
@@ -293,6 +305,11 @@ func scan(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprint(stderr, "siegekit scan: --replay-writes changes data, so it runs only on local targets, not with --deployed\n")
 		return exitUsage
 	}
+	// So does the storage write test (ADR 0058 item 1).
+	if *storageURL != "" && *deployed {
+		fmt.Fprint(stderr, "siegekit scan: --storage-url uploads files to the app's storage, so it runs only on local targets, not with --deployed\n")
+		return exitUsage
+	}
 	if sc := otherScheme(pos[0]); sc != "" {
 		if _, err := os.Stat(pos[0]); err != nil {
 			fmt.Fprintf(stderr, "siegekit scan: %s:// URLs cannot be scanned; give an http:// or https:// URL or a directory\n", sc)
@@ -310,11 +327,11 @@ func scan(args []string, stdout, stderr io.Writer) int {
 			reportDir: *reportDir, noSave: *noSave, consent: consent{yes: *yes, none: *noInstall},
 			requireAll: *requireAll, openAPI: *openAPI, profile: *profile, login: lf,
 			har: *har, harUser: *harUser, replayWrites: *replayWrites, rateLimit: rl, pageFlags: pages,
-			mailCatcher: *mailCatcher, backendURL: *backendURL, source: *source,
+			mailCatcher: *mailCatcher, backendURL: *backendURL, storageURL: *storageURL, source: *source,
 		}, stdout, stderr)
 	}
-	if *deployed || *authorizedHost != "" || *openAPI != "" || lf.url != "" || attemptsSet || *har != "" || *replayWrites || rl.url != "" || anyPage || *mailCatcher != "" || *backendURL != "" || *source != "" {
-		fmt.Fprint(stderr, "siegekit scan: --deployed, --authorized-host, --openapi, --har, --replay-writes, --backend-url, --source, --mail-catcher, the --login flags, the --rate-limit flags and the --reset, --signup and --code flags only apply to URL targets\n")
+	if *deployed || *authorizedHost != "" || *openAPI != "" || lf.url != "" || attemptsSet || *har != "" || *replayWrites || rl.url != "" || anyPage || *mailCatcher != "" || *backendURL != "" || *storageURL != "" || *source != "" {
+		fmt.Fprint(stderr, "siegekit scan: --deployed, --authorized-host, --openapi, --har, --replay-writes, --backend-url, --storage-url, --source, --mail-catcher, the --login flags, the --rate-limit flags and the --reset, --signup and --code flags only apply to URL targets\n")
 		return exitUsage
 	}
 	target, err := resolveDir(pos[0])

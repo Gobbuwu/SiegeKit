@@ -3,6 +3,7 @@
 - Status: Accepted
 - Date: 2026-11-21
 - Amends: [0035](0035-access-control-replay.md) item 11, [0037](0037-backend-live-check.md) item 3 (what the typed confirmation guarantees), the threat model rows T24 and T25
+- Amended by: [0058](0058-storage-write-test.md) (the storage host or bucket and `write test files` are typed the same way, with the same limit)
 
 ## Context
 

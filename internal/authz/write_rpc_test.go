@@ -405,3 +405,24 @@ func TestSameNoun(t *testing.T) {
 		}
 	}
 }
+
+// TestParseWritesSocketIDWord: a Socket.IO session ID is random base64url,
+// so it can split into a lockout word ("Otp" here; about 1 in 11,000 of
+// Juice Shop's IDs, measured on a million generated in its format). The
+// request is a socket transport first, not a login (gate run 45139300556
+// on PR #69 counted Juice Shop's polling POST as a lockout).
+func TestParseWritesSocketIDWord(t *testing.T) {
+	u := "http://127.0.0.1:3000"
+	p := "/socket.io/?EIO=4&transport=polling&t=0p70nh5z&sid=rK2JsabcOtpAAAAAAAAA"
+	if lockoutReason("POST", p) == "" {
+		t.Fatal("the ID no longer names a lockout word; pick another")
+	}
+	har := writeHAR(t, []writeEntry{{method: "POST", url: u + p, mime: "text/plain;charset=UTF-8", body: "40", status: 200, answer: "ok"}})
+	ws, err := ParseWrites(har, mustTarget(t, u+"/"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ws.Transport != 1 || ws.Lockout != 0 || len(ws.LockoutPaths) != 0 {
+		t.Errorf("want 1 transport and no lockout: %+v", ws)
+	}
+}
