@@ -64,7 +64,7 @@ type Login struct {
 	body string
 	json bool
 	// The page's form: the template's fields, the page's URL and the
-	// target the form's action must be on.
+	// target the form's action and a login's redirect must be on.
 	fields  []field
 	pageURL *url.URL
 	target  *target.URL
@@ -81,7 +81,7 @@ func Parse(rawURL, user, body string, t *target.URL) (*Login, error) {
 	if err := checkUserBody(user, body); err != nil {
 		return nil, err
 	}
-	l := &Login{URL: u.String(), Path: u.Path, User: user, body: body, json: strings.HasPrefix(strings.TrimLeft(body, " \t\r\n"), "{")}
+	l := &Login{URL: u.String(), Path: u.Path, User: user, body: body, json: strings.HasPrefix(strings.TrimLeft(body, " \t\r\n"), "{"), target: t}
 	b := l.render("x")
 	if l.json && !json.Valid(b) {
 		return nil, errors.New("--login-body is not valid JSON once {user} and {password} are filled in; put them inside quotes")
@@ -231,10 +231,11 @@ type answerKind struct {
 	status   int
 	location string
 	words    string
+	next     string // the limit words of the page the answer redirected to
 }
 
-func kindOf(a *egress.Answer) *answerKind {
-	return &answerKind{a.Status, redirect(a), strings.Join(ratelimit.LimitWords(a.Body), ",")}
+func kindOf(at *attempt) *answerKind {
+	return &answerKind{at.a.Status, redirect(at.a), strings.Join(ratelimit.LimitWords(at.a.Body), ","), strings.Join(at.nextWords, ",")}
 }
 
 // answer is the wrong-password answer, such as "303 to /error".
@@ -333,17 +334,25 @@ type attempt struct {
 	words   []string       // the page's limit words
 	formErr error          // why the page's form could not be sent
 	form    *formLogin
+	// The page a wrong login's redirect named, read as a browser does, and
+	// its limit words; nil when the answer was not such a redirect.
+	next      *egress.Answer
+	nextWords []string
 }
 
 // try sends one login for user and password. With --login-page it first
 // reads the page, with no cookie, then sends its form with the cookies the
 // page set, as a browser with no JavaScript does (ADR 0062). Each login
 // starts with no cookie, so a limit kept only in a cookie is not counted.
-func (l *Login) try(ctx context.Context, cfg egress.Config, user, password string, r *Result) (*attempt, error) {
+func (l *Login) try(ctx context.Context, cfg egress.Config, user, password string, wrong bool, r *Result) (*attempt, error) {
 	if !l.Page {
 		r.Requests++
 		a, err := send(ctx, cfg, http.MethodPost, l.Path, http.Header{"Content-Type": {l.ContentType()}}, l.renderFor(user, password), MaxAnswer)
-		return &attempt{a: a}, err
+		at := &attempt{a: a}
+		if err == nil && wrong {
+			err = l.follow(ctx, cfg, at, l.URL, l.Path, "", r)
+		}
+		return at, err
 	}
 	r.Requests++
 	pa, err := send(ctx, cfg, http.MethodGet, l.Path, http.Header{"Accept": {"text/html,application/xhtml+xml"}}, nil, MaxAnswer)
@@ -364,8 +373,73 @@ func (l *Login) try(ctx context.Context, cfg egress.Config, user, password strin
 		h.Set("Cookie", c)
 	}
 	r.Requests++
-	at.a, err = send(ctx, cfg, http.MethodPost, at.form.path, h, at.form.body, MaxAnswer)
+	if at.a, err = send(ctx, cfg, http.MethodPost, at.form.path, h, at.form.body, MaxAnswer); err == nil && wrong {
+		err = l.follow(ctx, cfg, at, at.form.url, at.form.path, h.Get("Cookie"), r)
+	}
 	return at, err
+}
+
+// follow reads the page that a wrong login's 301, 302 or 303 names, on the
+// target's origin, with the cookies the login sent and the cookies its
+// answer set, as a browser does. Some apps show their limit only there, in
+// a message carried by the session cookie, behind the same redirect as a
+// wrong password: Rails 8's generated login and Laravel Breeze's (measured,
+// ADR 0062 item 4). A 307 or 308 is not followed: a browser would send the
+// login again.
+func (l *Login) follow(ctx context.Context, cfg egress.Config, at *attempt, from, fromPath, sent string, r *Result) error {
+	a := at.a
+	loc := a.Header.Get("Location")
+	if l.target == nil || loc == "" || a.Status != http.StatusMovedPermanently && a.Status != http.StatusFound && a.Status != http.StatusSeeOther {
+		return nil
+	}
+	base, err := url.Parse(from)
+	if err != nil {
+		return nil
+	}
+	to, err := base.Parse(loc)
+	if err != nil {
+		return nil
+	}
+	to.Fragment, to.RawFragment = "", ""
+	u, query, err := target.OnOrigin(l.target, to.String(), "the login's redirect", true)
+	if err != nil {
+		return nil // not followed: SiegeKit sends requests only to the target
+	}
+	path := u.Path
+	if query != "" {
+		path += "?" + query
+	}
+	h := http.Header{"Accept": {"text/html,application/xhtml+xml"}}
+	if c := mergeCookies(sent, cookies(a.Header, l.target.Host, fromPath, path, now())); c != "" {
+		h.Set("Cookie", c)
+	}
+	r.Requests++
+	if at.next, err = send(ctx, cfg, http.MethodGet, path, h, nil, MaxAnswer); err == nil {
+		at.nextWords = ratelimit.LimitWords(at.next.Body)
+	}
+	return err
+}
+
+// mergeCookies joins two Cookie headers; a cookie in set replaces one of
+// the same name in sent, as a browser keeps the newer value.
+func mergeCookies(sent, set string) string {
+	var out []string
+	names := map[string]int{}
+	for _, h := range []string{sent, set} {
+		for kv := range strings.SplitSeq(h, "; ") {
+			if kv == "" {
+				continue
+			}
+			name, _, _ := strings.Cut(kv, "=")
+			if k, ok := names[name]; ok {
+				out[k] = kv
+				continue
+			}
+			names[name] = len(out)
+			out = append(out, kv)
+		}
+	}
+	return strings.Join(out, "; ")
 }
 
 // run sends the right-password login when right is set, then attempts
@@ -392,7 +466,7 @@ func run(ctx context.Context, cfg egress.Config, l *Login, attempts int, right s
 		return nil
 	}
 	var base *egress.Answer
-	var baseWords, pageWords []string
+	var baseWords, nextWords, pageWords []string
 	var rightShape shape
 	total := attempts
 	if right != "" {
@@ -408,7 +482,7 @@ func run(ctx context.Context, cfg egress.Config, l *Login, attempts int, right s
 		if !guard {
 			user, password = next(r.Attempts)
 		}
-		at, err := l.try(ctx, cfg, user, password, &r)
+		at, err := l.try(ctx, cfg, user, password, !guard, &r)
 		if err != nil {
 			if first {
 				return r, fmt.Errorf("the login %s did not answer: %w", l.noun(), err)
@@ -477,11 +551,23 @@ func run(ctx context.Context, cfg egress.Config, l *Login, attempts int, right s
 			continue
 		}
 		if base == nil {
-			base, baseWords, r.Baseline, r.Redirect = a, ratelimit.LimitWords(a.Body), a.Status, redirect(a)
-			r.normal = kindOf(a)
+			base, baseWords, nextWords, r.Baseline, r.Redirect = a, ratelimit.LimitWords(a.Body), at.nextWords, a.Status, redirect(a)
+			r.normal = kindOf(at)
 			if limited != nil && *r.normal == *limited && (normal == nil || *normal != *limited) {
-				r.Limited, r.Signal = true, fmt.Sprintf("the first login got the answer that showed login-throttle's limit (%s), so the limit holds for other names too", shapeOf(a))
-				r.limit = kindOf(a)
+				said := ""
+				if w := r.normal.next; w != "" {
+					said = fmt.Sprintf(", and the page it redirected to says %q", w)
+				}
+				r.Limited, r.Signal = true, fmt.Sprintf("the first login got the answer that showed login-throttle's limit (%s%s), so the limit holds for other names too", shapeOf(a), said)
+				r.limit = r.normal
+				return r, nil
+			}
+			// The page the first wrong login redirected to says what the
+			// login page does not: a limit already holding (perhaps from an
+			// earlier run), or a warning, either way no report of no limit.
+			if w := ratelimit.NewWord(at.nextWords, pageWords); at.next != nil && w != "" {
+				r.Limited, r.Signal = true, fmt.Sprintf("the page the first wrong login redirected to says %q, already at the first login (perhaps from an earlier run)", w)
+				r.limit = r.normal
 				return r, nil
 			}
 			if right != "" && shapeOf(a) == rightShape {
@@ -499,11 +585,13 @@ func run(ctx context.Context, cfg egress.Config, l *Login, attempts int, right s
 			r.Limited, r.Signal = true, fmt.Sprintf("redirected to %s instead of %s", orNone(redirect(a)), orNone(r.Redirect))
 		case ratelimit.NewWord(ratelimit.LimitWords(a.Body), baseWords) != "":
 			r.Limited, r.Signal = true, fmt.Sprintf("the answer says %q", ratelimit.NewWord(ratelimit.LimitWords(a.Body), baseWords))
+		case ratelimit.NewWord(at.nextWords, nextWords) != "":
+			r.Limited, r.Signal = true, fmt.Sprintf("the page it redirected to says %q", ratelimit.NewWord(at.nextWords, nextWords))
 		case a.Took >= 3*base.Took && a.Took >= time.Second:
 			r.Limited, r.Signal = true, fmt.Sprintf("answered in %s instead of %s", a.Took.Round(time.Millisecond), base.Took.Round(time.Millisecond))
 		}
 		if r.Limited {
-			r.limit = kindOf(a)
+			r.limit = kindOf(at)
 			return r, nil
 		}
 	}

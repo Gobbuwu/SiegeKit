@@ -329,7 +329,7 @@ func TestFormLogin(t *testing.T) {
 		t.Fatal(err)
 	}
 	r, err := Check(context.Background(), cfg, l, 5, right)
-	if err != nil || r.Limited || r.Attempts != 5 || r.Requests != 12 || r.Baseline != 303 || r.Redirect != "/error?code=invalid_credentials" ||
+	if err != nil || r.Limited || r.Attempts != 5 || r.Requests != 17 || r.Baseline != 303 || r.Redirect != "/error?code=invalid_credentials" ||
 		r.Right != "answered 303 to / setting the cookies sb-auth-token" || r.Form != `multipart/form-data, button "Log in"` || r.URL != tu.Origin()+"/login" {
 		t.Fatalf("%+v %v", r, err)
 	}
@@ -445,4 +445,85 @@ func FuzzReadPage(f *testing.F) {
 			t.Fatalf("form sent to %q (%s)", fl.url, fl.path)
 		}
 	})
+}
+
+// flashApp is a login like Rails 8's generated one and Laravel Breeze's
+// (measured 2026-11-23): a wrong login and a limited one get the same
+// redirect back to the login page, and only the message the session
+// cookie carries there, shown once, tells them apart. The limit counts
+// every login from the address, as Rails' rate_limit does.
+type flashApp struct {
+	mu     sync.Mutex
+	posts  int
+	limit  int
+	follow int
+}
+
+func (a *flashApp) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	switch {
+	case r.Method == http.MethodGet && r.URL.Path == "/session/new":
+		msg := ""
+		if c, err := r.Cookie("flash"); err == nil {
+			a.follow++
+			msg = map[string]string{"bad": "Try another email address or password.", "limit": "Try again later."}[c.Value]
+			http.SetCookie(w, &http.Cookie{Name: "flash", Path: "/", MaxAge: -1})
+		}
+		http.SetCookie(w, &http.Cookie{Name: "_app_session", Value: "s1", Path: "/"})
+		fmt.Fprintf(w, `<p>%s</p><form action="/session" method="post"><input type="hidden" name="authenticity_token" value="t1"><input name="email_address"><input type="password" name="password"><input type="submit" name="commit" value="Sign in"></form>`, msg)
+	case r.Method == http.MethodPost && r.URL.Path == "/session":
+		if c, err := r.Cookie("_app_session"); err != nil || c.Value != "s1" || r.FormValue("authenticity_token") != "t1" {
+			http.Error(w, "csrf", http.StatusUnprocessableEntity)
+			return
+		}
+		a.posts++
+		flash := "bad"
+		switch {
+		case a.limit > 0 && a.posts > a.limit:
+			flash = "limit"
+		case r.FormValue("password") == right:
+			http.Redirect(w, r, "/", http.StatusFound)
+			return
+		}
+		http.SetCookie(w, &http.Cookie{Name: "flash", Value: flash, Path: "/"})
+		http.Redirect(w, r, "http://"+r.Host+"/session/new", http.StatusFound)
+	default:
+		http.NotFound(w, r)
+	}
+}
+
+// Before ADR 0062's redirect reading, a limit shown only after the
+// redirect was a false "not limited" (Rails 8.1.4.1 and Laravel 12.73
+// with Breeze 2.4.2, measured 2026-11-23).
+func TestFormFlashLimit(t *testing.T) {
+	a := &flashApp{}
+	srv := httptest.NewServer(a)
+	t.Cleanup(srv.Close)
+	_, cfg := serveForm(t, &formApp{})
+	tu := mustTarget(t, srv.URL+"/")
+	cfg.Target = tu
+	l, err := ParsePage(tu.Origin()+"/session/new", "tester@shop.test", "email_address={user}&password={password}", tu)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r, err := Check(context.Background(), cfg, l, 5, right)
+	if err != nil || r.Limited || r.Requests != 2+3*5 || a.follow != 5 || r.Redirect != tu.Origin()+"/session/new" {
+		t.Fatalf("no limit: %+v %v, %d follows", r, err, a.follow)
+	}
+	a.posts, a.follow, a.limit = 0, 0, 4
+	r, err = Check(context.Background(), cfg, l, 8, right)
+	if err != nil || !r.Limited || r.Attempts != 4 || r.Signal != `the page it redirected to says "try again later"` || Findings(l, r, 8) != nil {
+		t.Fatalf("limit: %+v %v", r, err)
+	}
+	sr, err := Spray(context.Background(), cfg, l, 8, r)
+	if err != nil || !sr.Limited || sr.Attempts != 1 || !strings.Contains(sr.Signal, "the answer that showed login-throttle's limit") {
+		t.Fatalf("spray: %+v %v", sr, err)
+	}
+	// A limit that holds before the run, seen only after the redirect.
+	a.limit = 1 // every login from now on is limited, the right one too
+	r, err = Check(context.Background(), cfg, l, 8, right)
+	if err != nil || !r.Limited || r.Attempts != 1 || !strings.Contains(r.Signal, `redirected to says "try again later", already at the first login`) {
+		t.Fatalf("already limited: %+v %v", r, err)
+	}
 }
