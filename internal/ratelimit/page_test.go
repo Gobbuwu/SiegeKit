@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Gobbuwu/SiegeKit/internal/egress"
 	"github.com/Gobbuwu/SiegeKit/internal/findings"
@@ -367,8 +368,15 @@ func TestPageFindings(t *testing.T) {
 		{Reset, notLimited, "reset-not-limited", findings.Low, "CWE-799", "The answers do not show whether the app sent an email"},
 		{SignUp, notLimited, "signup-not-limited", findings.Low, "CWE-799", "up to 20 accounts were made, named siegekit-new-"},
 		{Code, Result{Requests: 20, Baseline: 401}, "code-not-limited", findings.Medium, "CWE-307", "20 wrong codes"},
-		{Code, Result{Requests: 1, Limited: true, Signal: "answered with a X-Ratelimit-Limit header, already at the first request", Limit: 100}, "code-limit-high", findings.Low, "CWE-307", "allows 100 requests per window, more than 10"},
-		{Code, Result{Requests: 16, Limited: true, Signal: "answered 429"}, "code-limit-high", findings.Low, "CWE-307", "it took 15 wrong codes before it answered 429"},
+		// Juice Shop (measured 2026-11-23): 100 per 300 s is 28,800 a day.
+		{Code, Result{Requests: 1, Limited: true, Signal: "answered with a X-Ratelimit-Limit header, already at the first request", Limit: 100, Window: 300 * time.Second}, "code-limit-high", findings.Low, "CWE-307", "allows 100 requests per 5m0s, so an attacker who has the password can make about 28800 wrong guesses a day"},
+		{Code, Result{Requests: 1, Limited: true, Signal: "x, already at the first request", Limit: 100, Window: 300 * time.Second}, "code-limit-high", findings.Low, "CWE-307", "about a 2.8% chance a day and 58% in 30 days"},
+		// 50 per window, the gap of a per-window threshold of 100.
+		{Code, Result{Requests: 1, Limited: true, Signal: "x", Limit: 50, Window: 300 * time.Second}, "code-limit-high", findings.Low, "CWE-307", "about 14400 wrong guesses a day"},
+		// No window: only more than 100 in one window.
+		{Code, Result{Requests: 1, Limited: true, Signal: "x", Limit: 101}, "code-limit-high", findings.Low, "CWE-307", "more than the 100 that NIST SP 800-63B-4"},
+		// 5 wrong codes, then a 60 s wait: 7,200 a day.
+		{Code, Result{Requests: 6, Limited: true, Signal: "answered 429", Window: time.Minute}, "code-limit-high", findings.Low, "CWE-307", "it answered 5 wrong codes before it answered 429 per 1m0s"},
 	} {
 		fs := Findings(mk(c.p), c.r, 20)
 		if len(fs) != 1 || fs[0].RuleID != c.rule || fs[0].Severity != c.sev || fs[0].CWEs[0] != c.cwe || fs[0].Location.URI != "http://localhost:3000/p" ||
@@ -381,7 +389,12 @@ func TestPageFindings(t *testing.T) {
 		r Result
 	}{
 		{Code, Result{Requests: 3, Limited: true, Signal: "answered 429"}},
-		{Code, Result{Requests: 1, Limited: true, Signal: "x", Limit: 10}},
+		{Code, Result{Requests: 16, Limited: true, Signal: "answered 429"}},
+		{Code, Result{Requests: 1, Limited: true, Signal: "x", Limit: 100}},
+		// 5 wrong codes per code, no window (Ory Kratos): no finding.
+		{Code, Result{Requests: 6, Limited: true, Signal: `the answer says "too often"`}},
+		// 100 a day is NIST's bound, not above it.
+		{Code, Result{Requests: 1, Limited: true, Signal: "x", Limit: 100, Window: 24 * time.Hour}},
 		{Code, Result{Requests: 1, Limited: true, Signal: "answered 429, already at the first request"}},
 		{Reset, Result{Requests: 1, Limited: true, Limit: 100}},
 		{Reset, Result{Requests: 19, Baseline: 200}},
@@ -437,4 +450,30 @@ func FuzzPagesFromHAR(f *testing.F) {
 			}
 		}
 	})
+}
+
+func TestWindow(t *testing.T) {
+	now := time.Date(2026, 11, 23, 2, 10, 13, 0, time.UTC)
+	for _, c := range []struct {
+		h    http.Header
+		want time.Duration
+	}{
+		// Juice Shop v20.4.0's 2FA page, measured 2026-11-23.
+		{http.Header{"X-Ratelimit-Limit": {"100"}, "X-Ratelimit-Reset": {"1795400114"}, "Date": {"Mon, 23 Nov 2026 02:10:13 GMT"}}, 301 * time.Second},
+		{http.Header{"X-Ratelimit-Reset": {"1795400114"}}, 301 * time.Second}, // from now
+		{http.Header{"X-Ratelimit-Reset": {"60"}}, time.Minute},
+		{http.Header{"Ratelimit-Policy": {"100;w=300"}, "Ratelimit-Reset": {"12"}}, 5 * time.Minute},
+		{http.Header{"Ratelimit-Reset": {"12"}}, 12 * time.Second},
+		{http.Header{"Ratelimit": {"limit=100, remaining=0, reset=50"}}, 50 * time.Second},
+		{http.Header{"Retry-After": {"120"}}, 2 * time.Minute},
+		{http.Header{"Retry-After": {"Mon, 23 Nov 2026 02:11:13 GMT"}}, time.Minute},
+		{http.Header{"X-Ratelimit-Limit": {"100"}}, 0},
+		{http.Header{"Retry-After": {"soon"}}, 0},
+		{http.Header{"X-Ratelimit-Reset": {"1000000001"}}, 0}, // in the past
+		{http.Header{"Ratelimit-Reset": {"-5"}}, 0},
+	} {
+		if got := Window(c.h, now); got != c.want {
+			t.Errorf("Window(%v) = %s, want %s", c.h, got, c.want)
+		}
+	}
 }

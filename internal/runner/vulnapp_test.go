@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 )
 
 // vulnAppSpec is the OpenAPI spec of the app's small JSON API, served at
@@ -413,20 +414,23 @@ func vulnApp() http.Handler {
 		}
 		w.WriteHeader(http.StatusCreated)
 	})
-	// Second-factor code pages: one with no limit at all (CWE-307), one
-	// whose header allows 5 wrong codes (not an issue), and one whose
-	// header allows 100 (more than 10: a planted low issue).
-	code := func(limit string) http.HandlerFunc {
+	// Second-factor code pages, with express-rate-limit's headers (a
+	// limit and the Unix time it resets): one with no limit at all
+	// (CWE-307), one that allows 5 wrong codes a day (not an issue), and
+	// one that allows 100 every 5 minutes like Juice Shop, 28,800 a day,
+	// more than NIST's 100 (a planted low issue).
+	code := func(limit string, window time.Duration) http.HandlerFunc {
 		return func(w http.ResponseWriter, r *http.Request) {
 			if limit != "" {
 				w.Header().Set("X-RateLimit-Limit", limit)
+				w.Header().Set("X-RateLimit-Reset", strconv.FormatInt(time.Now().Add(window).Unix(), 10))
 			}
 			http.Error(w, "wrong code", http.StatusUnauthorized)
 		}
 	}
-	mux.HandleFunc("POST /account/2fa", code(""))
-	mux.HandleFunc("POST /account/2fa-limited", code("5"))
-	mux.HandleFunc("POST /account/2fa-loose", code("100"))
+	mux.HandleFunc("POST /account/2fa", code("", 0))
+	mux.HandleFunc("POST /account/2fa-limited", code("5", 24*time.Hour))
+	mux.HandleFunc("POST /account/2fa-loose", code("100", 5*time.Minute))
 	return mux
 }
 
@@ -529,7 +533,7 @@ var vulnAppIssues = map[string]map[string]string{
 	},
 	"code-limit": {
 		"code-not-limited /account/2fa":      "wrong second-factor codes are not limited at POST /account/2fa",
-		"code-limit-high /account/2fa-loose": "POST /account/2fa-loose allows 100 wrong codes per window",
+		"code-limit-high /account/2fa-loose": "POST /account/2fa-loose allows 100 wrong codes every 5 minutes, 28,800 a day",
 	},
 	"login-spray": {
 		"spray-not-limited /account/sign-in-limited": "POST /account/sign-in-limited locks one account but not one password tried on many",

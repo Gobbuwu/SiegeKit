@@ -5,10 +5,12 @@ import (
 	"crypto/rand"
 	"encoding/json"
 	"fmt"
+	"math"
 	"net/http"
 	"net/url"
 	"strconv"
 	"strings"
+	"time"
 	"unicode"
 
 	"github.com/Gobbuwu/SiegeKit/internal/findings"
@@ -81,10 +83,11 @@ const (
 	newPH   = "{new}"
 )
 
-// MaxCodeLimit is the most wrong codes per window a code page may allow
-// without a finding (design Q3, owner 2026-11-21). It is a choice, not a
-// measurement.
-const MaxCodeLimit = 10
+// NISTMaxFailures is the most failed attempts in a row that NIST SP
+// 800-63B-4 section 3.2.2 allows before an authenticator is disabled ("no
+// more than 100"). A code page that allows more wrong codes a day gets
+// code-limit-high (ADR 0055 item 5, owner 2026-11-23).
+const NISTMaxFailures = 100
 
 // newDomain is the domain of the email addresses SiegeKit invents for a
 // recorded sign-up: example.com is reserved (RFC 2606) and accepts no mail
@@ -192,6 +195,67 @@ func LimitNumber(h http.Header) int {
 		}
 		if n, err := strconv.Atoi(v); err == nil && n > 0 {
 			return n
+		}
+	}
+	return 0
+}
+
+// Window reads how long a limit lasts from an answer's headers, 0 when
+// they do not say: the w of RateLimit-Policy ("100;w=300"), the reset of
+// RateLimit-Reset or of a RateLimit header ("limit=100, reset=50"),
+// X-RateLimit-Reset (seconds, or a Unix time when above 10^9, as
+// express-rate-limit sends it), or Retry-After (seconds or a date). A reset
+// time is the window when the first request starts it, as with
+// express-rate-limit (Juice Shop: 300 s, measured 2026-11-23), and shorter
+// otherwise. Unix times and dates count from the answer's Date header, or
+// from now.
+func Window(h http.Header, now time.Time) time.Duration {
+	if d, err := http.ParseTime(h.Get("Date")); err == nil {
+		now = d
+	}
+	param := func(v, name string) string {
+		for _, part := range strings.FieldsFunc(v, func(r rune) bool { return r == ';' || r == ',' }) {
+			k, val, ok := strings.Cut(strings.TrimSpace(part), "=")
+			if ok && strings.EqualFold(k, name) {
+				return val
+			}
+		}
+		return ""
+	}
+	secs := func(v string) int64 {
+		n, err := strconv.ParseInt(strings.TrimSpace(v), 10, 64)
+		if err != nil || n <= 0 {
+			return 0
+		}
+		return n
+	}
+	dur := func(n int64) time.Duration {
+		if n <= 0 || n > 366*24*3600 {
+			return 0
+		}
+		return time.Duration(n) * time.Second
+	}
+	if n := secs(param(h.Get("Ratelimit-Policy"), "w")); n > 0 {
+		return dur(n)
+	}
+	if n := secs(h.Get("Ratelimit-Reset")); n > 0 {
+		return dur(n)
+	}
+	if n := secs(param(h.Get("Ratelimit"), "reset")); n > 0 {
+		return dur(n)
+	}
+	if n := secs(h.Get("X-Ratelimit-Reset")); n > 0 {
+		if n > 1e9 {
+			n -= now.Unix()
+		}
+		return dur(n)
+	}
+	if v := h.Get("Retry-After"); v != "" {
+		if n := secs(v); n > 0 {
+			return dur(n)
+		}
+		if t, err := http.ParseTime(v); err == nil {
+			return dur(int64(t.Sub(now).Round(time.Second) / time.Second))
 		}
 	}
 	return 0
@@ -554,6 +618,35 @@ func encodeJSON(v any) ([]byte, error) {
 	return bytes.TrimSpace(b.Bytes()), nil
 }
 
+// looseCodeLimit says why a code page's limit lets an attacker make more
+// than NISTMaxFailures wrong guesses a day, or "". The wrong codes allowed
+// per window are the limit header's number, or else the wrong codes
+// answered before the limit; a day holds 86400 s / window windows. The
+// odds are RFC 4226 section 6's sv/10^Digit with s = 1 and 6 digits, as
+// 1-(1-10^-6)^v.
+func looseCodeLimit(r Result) string {
+	allowed, how := r.Limit, fmt.Sprintf("its rate-limit header allows %d requests", r.Limit)
+	if allowed == 0 && !strings.HasSuffix(r.Signal, "first request") {
+		allowed, how = r.Requests-1, fmt.Sprintf("it answered %d wrong codes before it %s", r.Requests-1, r.Signal)
+	}
+	if allowed <= 0 {
+		return ""
+	}
+	const nist = "NIST SP 800-63B-4 section 3.2.2 allows no more than 100 failed attempts in a row before the factor is disabled"
+	if r.Window <= 0 {
+		if allowed <= NISTMaxFailures {
+			return ""
+		}
+		return fmt.Sprintf("This verification-code page is limited, but %s per window, more than the 100 that %s; the headers do not say how long a window lasts, so SiegeKit cannot say how many guesses a day that gives. Allow a few wrong codes, then ask for a new code or lock the factor.", how, nist)
+	}
+	perDay := float64(allowed) * (24 * time.Hour).Seconds() / r.Window.Seconds()
+	if perDay <= NISTMaxFailures {
+		return ""
+	}
+	odds := func(v float64) float64 { return 100 * -math.Expm1(v*math.Log1p(-1e-6)) }
+	return fmt.Sprintf("This verification-code page is limited, but %s per %s, so an attacker who has the password can make about %.0f wrong guesses a day, while %s. For a 6-digit code that is about a %.2g%% chance a day and %.2g%% in 30 days (RFC 4226 section 6: guesses / 10^digits). Allow a few wrong codes, then ask for a new code or lock the factor.", how, r.Window, perDay, nist, odds(perDay), odds(30*perDay))
+}
+
 func nothingToChange(p Page) string {
 	switch p {
 	case Code:
@@ -604,17 +697,13 @@ func pageFindings(e *Endpoint, r Result, planned int) []findings.Finding {
 		return []findings.Finding{f}
 	}
 	if r.Limited {
-		allowed := r.Limit
-		how := fmt.Sprintf("its rate-limit header allows %d requests per window", r.Limit)
-		if allowed == 0 && r.Requests-1 > MaxCodeLimit && !strings.HasSuffix(r.Signal, "first request") {
-			allowed, how = r.Requests-1, fmt.Sprintf("it took %d wrong codes before it %s", r.Requests-1, r.Signal)
-		}
-		if e.Page != Code || allowed <= MaxCodeLimit {
+		if e.Page != Code {
 			return nil
 		}
-		return mk("code-limit-high", "Many wrong codes are allowed before a limit",
-			fmt.Sprintf("This verification-code page is limited, but %s, more than %d. Six-digit codes have 1,000,000 values, so each window gives an attacker that many more guesses. SiegeKit did not see the window's length, so it cannot say how long guessing would take. Allow at most a few wrong codes per login, then lock the login or ask for a new code.", how, MaxCodeLimit),
-			findings.Low, "CWE-307")
+		if msg := looseCodeLimit(r); msg != "" {
+			return mk("code-limit-high", "Many wrong codes are allowed before a limit", msg, findings.Low, "CWE-307")
+		}
+		return nil
 	}
 	if r.Requests < planned || r.Changed > 0 {
 		return nil

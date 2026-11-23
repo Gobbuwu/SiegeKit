@@ -112,6 +112,10 @@ type Result struct {
 	// Limit is the number a RateLimit-Limit or X-RateLimit-Limit header
 	// gave, 0 when none did (ADR 0055 item 5).
 	Limit int
+	// Window is how long the limit lasts by the limit answer's headers
+	// (RateLimit-Policy's w, a reset time or Retry-After), 0 when they do
+	// not say.
+	Window time.Duration
 	// Accepted counts answers below 400: on a sign-up page each may have
 	// made an account, on a reset page each may have sent an email.
 	Accepted int
@@ -121,8 +125,13 @@ type Result struct {
 func (r Result) Summary(planned int) string {
 	if r.Limited {
 		s := fmt.Sprintf("limit seen after %d of %d requests: %s", r.Requests, planned, r.Signal)
-		if r.Limit > 0 {
+		switch {
+		case r.Limit > 0 && r.Window > 0:
+			s += fmt.Sprintf(" (limit %d per %s)", r.Limit, r.Window)
+		case r.Limit > 0:
 			s += fmt.Sprintf(" (limit %d)", r.Limit)
+		case r.Window > 0:
+			s += fmt.Sprintf(" (for %s)", r.Window)
 		}
 		return s
 	}
@@ -191,7 +200,7 @@ func Check(ctx context.Context, cfg egress.Config, e *Endpoint, n int) (Result, 
 			r.Accepted++
 		}
 		if s := Signal(a.Status, a.Header); s != "" {
-			r.Limited, r.Signal, r.Limit = true, s, LimitNumber(a.Header)
+			r.Limited, r.Signal, r.Limit, r.Window = true, s, LimitNumber(a.Header), Window(a.Header, now())
 			if i == 0 {
 				r.Signal += ", already at the first request"
 			}
@@ -202,7 +211,7 @@ func Check(ctx context.Context, cfg egress.Config, e *Endpoint, n int) (Result, 
 			// Kratos: 400 "The request was submitted too often" after 5
 			// wrong codes), as login-throttle reads them.
 			if w := NewWord(LimitWords(a.Body), baseWords); w != "" {
-				r.Limited, r.Signal = true, fmt.Sprintf("the answer says %q", w)
+				r.Limited, r.Signal, r.Window = true, fmt.Sprintf("the answer says %q", w), Window(a.Header, now())
 				return r, nil
 			}
 		}
