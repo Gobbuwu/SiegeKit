@@ -161,7 +161,7 @@ func checkUserBody(user, body string) error {
 
 // PasswordEnv holds the test account's right password: one login with it
 // shows that the check's logins reach the app's login code (ADR 0062).
-const PasswordEnv = "SIEGEKIT_LOGIN_PASSWORD"
+const PasswordEnv = "SIEGEKIT_LOGIN_PASSWORD" // #nosec G101 -- the name of an environment variable, not a password
 
 // maxPassword caps PasswordEnv.
 const maxPassword = 1024

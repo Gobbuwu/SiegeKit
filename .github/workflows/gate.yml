@@ -266,7 +266,10 @@ jobs:
           chmod +x "$RUNNER_TEMP/gate-scan.sh"
           SIEGEKIT_SESSION_B="$(cat "$RUNNER_TEMP/session-b")"
           SIEGEKIT_SESSION_C="$(cat "$RUNNER_TEMP/session-c")"
-          SIEGEKIT_LOGIN_PASSWORD=ncc-1701
+          # jim's password, read from Juice Shop's own seed data so that
+          # no password is written in this repository (ADR 0062).
+          SIEGEKIT_LOGIN_PASSWORD="$(docker cp juice-shop:/juice-shop/data/static/users.yml - | tar -xO | sed -n "/^ *email: jim$/{n;s/^ *password: '\(.*\)'$/\1/p;q}")"
+          test -n "$SIEGEKIT_LOGIN_PASSWORD"
           export SIEGEKIT_SESSION_B SIEGEKIT_SESSION_C SIEGEKIT_LOGIN_PASSWORD
           set +e
           printf 'test accounts\n' | script -qec "$RUNNER_TEMP/gate-scan.sh" "$RUNNER_TEMP/scan.log"

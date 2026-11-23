@@ -87,7 +87,7 @@ func TestFormNextJS(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want = []string{"$ACTION_REF_1=", `$ACTION_1:0={"id":"60df375f7767b6d2657ac67c5bf0468db77c036ad2","bound":"$@1"}`, "$ACTION_1:1=[null]", "$ACTION_KEY=k1d9d0146a2efa55bcf671ea1b28919fd", "email=a@b.test", "password=pw&x=1"}
+	want = []string{"$ACTION_REF_1=", `$ACTION_1:0={"id":"60df375f7767b6d2657ac67c5bf0468db77c036ad2","bound":"$@1"}`, "$ACTION_1:1=[null]", "$ACTION_KEY=k1d9d0146a2efa55bcf671ea1b28919fd", "email=a@b.test", "password=pw&x=1"} // gitleaks:allow (the action key of a page Next.js rendered for the test, not a secret)
 	if got := entries(t, fl); !slices.Equal(got, want) || fl.path != "/login2" {
 		t.Errorf("%v %+v", got, fl)
 	}
