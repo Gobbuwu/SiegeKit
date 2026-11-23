@@ -6,7 +6,7 @@ How SiegeKit's planned checks map to four widely used lists. "Auto" means a plan
 
 | Item | Coverage | How |
 | --- | --- | --- |
-| A01 Broken Access Control | Partial | `access-control`: a browser recording replayed as a second account and with no login (M2.7a, [ADR 0035](adr/0035-access-control-replay.md)); `access-control-write`: its writes replayed the same way on local targets ([ADR 0049](adr/0049-write-replay.md)); `backend-live`: Supabase tables and Realtime Database paths readable with the app's public key (M2.7c, [ADR 0037](adr/0037-backend-live-check.md)); see [coverage](coverage.md) for what it misses |
+| A01 Broken Access Control | Partial | `access-control`: a browser recording replayed as a second account and with no login (M2.7a, [ADR 0035](adr/0035-access-control-replay.md)); `access-control-write`: its writes replayed the same way on local targets ([ADR 0049](adr/0049-write-replay.md)); `backend-live`: Supabase tables and Realtime Database paths readable with the app's public key (M2.7c, [ADR 0037](adr/0037-backend-live-check.md)); `storage-write`: Firebase and Supabase Storage buckets anyone can upload to, on local targets ([ADR 0058](adr/0058-storage-write-test.md)); see [coverage](coverage.md) for what it misses |
 | A02 Security Misconfiguration | Auto | Checkov (IaC); ZAP, Nuclei (headers, CORS, exposed files); backend-rules checks (ADR 0011) |
 | A03 Software Supply Chain Failures | Auto | OSV-Scanner (whether it flags known malicious packages is to be confirmed in M2, where it was moved), Grype, Trivy, Syft SBOM |
 | A04 Cryptographic Failures | Partial | Opengrep weak-crypto rules; ZAP and Nuclei TLS and cookie checks; offline hash audit (M3) |
@@ -39,7 +39,7 @@ How SiegeKit's planned checks map to four widely used lists. "Auto" means a plan
 | 79 XSS, 89 SQL injection, 78/77 command injection, 94 code injection, 22 path traversal, 918 SSRF, 502 deserialization, 20 input validation | Auto | SAST (Opengrep, Bandit, gosec) and DAST (ZAP, Nuclei, sqlmap) |
 | 352 CSRF | Auto | ZAP |
 | 434 Unrestricted file upload | Partial | Opengrep rules; ZAP upload checks where forms are found |
-| 862, 863, 284, 639 authorization; 306 missing authentication | Partial | Authorization differential test and unauthenticated route check (ADR 0011); `backend-live` for Supabase tables and Realtime Database paths (ADR 0037) |
+| 862, 863, 284, 639 authorization; 306 missing authentication | Partial | Authorization differential test and unauthenticated route check (ADR 0011); `backend-live` for Supabase tables and Realtime Database paths (ADR 0037); `storage-write` for storage buckets anyone can upload to (ADR 0058) |
 | 200 Sensitive information exposure | Auto | Secrets scanning in code and git history (M1) and served content (M2); container images not scheduled; ZAP |
 | 770 No resource limits | Partial | `rate-limit` (`rate-not-limited`, ADR 0011, 0036) |
 | 799 Improper control of interaction frequency | Partial | `reset-limit` (`reset-not-limited`), `signup-limit` (`signup-not-limited`), local targets (ADR 0055) |

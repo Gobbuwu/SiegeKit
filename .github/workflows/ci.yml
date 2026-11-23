@@ -114,6 +114,9 @@ jobs:
           go test -run='^$' -fuzz=FuzzAddresses -fuzztime=30s ./internal/mailcatcher
           go test -run='^$' -fuzz=FuzzParse -fuzztime=30s ./internal/backend
           go test -run='^$' -fuzz=FuzzReadScripts -fuzztime=30s ./internal/backend
+          go test -run='^$' -fuzz=FuzzParseStorage -fuzztime=30s ./internal/backend
+          go test -run='^$' -fuzz=FuzzReadStorageScripts -fuzztime=30s ./internal/backend
+          go test -run='^$' -fuzz=FuzzStorageRuleFolders -fuzztime=30s ./internal/checks
       - name: Staticcheck
         if: matrix.engine == 'podman'
         run: go run honnef.co/go/tools/cmd/staticcheck@${STATICCHECK_VERSION} ./...

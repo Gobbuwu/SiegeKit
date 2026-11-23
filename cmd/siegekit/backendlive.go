@@ -31,30 +31,47 @@ type backendPlan struct {
 	public bool
 }
 
-// planBackend resolves the backend once and applies the address rules: a
-// backend on this machine follows the local target rules; any other needs
-// its host typed (asked later) and named in the app's scripts. It returns
-// the reason the check cannot run, if any.
+// planBackend resolves the backend once and applies the address rules
+// (planHost).
 func planBackend(ctx context.Context, b *backend.Backend, mode target.Mode) (*backendPlan, string) {
-	addrs, err := target.Resolve(ctx, resolver, b.URL)
+	h, reason := planHost(ctx, b.URL, b.String(), "backend", mode)
+	if h == nil {
+		return nil, reason
+	}
+	return &backendPlan{b: b, addrs: h.addrs, remote: h.remote, public: h.public}, ""
+}
+
+// hostPlan is a backend or storage host that passed the address rules.
+type hostPlan struct {
+	addrs          []netip.Addr
+	remote, public bool
+}
+
+// planHost resolves a host other than the target once and applies the
+// address rules (ADR 0037 item 3): a host on this machine follows the
+// local target rules; any other needs its name typed (asked later) and
+// named in the app's scripts. It returns the reason the check cannot run,
+// if any. what is "backend" or "storage", for messages.
+func planHost(ctx context.Context, u *target.URL, label, what string, mode target.Mode) (*hostPlan, string) {
+	addrs, err := target.Resolve(ctx, resolver, u)
 	if err != nil {
-		return nil, fmt.Sprintf("the backend %s could not be looked up: %v", b, err)
+		return nil, fmt.Sprintf("the %s %s could not be looked up: %v", what, label, err)
 	}
 	by := map[target.Class][]string{}
 	for _, a := range addrs {
 		c := target.Classify(a)
 		by[c] = append(by[c], a.String())
 	}
-	p := &backendPlan{b: b, addrs: addrs}
+	p := &hostPlan{addrs: addrs}
 	switch {
 	case len(by[target.Blocked]) > 0:
-		return nil, fmt.Sprintf("the backend %s resolves to %s, a range SiegeKit never tests", b, strings.Join(by[target.Blocked], ", "))
+		return nil, fmt.Sprintf("the %s %s resolves to %s, a range SiegeKit never tests", what, label, strings.Join(by[target.Blocked], ", "))
 	case len(by[target.Public]) > 0 && len(by[target.Public]) < len(addrs):
-		return nil, fmt.Sprintf("the backend %s resolves to both public and non-public addresses (%s); SiegeKit refuses names like that", b, joinStrings(addrs))
+		return nil, fmt.Sprintf("the %s %s resolves to both public and non-public addresses (%s); SiegeKit refuses names like that", what, label, joinStrings(addrs))
 	case len(by[target.Public]) > 0:
 		p.remote, p.public = true, true
 	case mode == target.Deployed:
-		return nil, fmt.Sprintf("the backend %s is not a public address; with a deployed target only a hosted backend is tested", b)
+		return nil, fmt.Sprintf("the %s %s is not a public address; with a deployed target only a hosted %s is tested", what, label, what)
 	case len(by[target.Private]) > 0:
 		p.remote = true
 	}

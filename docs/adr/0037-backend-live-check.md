@@ -3,7 +3,7 @@
 - Status: Accepted
 - Date: 2026-11-20
 - Amends: [0011](0011-app-logic-and-ai-checks.md) item 3 (live part: which targets, how the backend is confirmed, what is read)
-- Amended by: [0044](0044-typed-confirmations-limit.md) (what the typed confirmation can stop), [0053](0053-routes-from-server-code.md) (on local targets `--source` also gives the route sweep the routes of the server code)
+- Amended by: [0044](0044-typed-confirmations-limit.md) (what the typed confirmation can stop), [0053](0053-routes-from-server-code.md) (on local targets `--source` also gives the route sweep the routes of the server code), [0058](0058-storage-write-test.md) (Firebase and Supabase Storage are tested live, with writes, by `storage-write`)
 
 ## Context
 

@@ -103,6 +103,7 @@ type urlScan struct {
 	pageFlags      map[ratelimit.Page]*pageFlag // --reset-url and the like (ADR 0055)
 	mailCatcher    string                       // --mail-catcher (ADR 0056)
 	backendURL     string                       // --backend-url (ADR 0037)
+	storageURL     string                       // --storage-url (ADR 0058)
 	source         string                       // --source: the app's repository (ADR 0037)
 
 	// Read from --har, SIEGEKIT_SESSION_B and SIEGEKIT_SESSION_C before
@@ -122,6 +123,7 @@ type urlScan struct {
 	catcher    *mailcatcher.Catcher
 	// Read from --backend-url and --source before any request.
 	backend *backend.Backend
+	storage *backend.Storage
 	repo    *checks.Source
 	// Read from --source on local targets: the routes of the app's
 	// server code, for the route sweep (ADR 0053).
@@ -289,6 +291,11 @@ func scanURL(raw string, o urlScan, stdout, stderr io.Writer) int {
 	// So are the backend URL and the repository (ADR 0037).
 	if o.backendURL != "" {
 		if o.backend, err = backend.Parse(o.backendURL); err != nil {
+			return refuse("%v", err)
+		}
+	}
+	if o.storageURL != "" {
+		if o.storage, err = backend.ParseStorage(o.storageURL); err != nil {
 			return refuse("%v", err)
 		}
 	}
@@ -517,6 +524,7 @@ func runURL(ctx context.Context, u *target.URL, addrs []netip.Addr, mode target.
 		{ID: served.ID, Name: served.Name, Family: served.Family, Targets: []string{"url"}},
 		{ID: publicmaps.ID, Name: publicmaps.Name, Family: publicmaps.Family, Targets: []string{"url"}},
 		{ID: backend.ID, Name: backend.Name, Family: backend.Family, Targets: []string{"url"}},
+		{ID: backend.StorageID, Name: backend.StorageName, Family: backend.StorageFamily, Targets: []string{"url"}},
 		{ID: authz.ID, Name: authz.Name, Family: authz.Family, Targets: []string{"url"}},
 		{ID: authz.WriteID, Name: authz.WriteName, Family: authz.Family, Targets: []string{"url"}},
 	}, "url", o.only, o.skip)
@@ -529,7 +537,7 @@ func runURL(ctx context.Context, u *target.URL, addrs []netip.Addr, mode target.
 	loginSelected, servedSelected, authzSelected := ownSelected(login.ID), ownSelected(served.ID), ownSelected(authz.ID)
 	writeSelected := ownSelected(authz.WriteID)
 	rateSelected, backendSelected, mapsSelected := ownSelected(ratelimit.ID), ownSelected(backend.ID), ownSelected(publicmaps.ID)
-	spraySelected := ownSelected(login.SprayID)
+	spraySelected, storageSelected := ownSelected(login.SprayID), ownSelected(backend.StorageID)
 	pageSelected := map[ratelimit.Page]bool{}
 	for _, p := range ratelimit.Pages {
 		pageSelected[p] = ownSelected(p.ID())
@@ -544,7 +552,7 @@ func runURL(ctx context.Context, u *target.URL, addrs []netip.Addr, mode target.
 		}
 		gitleaks = all[i]
 	}
-	for _, id := range []string{login.ID, login.SprayID, ratelimit.ID, ratelimit.ResetID, ratelimit.SignUpID, ratelimit.CodeID, authz.WriteID} {
+	for _, id := range []string{login.ID, login.SprayID, ratelimit.ID, ratelimit.ResetID, ratelimit.SignUpID, ratelimit.CodeID, authz.WriteID, backend.StorageID} {
 		if ownSelected(id) && runner.ProfileSkip(true, o.profile) != "" && slices.Contains(o.only, id) {
 			return fail(fmt.Errorf("--only names %s, which --profile %s does not run", id, o.profile))
 		}
@@ -694,6 +702,29 @@ func runURL(ctx context.Context, u *target.URL, addrs []netip.Addr, mode target.
 			bp = p
 		}
 	}
+	// The storage write test uploads files: local targets only (the
+	// --deployed refusal is in scan.go), off unless asked for, and left out
+	// of --profile quick (ADR 0058 items 1 and 2).
+	var sp *storagePlan
+	if storageSelected {
+		switch {
+		case runner.ProfileSkip(true, o.profile) != "":
+			unavailable[backend.StorageID] = runner.Skip(report.CauseProfile, runner.ProfileSkip(true, o.profile))
+		case o.storage == nil:
+			unavailable[backend.StorageID] = runner.Skip(report.CauseNoInput, "off unless asked for, because it uploads files: pass --storage-url (the Supabase project URL, or https://firebasestorage.googleapis.com or a local emulator for Firebase) to test whether anyone can upload to the app's storage buckets")
+		case hostOS != "linux":
+			unavailable[backend.StorageID] = runner.Fail(report.CausePlatform, "active tests run only on Linux for now (ADR 0018)")
+		default:
+			rctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+			h, reason := planHost(rctx, o.storage.URL, o.storage.URL.Origin(), "storage", mode)
+			cancel()
+			if reason != "" {
+				unavailable[backend.StorageID] = runner.Fail("", reason)
+			} else {
+				sp = &storagePlan{s: o.storage, host: h}
+			}
+		}
+	}
 	if authzSelected {
 		switch {
 		case o.harRequests == nil:
@@ -821,6 +852,15 @@ func runURL(ctx context.Context, u *target.URL, addrs []netip.Addr, mode target.
 				backend.ID, version, o.backend, joinList(bp.addrs), how, from)
 		}
 	}
+	if storageSelected {
+		if r, ok := unavailable[backend.StorageID]; ok {
+			fmt.Fprintf(stdout, "  %-20s not run - %s\n", backend.StorageID, r.Reason)
+		} else {
+			planned = append(planned, backend.StorageID)
+			fmt.Fprintf(stdout, "  %-20s siegekit %s: upload one %d-byte text file to the root of each bucket and to folders named in the app's scripts at %s (%s), read it back and delete it, at most %d files; lists them and asks before the first upload\n",
+				backend.StorageID, version, len(backend.TestContent), o.storage.URL.Origin(), joinList(sp.host.addrs), backend.MaxFiles)
+		}
+	}
 	if authzSelected {
 		if r, ok := unavailable[authz.ID]; ok {
 			fmt.Fprintf(stdout, "  %-20s not run - %s\n", authz.ID, r.Reason)
@@ -862,6 +902,9 @@ func runURL(ctx context.Context, u *target.URL, addrs []netip.Addr, mode target.
 	reach := strings.TrimSuffix(u.String(), u.Path)
 	if slices.Contains(planned, backend.ID) {
 		reach += " (and " + o.backend.URL.Origin() + " for backend-live)"
+	}
+	if slices.Contains(planned, backend.StorageID) {
+		reach += " (and " + o.storage.URL.Origin() + " for storage-write)"
 	}
 	fmt.Fprintf(stdout, "Limits: at most %.0f requests per second, stop after %d server errors in a row; only %s is reachable, and every request is labeled \"SiegeKit/%s\".\n",
 		limits.Rate, limits.MaxServerErrors, reach, version)
@@ -1250,9 +1293,11 @@ func runURL(ctx context.Context, u *target.URL, addrs []netip.Addr, mode target.
 	_, servedOff := unavailable[served.ID]
 	_, backendOff := unavailable[backend.ID]
 	_, mapsOff := unavailable[publicmaps.ID]
+	_, storageOff := unavailable[backend.StorageID]
 	servedRuns, backendRuns, mapsRuns := servedSelected && !servedOff, backendSelected && !backendOff, mapsSelected && !mapsOff
+	storageRuns := storageSelected && !storageOff
 	var col *collected
-	if servedRuns || backendRuns || mapsRuns {
+	if servedRuns || backendRuns || mapsRuns || storageRuns {
 		col = collect(ctx, egress.Config{Target: u, Addrs: addrs, VerifyTLS: o.deployed, Version: version, ReadOnly: true}, limits.Rate)
 		defer col.cleanup()
 		if ctx.Err() != nil {
@@ -1297,6 +1342,30 @@ func runURL(ctx context.Context, u *target.URL, addrs []netip.Addr, mode target.
 			}
 		}
 		backendResult = &pr
+	}
+	// After backend-live, so a Supabase host typed there is not asked again.
+	var storageResult *report.PluginResult
+	var storageFindings []findings.Finding
+	if storageSelected {
+		pr := report.PluginResult{ID: backend.StorageID, Family: backend.StorageFamily, Tool: "siegekit", Version: version}
+		if r, ok := unavailable[backend.StorageID]; ok {
+			pr.Status, pr.Cause, pr.Reason = r.Status, r.Cause, r.Reason
+		} else {
+			extra := 0
+			if !collectCounted {
+				extra = col.res.Requests
+			}
+			collectCounted = true
+			var interrupted bool
+			pr, storageFindings, interrupted = o.runStorage(ctx, storageRun{
+				plan: sp, col: col, repo: o.repo, backendConfirmed: backendConfirmed,
+				auditLog: filepath.Join(dir, "audit.log"), mode: string(mode), env: env.String(), extraRequests: extra,
+			}, stdout)
+			if interrupted || ctx.Err() != nil {
+				return fail(errors.New("interrupted; no report written"))
+			}
+		}
+		storageResult = &pr
 	}
 	var mapsResult *report.PluginResult
 	var mapsFindings []findings.Finding
@@ -1411,7 +1480,7 @@ func runURL(ctx context.Context, u *target.URL, addrs []netip.Addr, mode target.
 		return fail(err)
 	}
 	var first []report.PluginResult
-	for _, pr := range slices.Concat([]*report.PluginResult{loginResult, sprayResult, rateResult}, pageResults, []*report.PluginResult{servedResult, backendResult, mapsResult, authzResult, writeResult}) {
+	for _, pr := range slices.Concat([]*report.PluginResult{loginResult, sprayResult, rateResult}, pageResults, []*report.PluginResult{servedResult, backendResult, storageResult, mapsResult, authzResult, writeResult}) {
 		if pr != nil {
 			first = append(first, *pr)
 		}
@@ -1419,7 +1488,7 @@ func runURL(ctx context.Context, u *target.URL, addrs []netip.Addr, mode target.
 	if len(first) > 0 {
 		run.Started = started
 		run.Plugins = append(first, run.Plugins...)
-		if run.Findings = findings.Dedupe(slices.Concat(loginFindings, sprayFindings, rateFindings, pageFindings, servedFindings, backendFindings, mapsFindings, authzFindings, writeFindings, run.Findings)); run.Findings == nil {
+		if run.Findings = findings.Dedupe(slices.Concat(loginFindings, sprayFindings, rateFindings, pageFindings, servedFindings, backendFindings, storageFindings, mapsFindings, authzFindings, writeFindings, run.Findings)); run.Findings == nil {
 			run.Findings = []findings.Finding{}
 		}
 	}
