@@ -5,6 +5,8 @@ name: Real-repo gate
 # M2.4b (ADR 0023): a URL scan of OWASP Juice Shop, a known vulnerable app.
 # ADR 0054: write replay (access-control-write) on Juice Shop and Gitea from
 # Chromium recordings.
+# ADR 0056: emails counted at Mailpit on Gitea. ADR 0057: reset, sign-up and
+# code pages on Juice Shop from a Chromium recording.
 on:
   workflow_dispatch:
   schedule:
@@ -541,3 +543,104 @@ jobs:
         run: |
           $APP_ENGINE logs app 2>&1 | tail -50
           $APP_ENGINE logs mailpit 2>&1 | tail -20
+
+  pages:
+    # ADR 0057: reset-limit, signup-limit and code-limit (ADR 0055) on Juice
+    # Shop, with the pages found in a Chromium recording as a person would
+    # make one: a sign-up, a password reset with the right security answer,
+    # and a login with a second factor. Juice Shop limits its reset and code
+    # pages (X-RateLimit-Limit 100 per 5 minutes) and not its sign-up. The
+    # checks run in SiegeKit's own process, so the engine in the matrix is
+    # the one the app runs under.
+    name: Reset, sign-up and code pages on Juice Shop (app on ${{ matrix.engine }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        engine: [podman, docker]
+    env:
+      APP_ENGINE: ${{ matrix.engine }}
+      BASE: http://127.0.0.1:3000
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: false
+      - name: Build
+        run: CGO_ENABLED=0 go build -o "$RUNNER_TEMP/siegekit" ./cmd/siegekit
+      - name: Recorder
+        # As in the writes job.
+        working-directory: .github/gate
+        run: |
+          node -e 'process.exit(Number(process.versions.node.split(".")[0]) >= 20 ? 0 : 1)'
+          npm ci --ignore-scripts --no-audit --no-fund
+          npx --no-install playwright install chromium
+      - name: Start Juice Shop
+        # The web job's image.
+        run: |
+          set -euo pipefail
+          if [ "$APP_ENGINE" = podman ]; then test "$(podman info --format '{{.Host.Security.Rootless}}')" = true; fi
+          "$APP_ENGINE" run -d --name app -p 127.0.0.1:3000:3000 \
+            docker.io/bkimminich/juice-shop@sha256:9bbaecc41791f00b002bc65931cc5ff355fbdb941fa72b06558c18dace43197b
+          for i in $(seq 1 60); do
+            curl -sf -o /dev/null "$BASE/" && exit 0
+            sleep 2
+          done
+          "$APP_ENGINE" logs app
+          exit 1
+      - name: Recording
+        # The recorded reset sets the new account's password to the second
+        # one; the gate then changes it to a third, so that after the scan
+        # the second one fails unless the scan sent the recorded answer and
+        # new password again (ADR 0055 item 3).
+        run: |
+          set -euo pipefail
+          node .github/gate/record-juice-shop-pages.js "$BASE" gate-r@siegekit.test Gate-pages-1 Gate-pages-2 "$RUNNER_TEMP/a.har"
+          t=$(curl -sf -H 'Content-Type: application/json' -d '{"email":"gate-r@siegekit.test","password":"Gate-pages-2"}' "$BASE/rest/user/login" | jq -r .authentication.token)
+          curl -sf -o /dev/null -H "Authorization: Bearer $t" "$BASE/rest/user/change-password?current=Gate-pages-2&new=Gate-pages-3&repeat=Gate-pages-3"
+      - name: Scan
+        # --authorized-host stands for the typed yes (ADR 0023); the gate
+        # made the app, the recording and the account.
+        run: |
+          set +e
+          "$RUNNER_TEMP/siegekit" scan --yes --authorized-host 127.0.0.1 --no-save --report-dir "$RUNNER_TEMP/report" \
+            --only reset-limit,signup-limit,code-limit --har "$RUNNER_TEMP/a.har" "$BASE/"
+          code=$?
+          set -e
+          echo "exit code $code"
+          if [ "$code" -ne 0 ] && [ "$code" -ne 3 ]; then exit 1; fi
+          r="$RUNNER_TEMP/report/report.json"
+          jq '.plugins[] | {id, status, cause, reason, input, result, requests, findings}' "$r"
+          # Measured (ADR 0057): the reset and code pages answer the first
+          # request with X-RateLimit-Limit 100; 20 sign-ups answer 201.
+          for page in reset-limit:/rest/user/reset-password code-limit:/rest/2fa/verify; do
+            jq -e --arg id "${page%%:*}" --arg in "POST $BASE${page#*:} (recorded in a.har)" '[.plugins[] | select(.id == $id and .input == $in and .requests == 1 and (.result | startswith("limit seen after 1 of 20 requests: answered with a X-Ratelimit-Limit header, already at the first request (limit 100 per ")))] | length == 1' "$r"
+          done
+          jq -e --arg in "POST $BASE/api/Users/ (recorded in a.har)" '[.plugins[] | select(.id == "signup-limit" and .input == $in and .requests == 20 and .result == "no limit seen in 20 requests, all answered 201 with no rate-limit header; 20 answered below 400, so up to 20 accounts were made, named siegekit-new-...")] | length == 1' "$r"
+          jq -e '[.findings[] | select(.ruleId == "code-limit-high" and .severity == "low")] | length == 1' "$r"
+          jq -e '[.findings[] | select(.ruleId == "signup-not-limited" and .severity == "low")] | length == 1' "$r"
+          # The app again, read by the gate itself: 20 new accounts, and the
+          # recorded account's password is still the one the gate set.
+          login() { curl -s -o "$RUNNER_TEMP/login.json" -w '%{http_code}' -H 'Content-Type: application/json' -d "{\"email\":\"gate-r@siegekit.test\",\"password\":\"$1\"}" "$BASE/rest/user/login"; }
+          test "$(login Gate-pages-2)" = 401
+          test "$(login Gate-pages-3)" = 200
+          t=$(jq -r .authentication.token "$RUNNER_TEMP/login.json")
+          test "$(curl -sf -H "Authorization: Bearer $t" "$BASE/api/Users" | jq '[.data[] | select(.email | test("^siegekit-new-[a-z0-9]{12}@example\\.com$"))] | length')" = 20
+      - name: Known answers
+        if: ${{ !cancelled() }}
+        run: |
+          set +e
+          go run ./internal/knownanswers/check -answers testdata/known-answers/juice-shop-pages.json -report "$RUNNER_TEMP/report/report.json" -observed "$RUNNER_TEMP/observed.json"
+          code=$?
+          set -e
+          echo "::group::Answer of this run"
+          cat "$RUNNER_TEMP/observed.json"
+          echo "::endgroup::"
+          exit $code
+      - name: App log
+        if: failure()
+        run: $APP_ENGINE logs app 2>&1 | tail -50

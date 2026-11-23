@@ -378,6 +378,13 @@ func TestEngineArgsEnv(t *testing.T) {
 	if CheckEnv(many) == nil {
 		t.Error("accepted 17 variables")
 	}
+	// The same error on every run: Go ranges over a map in a different
+	// order each time.
+	for range 200 {
+		if err := CheckEnv(map[string]string{"PATH": "x", "LD_PRELOAD": "y"}); err == nil || err.Error() != "environment variable LD_PRELOAD is not allowed" {
+			t.Fatalf("CheckEnv: %v", err)
+		}
+	}
 }
 
 // target-only runs (ADR 0018, ADR 0019): only through a SiegeKit relay, on

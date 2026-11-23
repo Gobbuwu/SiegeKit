@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"net/url"
 	"os"
 	"slices"
@@ -94,11 +95,13 @@ func (a *Answers) validate() error {
 	if a.Fixture == "" || a.Measured == "" || len(a.Checks) == 0 {
 		return fmt.Errorf("fixture, measured and checks are required")
 	}
-	for id, c := range a.Checks {
+	for _, id := range slices.Sorted(maps.Keys(a.Checks)) { // the same error each run
+		c := a.Checks[id]
 		if err := c.validate(); err != nil {
 			return fmt.Errorf("check %s: %w", id, err)
 		}
-		for eng, o := range c.ByEngine {
+		for _, eng := range slices.Sorted(maps.Keys(c.ByEngine)) {
+			o := c.ByEngine[eng]
 			if eng != "podman" && eng != "docker" {
 				return fmt.Errorf("check %s: unknown engine %q", id, eng)
 			}

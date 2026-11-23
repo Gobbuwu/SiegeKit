@@ -81,6 +81,15 @@ func TestSignal(t *testing.T) {
 			t.Errorf("Signal(%d, %v) = %q, want %q", c.status, c.h, got, c.want)
 		}
 	}
+	// The same header each time an answer has several, as Juice Shop's do
+	// (the gate's known answer reads it; ranging over the map named any of
+	// the three, measured 2026-11-23).
+	js := http.Header{"X-Ratelimit-Limit": {"100"}, "X-Ratelimit-Remaining": {"99"}, "X-Ratelimit-Reset": {"1795414100"}}
+	for range 200 {
+		if got := Signal(401, js); got != "answered with a X-Ratelimit-Limit header" {
+			t.Fatalf("Signal(401, %v) = %q, want the X-Ratelimit-Limit header every time", js, got)
+		}
+	}
 }
 
 // fake replaces send and sleep: answer(i) answers the i-th request (from 0).

@@ -16,6 +16,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"math"
 	"net/http"
 	"net/url"
@@ -768,8 +769,8 @@ func lockoutReason(method, p string) string {
 		}
 	}
 	if vals, err := url.ParseQuery(query); err == nil {
-		for k, vs := range vals {
-			for _, s := range append([]string{k}, vs...) {
+		for _, k := range slices.Sorted(maps.Keys(vals)) { // a map's order changes each run
+			for _, s := range append([]string{k}, vals[k]...) {
 				if w := lockoutWord(s); w != "" {
 					return "its query names " + w
 				}
@@ -1540,8 +1541,10 @@ func uniqueWrites(rs []WriteReplay) (recorded, tried int) {
 // csrfValue returns A's recorded CSRF token: a CSRF-named header's value,
 // or a CSRF-named form, multipart or JSON field's value.
 func csrfValue(w Write) string {
-	for k, vs := range w.Header {
-		if csrfName(k) && len(vs) > 0 && vs[0] != "" {
+	// Names in sorted order: a map's order changes each run, and a write
+	// can hold two CSRF-named values.
+	for _, k := range slices.Sorted(maps.Keys(w.Header)) {
+		if vs := w.Header[k]; csrfName(k) && len(vs) > 0 && vs[0] != "" {
 			return vs[0]
 		}
 	}
@@ -1549,16 +1552,16 @@ func csrfValue(w Write) string {
 		return string(m[1])
 	}
 	if vals, err := url.ParseQuery(string(w.Body)); err == nil {
-		for k, vs := range vals {
-			if csrfName(k) && len(vs) > 0 && vs[0] != "" {
+		for _, k := range slices.Sorted(maps.Keys(vals)) {
+			if vs := vals[k]; csrfName(k) && len(vs) > 0 && vs[0] != "" {
 				return vs[0]
 			}
 		}
 	}
 	var v map[string]any
 	if json.Unmarshal(w.Body, &v) == nil {
-		for k, x := range v {
-			if s, ok := x.(string); ok && csrfName(k) && s != "" {
+		for _, k := range slices.Sorted(maps.Keys(v)) {
+			if s, ok := v[k].(string); ok && csrfName(k) && s != "" {
 				return s
 			}
 		}
