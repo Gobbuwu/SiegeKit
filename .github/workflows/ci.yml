@@ -88,35 +88,35 @@ jobs:
       - name: Fuzz parsers
         if: matrix.engine == 'podman'
         run: |
-          go test -run='^$' -fuzz=FuzzParse -fuzztime=60s ./internal/manifest
-          go test -run='^$' -fuzz=FuzzSARIF -fuzztime=60s ./internal/sarif
-          go test -run='^$' -fuzz=FuzzBandit -fuzztime=30s ./internal/bandit
-          go test -run='^$' -fuzz=FuzzGosecErrors -fuzztime=30s ./internal/gosec
-          go test -run='^$' -fuzz=FuzzNuclei -fuzztime=30s ./internal/nuclei
-          go test -run='^$' -fuzz=FuzzFFUF -fuzztime=30s ./internal/ffuf
-          go test -run='^$' -fuzz=FuzzSchemathesis -fuzztime=30s ./internal/schemathesis
-          go test -run='^$' -fuzz=FuzzCheck -fuzztime=30s ./internal/openapi
-          go test -run='^$' -fuzz=FuzzBasePath -fuzztime=30s ./internal/openapi
-          go test -run='^$' -fuzz=FuzzLogin -fuzztime=30s ./internal/login
-          go test -run='^$' -fuzz=FuzzLinks -fuzztime=30s ./internal/served
-          go test -run='^$' -fuzz=FuzzBackendRules -fuzztime=30s ./internal/checks
-          go test -run='^$' -fuzz=FuzzDotenv -fuzztime=30s ./internal/checks
-          go test -run='^$' -fuzz=FuzzWeakHits -fuzztime=30s ./internal/checks
-          go test -run='^$' -fuzz=FuzzParse -fuzztime=60s ./internal/target
-          go test -run='^$' -fuzz=FuzzOnOrigin -fuzztime=30s ./internal/target
-          go test -run='^$' -fuzz=FuzzParseHAR -fuzztime=30s ./internal/authz
-          go test -run='^$' -fuzz=FuzzParseWrites -fuzztime=30s ./internal/authz
-          go test -run='^$' -fuzz=FuzzSweepRoutes -fuzztime=30s ./internal/authz
-          go test -run='^$' -fuzz=FuzzTokenizeJS -fuzztime=30s ./internal/coderoutes
-          go test -run='^$' -fuzz=FuzzGoRoutes -fuzztime=30s ./internal/coderoutes
-          go test -run='^$' -fuzz=FuzzParse -fuzztime=30s ./internal/ratelimit
-          go test -run='^$' -fuzz=FuzzPagesFromHAR -fuzztime=30s ./internal/ratelimit
-          go test -run='^$' -fuzz=FuzzAddresses -fuzztime=30s ./internal/mailcatcher
-          go test -run='^$' -fuzz=FuzzParse -fuzztime=30s ./internal/backend
-          go test -run='^$' -fuzz=FuzzReadScripts -fuzztime=30s ./internal/backend
-          go test -run='^$' -fuzz=FuzzParseStorage -fuzztime=30s ./internal/backend
-          go test -run='^$' -fuzz=FuzzReadStorageScripts -fuzztime=30s ./internal/backend
-          go test -run='^$' -fuzz=FuzzStorageRuleFolders -fuzztime=30s ./internal/checks
+          go test -run='^$' -fuzz='^FuzzParse$' -fuzztime=60s ./internal/manifest
+          go test -run='^$' -fuzz='^FuzzSARIF$' -fuzztime=60s ./internal/sarif
+          go test -run='^$' -fuzz='^FuzzBandit$' -fuzztime=30s ./internal/bandit
+          go test -run='^$' -fuzz='^FuzzGosecErrors$' -fuzztime=30s ./internal/gosec
+          go test -run='^$' -fuzz='^FuzzNuclei$' -fuzztime=30s ./internal/nuclei
+          go test -run='^$' -fuzz='^FuzzFFUF$' -fuzztime=30s ./internal/ffuf
+          go test -run='^$' -fuzz='^FuzzSchemathesis$' -fuzztime=30s ./internal/schemathesis
+          go test -run='^$' -fuzz='^FuzzCheck$' -fuzztime=30s ./internal/openapi
+          go test -run='^$' -fuzz='^FuzzBasePath$' -fuzztime=30s ./internal/openapi
+          go test -run='^$' -fuzz='^FuzzLogin$' -fuzztime=30s ./internal/login
+          go test -run='^$' -fuzz='^FuzzLinks$' -fuzztime=30s ./internal/served
+          go test -run='^$' -fuzz='^FuzzBackendRules$' -fuzztime=30s ./internal/checks
+          go test -run='^$' -fuzz='^FuzzDotenv$' -fuzztime=30s ./internal/checks
+          go test -run='^$' -fuzz='^FuzzWeakHits$' -fuzztime=30s ./internal/checks
+          go test -run='^$' -fuzz='^FuzzParse$' -fuzztime=60s ./internal/target
+          go test -run='^$' -fuzz='^FuzzOnOrigin$' -fuzztime=30s ./internal/target
+          go test -run='^$' -fuzz='^FuzzParseHAR$' -fuzztime=30s ./internal/authz
+          go test -run='^$' -fuzz='^FuzzParseWrites$' -fuzztime=30s ./internal/authz
+          go test -run='^$' -fuzz='^FuzzSweepRoutes$' -fuzztime=30s ./internal/authz
+          go test -run='^$' -fuzz='^FuzzTokenizeJS$' -fuzztime=30s ./internal/coderoutes
+          go test -run='^$' -fuzz='^FuzzGoRoutes$' -fuzztime=30s ./internal/coderoutes
+          go test -run='^$' -fuzz='^FuzzParse$' -fuzztime=30s ./internal/ratelimit
+          go test -run='^$' -fuzz='^FuzzPagesFromHAR$' -fuzztime=30s ./internal/ratelimit
+          go test -run='^$' -fuzz='^FuzzAddresses$' -fuzztime=30s ./internal/mailcatcher
+          go test -run='^$' -fuzz='^FuzzParse$' -fuzztime=30s ./internal/backend
+          go test -run='^$' -fuzz='^FuzzReadScripts$' -fuzztime=30s ./internal/backend
+          go test -run='^$' -fuzz='^FuzzParseStorage$' -fuzztime=30s ./internal/backend
+          go test -run='^$' -fuzz='^FuzzReadStorageScripts$' -fuzztime=30s ./internal/backend
+          go test -run='^$' -fuzz='^FuzzStorageRuleFolders$' -fuzztime=30s ./internal/checks
       - name: Staticcheck
         if: matrix.engine == 'podman'
         run: go run honnef.co/go/tools/cmd/staticcheck@${STATICCHECK_VERSION} ./...
