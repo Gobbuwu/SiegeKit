@@ -30,7 +30,7 @@ Environment for every local measurement: Claude's sandbox, 4 CPUs, cgroup v1, Go
 | The header was named at random | Before the fix, 4 of 6 runs failed the job's result check: `-Reset` and `-Remaining` named instead of `-Limit` (runs on Docker and rootless Podman). `TestSignal` (200 calls on Juice Shop's three headers) fails on the old code and passes now. |
 | The 5 other places | `TestSameAnswerEachRun` (`ActionReason`, `lockoutReason`, `csrfValue` of headers and of JSON), `TestEngineArgsEnv` and `TestLoadSameErrorEachRun`: each fails on the old code (each case checked separately) and passes now. |
 | The code page's window | 4 min 40 s to 4 min 41 s on every run (the recording's login started it, ADR 0055 item 5), 30,747 or 30,857 wrong codes a day; the finding is the same for any window under 24 hours. |
-| The gate on cgroup v2 | CI (filled in from this PR's gate run). |
+| The gate on cgroup v2 | CI gate run [45127413917](https://github.com/Gobbuwu/SiegeKit/actions/runs/45127413917) on 3769e03: the `pages` job met `juice-shop-pages.json` and every check of the job with the app on rootless Podman 5.7.0 and on Docker 29.4.2 (cgroup v2; engine versions from the same PR's CI test jobs): the same requests (1, 20, 1), the X-RateLimit-Limit header named on both, windows 4 min 57 s and 4 min 41 s. |
 
 ## Consequences
 
