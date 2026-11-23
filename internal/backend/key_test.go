@@ -118,7 +118,7 @@ func TestKeyAccepted(t *testing.T) {
 
 // TestKeyAcceptedOverHTTP sends the real request through egress.
 func TestKeyAcceptedOverHTTP(t *testing.T) {
-	key := "sb_publishable_AbC123_xyz-987654"
+	key := "sb_publishable_AbC123_xyz-987654" // gitleaks:allow (fake test value)
 	var got []string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		got = append(got, r.Method+" "+r.URL.RequestURI())
