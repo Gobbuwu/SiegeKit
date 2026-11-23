@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"net/http"
 	"net/url"
 	"slices"
@@ -351,7 +352,10 @@ func Signal(status int, h http.Header) string {
 	if h.Get("Retry-After") != "" {
 		return "answered with a Retry-After header"
 	}
-	for k := range h {
+	// In name order: ranging over the map would name a different header
+	// on each run when an answer has several (Juice Shop sends
+	// X-RateLimit-Limit, -Remaining and -Reset).
+	for _, k := range slices.Sorted(maps.Keys(h)) {
 		c := http.CanonicalHeaderKey(k)
 		if c == "Ratelimit" || strings.HasPrefix(c, "Ratelimit-") || strings.HasPrefix(c, "X-Ratelimit-") {
 			return fmt.Sprintf("answered with a %s header", c)

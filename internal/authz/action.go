@@ -1,8 +1,10 @@
 package authz
 
 import (
+	"maps"
 	"net/url"
 	"regexp"
+	"slices"
 	"strings"
 	"unicode"
 )
@@ -80,7 +82,8 @@ func ActionReason(p string) string {
 		}
 	}
 	q, _ := url.ParseQuery(query)
-	for k, vs := range q {
+	for _, k := range slices.Sorted(maps.Keys(q)) { // a map's order changes each run
+		vs := q[k]
 		if reSecretParam.MatchString(k) {
 			return "it sends the parameter \"" + k + "\""
 		}

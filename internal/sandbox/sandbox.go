@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -846,7 +847,8 @@ func CheckEnv(env map[string]string) error {
 	if len(env) > 16 {
 		return errors.New("more than 16 environment variables")
 	}
-	for k, v := range env {
+	for _, k := range slices.Sorted(maps.Keys(env)) { // the same error each run
+		v := env[k]
 		switch {
 		case !reEnvKey.MatchString(k):
 			return fmt.Errorf("environment variable name %q must match %s", k, reEnvKey)

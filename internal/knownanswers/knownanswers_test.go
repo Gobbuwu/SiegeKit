@@ -176,6 +176,21 @@ func TestLoadRejects(t *testing.T) {
 	}
 }
 
+// The same error on every run: Go ranges over a map in a different order
+// each time.
+func TestLoadSameErrorEachRun(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "a.json")
+	body := `{"fixture":"f","measured":"m","checks":{"b":{"status":"failed"},"a":{"status":"ran","why":"w","byEngine":{"lxc":{"status":"ran"},"kvm":{"status":"ran"}}}}}`
+	if err := os.WriteFile(p, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for range 200 {
+		if _, err := Load(p); err == nil || !strings.HasSuffix(err.Error(), `check a: unknown engine "kvm"`) {
+			t.Fatalf("Load: %v", err)
+		}
+	}
+}
+
 // TestAnswerFromRoundTrip: an answer written from a run is met by that run,
 // and keeps the reviewed parts of the old answer.
 func TestAnswerFromRoundTrip(t *testing.T) {

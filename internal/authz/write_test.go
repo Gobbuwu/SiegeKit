@@ -1091,3 +1091,26 @@ func TestWriteCheckIDCollision(t *testing.T) {
 		t.Error("no high for B's checkout")
 	}
 }
+
+// A request with two matching names gets the same answer on every run: Go
+// ranges over a map in a different order each time.
+func TestSameAnswerEachRun(t *testing.T) {
+	w := Write{Header: http.Header{"X-Xsrf-Token": {"b"}, "X-Csrf-Token": {"a"}}}
+	j := Write{Body: []byte(`{"csrf":"a","_csrf":"b"}`)}
+	for _, c := range []struct {
+		name, want string
+		got        func() string
+	}{
+		{"ActionReason", `it sends the parameter "newPwd"`, func() string { return ActionReason("/s?password=a&newPwd=b") }},
+		{"lockoutReason", "its query names password", func() string { return lockoutReason(http.MethodPost, "/api/keys?token=1&password=2") }},
+		{"csrfValue of headers", "a", func() string { return csrfValue(w) }},
+		{"csrfValue of JSON", "b", func() string { return csrfValue(j) }},
+	} {
+		for range 200 {
+			if got := c.got(); got != c.want {
+				t.Errorf("%s: %q, want %q every time", c.name, got, c.want)
+				break
+			}
+		}
+	}
+}

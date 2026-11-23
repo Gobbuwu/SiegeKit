@@ -1,0 +1,31 @@
+{
+  "fixture": "juice-shop v20.4.0 by URL (docker.io/bkimminich/juice-shop@sha256:9bbaecc41791f00b002bc65931cc5ff355fbdb941fa72b06558c18dace43197b), reset, sign-up and code pages from a Chromium recording (.github/gate/record-juice-shop-pages.js; gate.yml job pages)",
+  "measured": "6 local runs of the gate job's steps on 2026-11-23, each on a fresh app and a fresh recording: app on Docker 29.10.0 rootful 3 times and on rootless Podman 4.9.3 3 times, cgroup v1; the same answer, requests and result text each time (after the header-order fix of ADR 0057 item 4); CI gate run 45127413917 (ubuntu-latest, cgroup v2), app on podman 5.7.0 rootless and docker 29.4.2 rootful: the same answer and requests. Minimum requests are 90% of the fewest; a limited page sends 1",
+  "checks": {
+    "code-limit": {
+      "status": "ran",
+      "match": "exact",
+      "findings": [
+        "code-limit-high /rest/2fa/verify"
+      ],
+      "count": 1,
+      "minRequests": 1,
+      "why": "every answer carries X-RateLimit-Limit 100, so the page is limited at the first request (ADR 0055 item 7); its X-RateLimit-Reset gives a window of at most 300 s, so more than 100 wrong codes a day: code-limit-high (ADR 0055 item 5)"
+    },
+    "reset-limit": {
+      "status": "ran",
+      "minRequests": 1,
+      "why": "every answer carries X-RateLimit-Limit 100, so the page is limited at the first request: no finding (ADR 0055 items 4 and 7)"
+    },
+    "signup-limit": {
+      "status": "ran",
+      "match": "exact",
+      "findings": [
+        "signup-not-limited /api/Users/"
+      ],
+      "count": 1,
+      "minRequests": 18,
+      "why": "20 sign-ups answered 201 with no rate-limit header and made 20 accounts"
+    }
+  }
+}
