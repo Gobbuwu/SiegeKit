@@ -366,6 +366,17 @@ func TestContainerTimeoutStopsWrites(t *testing.T) {
 	s := spec(t, "sh", "-c", "i=0; while :; do mkdir -p "+ScratchMount+"/d/$i; i=$((i+1)); done")
 	s.ScratchDir = t.TempDir()
 	s.Timeout = 3 * time.Second
+	// With rootless Podman the folders belong to a user of Podman's
+	// namespace, which the test's own user cannot delete; a container
+	// deletes them, as runner.removeScratch does. Registered after
+	// t.TempDir, so it runs before the folder is removed.
+	t.Cleanup(func() {
+		c := spec(t, "rm", "-rf", ScratchMount+"/d")
+		c.ScratchDir = s.ScratchDir
+		if r, err := e.Run(context.Background(), c); err != nil || r.Status != Completed || r.ExitCode != 0 {
+			t.Errorf("cleanup container: %v %+v", err, r)
+		}
+	})
 	start := time.Now()
 	r := run(t, e, s)
 	if r.Status != TimedOut {
