@@ -36,8 +36,7 @@ So 40045 on Juice Shop was made by SiegeKit's HAR, not found in Juice Shop, and 
 | ZAP adds no length to imported requests | `HarUtils.createHttpMessage` copies the HAR headers only; ZAP run alone (no SiegeKit) broke 2 of 18 requests with the old HAR, 0 of 18 with the length |
 | The fix stops it on the gate's app | Local run 3 with the fix (same setup): 7,534 requests from ZAP, 0 recorded bodies without a length, 0 requests glued to a body; the only 400s are Juice Shop's own on `POST /rest/memories` (multer); `zap-active` 7,526 requests, 40018 on the search and the login as before, no 40045 |
 | The tests catch the old behaviour | On the old `writeRecorded`, `TestRecordedRequests` fails ("Content-Length [] for a 8-byte body", "'€' is not one byte in ISO-8859-1") and `TestZAPFindsPlantedIssues` fails ("arrived whole 0 times and empty 43 times"), where it also reported 40045 and 10104 on `/api/import`; with the fix it passes with 69 whole arrivals, 0 empty, 90023 still found and neither 40045 nor 10104 reported |
-
-Engines and architectures beyond local Docker on amd64: see the CI and gate runs listed in `docs/milestones/M2.md` for this change.
+| The fix holds on both engines and architectures | CI run [45305973933](https://github.com/Gobbuwu/SiegeKit/actions/runs/45305973933) (head c661584): `TestZAPFindsPlantedIssues` with the new checks passed on rootless Podman and rootful Docker, amd64 and arm64. Gate run [45305973929](https://github.com/Gobbuwu/SiegeKit/actions/runs/45305973929): all 108 jobs passed; the four Juice Shop URL jobs met the answer and reported no 40045. Local run 4 repeated run 3 exactly (0 broken of 7,534) |
 
 ## Consequences
 
