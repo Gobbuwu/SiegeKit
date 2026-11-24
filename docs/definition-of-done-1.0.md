@@ -40,8 +40,8 @@ Items 11 to 14, 18 and 19 are placed in M2, before its milestone check. Each get
 
 - [ ] **Gate, part 1:** every target-authorization and egress negative test passes in CI on both engines (rootless Podman and Docker).
 - [ ] **Gate, part 2:** every known issue in the vulnerable web fixture is detected. DOM XSS counts with the browser flag on (item 16).
-- [ ] **Root causes first** (owner, 2026-11-22): every drop or flake seen so far is traced to its cause and fixed with a regression test, including the ZAP 40045 miss under Podman and the cause of each of the 3 relay-leftover CI failures (fixed by #52; cause per failure unverified).
-- [ ] **Known false positives closed**, each with a regression test or the owner's written acceptance as a gap: ZAP 40045 on the Juice Shop login, ZAP 10104 on Juice Shop, `rate-limit` reporting a mistyped URL on a single-page app as not limited, Gitea 40018, Rocket.Chat `roles.list`, `commands.list`, `users.info` and the tried `DELETE /avatar/room/<rid>`.
+- [ ] **Root causes first** (owner, 2026-11-22): every drop or flake seen so far is traced to its cause and fixed with a regression test, including the ZAP 40045 miss under Podman (traced and fixed with regression tests, ADR 0065) and the cause of each of the 3 relay-leftover CI failures (fixed by #52; cause per failure unverified).
+- [ ] **Known false positives closed**, each with a regression test or the owner's written acceptance as a gap: ZAP 40045 on the Juice Shop login (closed by ADR 0065: made by SiegeKit's HAR, regression tests added), ZAP 10104 on Juice Shop, `rate-limit` reporting a mistyped URL on a single-page app as not limited, Gitea 40018, Rocket.Chat `roles.list`, `commands.list`, `users.info` and the tried `DELETE /avatar/room/<rid>`.
 - [ ] **No open unexplained run-to-run difference** under M2's "Known gaps", including why 10104 lost a path only on #50's PR runs.
 - [ ] **Hand triage** to the README's sampling rule; counts per check under "Result quality", with the labelled list beside it.
 - [ ] **ADR evidence check:** every key claim in each ADR written in M2 is backed by a test, measurement or cited source, or is listed as a finding.

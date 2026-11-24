@@ -158,13 +158,12 @@
     "zap-active": {
       "status": "ran",
       "match": "includes",
-      "why": "the findings were the same on all four runs; the minimum is 90% of the fewest requests, so a cut-short scan (about 944 requests on Podman before ADR 0039) fails. Since ADR 0047 it also attacks the gate recording's 13 requests: 7,481 requests in each of 2 local runs (docker 29.10.0 rootful, cgroup v1), with 40018 on the product search and the JSON login (both confirmed by hand on 2026-11-20) and 40045 on the login, which is probably a false positive (Spring4Shell on a Node app; not checked by hand, for the M2 result-quality triage)",
+      "why": "the findings were the same on all four runs; the minimum is 90% of the fewest requests, so a cut-short scan (about 944 requests on Podman before ADR 0039) fails. Since ADR 0047 it also attacks the gate recording's 13 requests: 7,481 requests in each of 2 local runs (docker 29.10.0 rootful, cgroup v1), with 40018 on the product search and the JSON login (both confirmed by hand on 2026-11-20). 40045 on the login was removed in ADR 0065: SiegeKit's HAR gave ZAP the recorded login without a Content-Length, so the proxy answered the next request on the connection 400 and 40045 took that 400 for Juice Shop's; the gate's Scan step now fails if it comes back",
       "findings": [
         "10104 /assets",
         "10104 /assets/public",
         "40018 /rest/products/search",
-        "40018 /rest/user/login",
-        "40045 /rest/user/login"
+        "40018 /rest/user/login"
       ],
       "minRequests": 6732
     }
