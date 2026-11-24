@@ -25,7 +25,7 @@ func TestUpdateReplacesDataOnlyOnSuccess(t *testing.T) {
 		}
 		return &sandbox.Result{Status: sandbox.Completed}, os.WriteFile(filepath.Join(s.DataDir, "trivy.db"), []byte("v1"), 0o644)
 	}}
-	res, err := Update(context.Background(), write1, []*manifest.Manifest{builtin(t, "gitleaks"), m}, root, t.TempDir())
+	res, err := Update(context.Background(), write1, []*manifest.Manifest{builtin(t, "gitleaks"), m}, root, t.TempDir(), sandbox.Egress{})
 	if err != nil || len(res) != 1 || res[0].Err != nil {
 		t.Fatalf("%+v %v", res, err)
 	}
@@ -51,7 +51,7 @@ func TestUpdateReplacesDataOnlyOnSuccess(t *testing.T) {
 			return &sandbox.Result{Status: sandbox.Completed}, nil
 		},
 	} {
-		res, err := Update(context.Background(), &fake{act: act}, []*manifest.Manifest{m}, root, t.TempDir())
+		res, err := Update(context.Background(), &fake{act: act}, []*manifest.Manifest{m}, root, t.TempDir(), sandbox.Egress{})
 		if err != nil || res[0].Err == nil {
 			t.Errorf("%s: expected failure, got %+v %v", name, res, err)
 		}
@@ -66,7 +66,7 @@ func TestUpdateReplacesDataOnlyOnSuccess(t *testing.T) {
 }
 
 func TestUpdateRejectsRelativeRoot(t *testing.T) {
-	if _, err := Update(context.Background(), &fake{}, nil, "rel", ""); err == nil {
+	if _, err := Update(context.Background(), &fake{}, nil, "rel", "", sandbox.Egress{}); err == nil {
 		t.Fatal("expected rejection")
 	}
 }

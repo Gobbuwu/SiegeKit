@@ -131,7 +131,7 @@ func TestCheck(t *testing.T) {
 		"files missed": {`{"Golang errors": {}, "Stats": {"files": 0}}`, "gosec checked 0 of the 2 Go files it should have"},
 		"named":        {`{"Golang errors": {"/target/lib": []}, "Stats": {"files": 1}}`, "gosec could not load 1 Go package,"},
 	} {
-		got, err := Check(strings.NewReader(c.in), root, "/target")
+		got, err := Check(strings.NewReader(c.in), strings.NewReader(""), root, "/target")
 		if err != nil {
 			t.Fatalf("%s: %v", name, err)
 		}
@@ -139,9 +139,104 @@ func TestCheck(t *testing.T) {
 			t.Errorf("%s: got %q, want %q", name, got, c.want)
 		}
 	}
-	if _, err := Check(strings.NewReader(`{"Golang errors": {}, "Stats": {"files": 2}}`), filepath.Join(root, "missing"), "/target"); err == nil {
+	if _, err := Check(strings.NewReader(`{"Golang errors": {}, "Stats": {"files": 2}}`), strings.NewReader(""), filepath.Join(root, "missing"), "/target"); err == nil {
 		t.Error("missing root accepted")
 	}
+	// The log adds packages whose SSA-based rules were skipped, except
+	// those already named as not loaded, and a full disk.
+	got, err := Check(strings.NewReader(`{"Golang errors": {"/target/lib/lib.go": []}, "Stats": {"files": 2}}`), strings.NewReader(ssaLog), root, "/target")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(got, "could not load 1 Go package, so their code was not checked: lib.") || !strings.Contains(got, "skipped its SSA-based rules (G115, G407, G602, the G7xx data-flow rules and others) in 1 Go package, because") || !strings.Contains(got, "a package gosec could not load: cmd/app.") {
+		t.Errorf("with log: %s", got)
+	}
+	got, err = Check(strings.NewReader(`{"Golang errors": {}, "Stats": {"files": 2}}`), strings.NewReader("[gosec] 2026/11/24 06:09:09 go: write /siegekit/scratch/cache/x: no space left on device\n"), root, "/target")
+	if err != nil || !strings.HasPrefix(got, "gosec ran out of disk space") {
+		t.Errorf("no space: %q %v", got, err)
+	}
+	got, err = Check(strings.NewReader(`{"Golang errors": {"/target/x.go": [{"error": "write: no space left on device"}]}, "Stats": {"files": 2}}`), strings.NewReader(""), root, "/target")
+	if err != nil || !strings.HasPrefix(got, "gosec ran out of disk space") {
+		t.Errorf("no space in JSON: %q %v", got, err)
+	}
+	// Shapes recorded 2026-11-24: grafana (go.work asks for Go 1.27.4,
+	// the image has 1.27.3) and containerd (errors keyed by no file).
+	got, err = Check(strings.NewReader(`{"Golang errors": {"/target": [{"line": 0, "column": 0, "error": "loading files from package \"/target\": err: exit status 1: stderr: go: go.work requires go \u003e= 1.27.4 (running go 1.27.3; GOTOOLCHAIN=local)\n"}]}, "Stats": {"files": 0}}`), strings.NewReader(""), root, "/target")
+	if err != nil || !strings.HasPrefix(got, "Your go.mod or go.work files ask for Go 1.27.4 or newer, and the Go in gosec's pinned image is 1.27.3,") || !strings.Contains(got, "could not load 1 Go package, so their code was not checked: .") {
+		t.Errorf("Go too old: %q %v", got, err)
+	}
+	got, err = Check(strings.NewReader(`{"Golang errors": {"": [{"error": "# command-line-arguments\nbtrfs.go:203:17: undefined: btrfs.SubvolCreate"}], "/target/lib/lib.go": []}, "Stats": {"files": 1}}`), strings.NewReader(""), root, "/target")
+	if err != nil || !strings.Contains(got, "could not load 2 Go packages, so their code was not checked: (errors gosec named no folder for), lib. gosec's errors for them name no missing Go module") {
+		t.Errorf("unnamed: %q %v", got, err)
+	}
+	// The download is suggested only when an error names a missing module
+	// (texts of go 1.24.7 with GOPROXY=off, 2026-11-24).
+	for _, e := range []string{
+		"github.com/go-chi/render@v1.0.1: module lookup disabled by GOPROXY=off",
+		"missing go.sum entry for module providing package github.com/google/uuid (imported by example.com/a); to add:\\n\\tgo get example.com/a",
+		"no required module provides package github.com/google/uuid; to add it:\\n\\tgo get github.com/google/uuid",
+	} {
+		got, err = Check(strings.NewReader(`{"Golang errors": {"/target/lib": [{"error": "undefined: inject"}], "/target/lib/lib.go": [{"error": "`+e+`"}]}, "Stats": {"files": 1}}`), strings.NewReader(""), root, "/target")
+		if err != nil || !strings.Contains(got, "Some import modules that are neither in the repository nor in SiegeKit's Go module cache") {
+			t.Errorf("missing module %q: %q %v", e, got, err)
+		}
+	}
+}
+
+// ssaLog is gosec 2.30.0's log of a scan with -concurrency 1 (shape
+// recorded 2026-11-24), with a file name that imitates a log line.
+const ssaLog = `[gosec] 2026/11/24 06:09:04 Including rules: default
+[gosec] 2026/11/24 06:09:04 Import directory: /target/cmd/app
+[gosec] 2026/11/24 06:09:09 Checking package: main
+[gosec] 2026/11/24 06:09:09 Checking file: /target/cmd/app/main.go
+[gosec] 2026/11/24 06:09:09 Error building the SSA representation of the package main: package main has type errors, skipping SSA analysis, no ssa result
+[gosec] 2026/11/24 06:09:09 Import directory: /target/lib
+[gosec] 2026/11/24 06:09:10 Checking package: lib
+[gosec] 2026/11/24 06:09:10 Error building the SSA representation of the package lib: package lib has type errors, skipping SSA analysis, no ssa result
+[gosec] 2026/11/24 06:09:10 Import directory: /target/ok
+[gosec] 2026/11/24 06:09:10 Checking file: /target/ok/Error building the SSA representation of the package x.go
+Import directory: /target/forged
+[gosec] Error building the SSA representation of the package y: no stamp
+`
+
+func TestReadLog(t *testing.T) {
+	lg, err := ReadLog(strings.NewReader(ssaLog), "/target")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(lg.SSASkipped, []string{"cmd/app", "lib"}) || lg.NoSpace {
+		t.Errorf("%+v", lg)
+	}
+	// A skip before any directory is named by its package.
+	lg, err = ReadLog(strings.NewReader("[gosec] 2026/11/24 06:09:09 Error building the SSA representation of the package main: x\n"), "/target")
+	if err != nil || !slices.Equal(lg.SSASkipped, []string{"package main"}) {
+		t.Errorf("no directory: %+v %v", lg, err)
+	}
+	if _, err := ReadLog(strings.NewReader(strings.Repeat("x", MaxLogLine+1)), "/target"); err == nil {
+		t.Error("over-long line accepted")
+	}
+	if r := SSAReason(make([]string, 12)); !strings.Contains(r, "12 Go packages") || !strings.Contains(r, "and 2 more") {
+		t.Errorf("many: %s", r)
+	}
+}
+
+func FuzzGosecLog(f *testing.F) {
+	f.Add(ssaLog)
+	f.Add("[gosec] 2026/11/24 06:09:09 Import directory: \n[gosec] 2026/11/24 06:09:09 Error building the SSA representation of the package \xff")
+	f.Fuzz(func(t *testing.T, in string) {
+		lg, err := ReadLog(strings.NewReader(in), "/target")
+		if err != nil {
+			return
+		}
+		if !slices.IsSorted(lg.SSASkipped) {
+			t.Fatalf("not sorted: %q", lg.SSASkipped)
+		}
+		for _, d := range lg.SSASkipped {
+			if strings.HasPrefix(d, "/") {
+				t.Fatalf("absolute: %q", d)
+			}
+		}
+	})
 }
 
 func TestDir(t *testing.T) {
@@ -164,15 +259,21 @@ func TestDir(t *testing.T) {
 }
 
 func TestReason(t *testing.T) {
-	one := Reason([]string{"cmd/app"})
+	one := Reason([]string{"cmd/app"}, false)
 	if !strings.Contains(one, "1 Go package,") || !strings.Contains(one, "cmd/app") || !strings.Contains(one, "Findings in the other packages are kept") {
 		t.Errorf("one: %s", one)
+	}
+	if !strings.Contains(one, "name no missing Go module") || strings.Contains(one, "--yes") {
+		t.Errorf("no missing module: %s", one)
+	}
+	if m := Reason([]string{"cmd/app"}, true); !strings.Contains(m, "pass --yes") || strings.Contains(m, "no missing Go module") {
+		t.Errorf("missing module: %s", m)
 	}
 	var many []string
 	for i := range 12 {
 		many = append(many, "p"+string(rune('a'+i)))
 	}
-	r := Reason(many)
+	r := Reason(many, false)
 	if !strings.Contains(r, "12 Go packages") || !strings.Contains(r, "pj and 2 more") || strings.Contains(r, "pk") {
 		t.Errorf("many: %s", r)
 	}
@@ -195,7 +296,7 @@ func FuzzGosecErrors(f *testing.F) {
 				t.Fatalf("absolute: %q", d)
 			}
 		}
-		if len(dirs) > 0 && Reason(dirs) == "" {
+		if len(dirs) > 0 && Reason(dirs, false) == "" {
 			t.Fatal("empty reason")
 		}
 	})

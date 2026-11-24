@@ -621,7 +621,7 @@ func runURL(ctx context.Context, u *target.URL, addrs []netip.Addr, mode target.
 	if servedSelected && hostOS == "linux" {
 		toPrepare = append(slices.Clip(runnable), gitleaks)
 	}
-	ex, un, _, err := prepare(ctx, toPrepare, deps.Roots{Files: rootsIn(dir).Files}, o.consent, stdout)
+	ex, un, _, _, err := prepare(ctx, toPrepare, deps.Roots{Files: rootsIn(dir).Files}, o.consent, stdout)
 	if err != nil {
 		return fail(err)
 	}

@@ -47,7 +47,8 @@
     "file": "report.sarif",
     "stdout": {
       "file": "tool-stdout.json",
-      "parser": "gosec-errors"
+      "parser": "gosec-errors",
+      "stderrFile": "tool-log.txt"
     }
   }
 }

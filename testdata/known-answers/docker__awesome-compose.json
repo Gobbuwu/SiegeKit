@@ -120,9 +120,8 @@
       "count": 4
     },
     "gosec": {
-      "status": "failed",
-      "reason": "gosec could not load",
-      "why": "Scans have no network, so gosec cannot load the packages that import modules not in this repository; it names them and reports the rest (ADR 0040). Findings measured 2026-11-21 with native gosec 2.30.0 (Go 1.27.4) run as the sandbox runs it: non-root, no network, writable module cache, nothing downloaded. Findings gosec makes only with the modules present (native run with them downloaded) are under notMetYet. Gap measured in gosec-offline-gap-measurement-2026-11-21.md (project files).",
+      "status": "ran",
+      "why": "gosec loads every package with the Go module download (ADR 0066; the gate passes --yes). Findings from SiegeKit's own run of PR #78 on 2026-11-24, equal by rule, file and line to gosec 2.30.0 run with network on the same commit; the gate holds them on both engines, amd64 and arm64.",
       "match": "exact",
       "findings": [
         "G104 nginx-golang-mysql/backend/main.go:45",

@@ -15,7 +15,7 @@ import (
 	"github.com/Gobbuwu/SiegeKit/plugins"
 )
 
-const updateUsage = `Usage: siegekit update [--only a,b] [--yes | --no-install]
+const updateUsage = `Usage: siegekit update [--only a,b] [--yes | --no-install] [--ca-file FILE] [--proxy URL]
 
 Downloads the data some checks need, such as vulnerability databases, into
 ~/.local/share/siegekit/data. Each download runs in a container that has
@@ -26,6 +26,10 @@ Flags:
   --only a,b     update only these plugins
   --yes          download missing tool images without asking
   --no-install   do not download missing tool images
+  --ca-file FILE a PEM file of extra CA certificates, for networks with
+                 TLS inspection; default $SIEGEKIT_CA_FILE
+  --proxy URL    http(s)://host:port of a proxy the containers can reach,
+                 with no password; default $SIEGEKIT_PROXY
 `
 
 func update(args []string, stdout, stderr io.Writer) int {
@@ -34,6 +38,8 @@ func update(args []string, stdout, stderr io.Writer) int {
 	only := fl.String("only", "", "")
 	yes := fl.Bool("yes", false, "")
 	noInstall := fl.Bool("no-install", false, "")
+	caFile := fl.String("ca-file", "", "")
+	proxy := fl.String("proxy", "", "")
 	if err := fl.Parse(args); errors.Is(err, flag.ErrHelp) {
 		fmt.Fprint(stdout, updateUsage)
 		return exitOK
@@ -44,6 +50,11 @@ func update(args []string, stdout, stderr io.Writer) int {
 	fail := func(err error) int {
 		fmt.Fprintf(stderr, "siegekit update: %v\n", err)
 		return exitInvalid
+	}
+	egress, err := egressFrom(*caFile, *proxy)
+	if err != nil {
+		fmt.Fprintf(stderr, "siegekit update: %v\n", err)
+		return exitUsage
 	}
 	all, err := plugins.Builtin()
 	if err != nil {
@@ -73,7 +84,9 @@ func update(args []string, stdout, stderr io.Writer) int {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	fmt.Fprintf(stdout, "Updating data for %d plugin(s). This downloads from each tool's publisher.\n", len(selected))
-	_, un, fetched, err := prepare(ctx, selected, rootsIn(dir), consent{yes: *yes, none: *noInstall, data: true}, stdout)
+	roots := rootsIn(dir)
+	roots.Egress = egress
+	_, un, fetched, _, err := prepare(ctx, selected, roots, consent{yes: *yes, none: *noInstall, data: true}, stdout)
 	if err != nil {
 		return fail(err)
 	}

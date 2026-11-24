@@ -78,7 +78,7 @@ func TestPlanAndInstall(t *testing.T) {
 	}
 	// Data was chosen but its image was not: nothing is downloaded and the
 	// reason names the image.
-	un, err := Install(context.Background(), e, noRun{t}, ds, ds[1:], Roots{Data: root}, func(d Dep) runner.Unavailable { return runner.Skip(report.CauseDeclined, "declined "+d.Name()) }, &out)
+	un, _, err := Install(context.Background(), e, noRun{t}, ds, ds[1:], Roots{Data: root}, func(d Dep) runner.Unavailable { return runner.Skip(report.CauseDeclined, "declined "+d.Name()) }, &out)
 	if err != nil || un["trivy"].Status != report.Skipped || un["trivy"].Reason != "declined trivy 0.76.2 container image" || un["trivy"].Cause != report.CauseDeclined || e.pulled != 0 {
 		t.Errorf("install %+v %v pulled %d", un, err, e.pulled)
 	}
@@ -234,7 +234,7 @@ func TestInstallPullsAndUpdates(t *testing.T) {
 	never := func(Dep) runner.Unavailable { t.Error("everything was chosen"); return runner.Unavailable{} }
 
 	// Everything chosen, data update fails: trivy fails, gitleaks is fine.
-	un, err := Install(context.Background(), e, dataRun{ok: false}, ds, ds, Roots{Data: root}, never, &out)
+	un, _, err := Install(context.Background(), e, dataRun{ok: false}, ds, ds, Roots{Data: root}, never, &out)
 	if err != nil || e.pulled != 2 || len(un) != 1 || un["trivy"].Status != report.Failed || un["trivy"].Cause != report.CauseMissingDependency || !strings.Contains(un["trivy"].Reason, "could not download data") {
 		t.Fatalf("install %+v %v pulled %d", un, err, e.pulled)
 	}
@@ -244,7 +244,7 @@ func TestInstallPullsAndUpdates(t *testing.T) {
 
 	// Images now installed; the data update succeeds.
 	ds, _ = Plan(context.Background(), e, ms, Roots{Data: root})
-	un, err = Install(context.Background(), e, dataRun{ok: true}, ds, ds, Roots{Data: root}, never, &out)
+	un, _, err = Install(context.Background(), e, dataRun{ok: true}, ds, ds, Roots{Data: root}, never, &out)
 	if err != nil || len(un) != 0 || !dataInstalled(root, "trivy") {
 		t.Errorf("install %+v %v, data installed %v", un, err, dataInstalled(root, "trivy"))
 	}
@@ -252,7 +252,7 @@ func TestInstallPullsAndUpdates(t *testing.T) {
 	// Data chosen but no data directory known.
 	empty := &eng{have: map[string]bool{}}
 	ds, _ = Plan(context.Background(), empty, ms[:1], Roots{})
-	if _, err := Install(context.Background(), empty, dataRun{ok: true}, ds, ds, Roots{}, never, &out); err == nil {
+	if _, _, err := Install(context.Background(), empty, dataRun{ok: true}, ds, ds, Roots{}, never, &out); err == nil {
 		t.Error("no error without a data directory")
 	}
 }
@@ -267,7 +267,7 @@ func TestInstallPullFailure(t *testing.T) {
 		t.Fatal(err)
 	}
 	var out bytes.Buffer
-	un, err := Install(context.Background(), e, noRun{t}, ds, ds, Roots{Data: t.TempDir()}, func(Dep) runner.Unavailable { return runner.Unavailable{} }, &out)
+	un, _, err := Install(context.Background(), e, noRun{t}, ds, ds, Roots{Data: t.TempDir()}, func(Dep) runner.Unavailable { return runner.Unavailable{} }, &out)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -284,7 +284,7 @@ func TestInstallPullFailure(t *testing.T) {
 	// A cancelled run returns the context error, not a per-plugin failure.
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if _, err := Install(ctx, e, noRun{t}, ds, ds, Roots{Data: t.TempDir()}, func(Dep) runner.Unavailable { return runner.Unavailable{} }, &out); !errors.Is(err, context.Canceled) {
+	if _, _, err := Install(ctx, e, noRun{t}, ds, ds, Roots{Data: t.TempDir()}, func(Dep) runner.Unavailable { return runner.Unavailable{} }, &out); !errors.Is(err, context.Canceled) {
 		t.Errorf("cancelled: %v", err)
 	}
 }
@@ -348,7 +348,7 @@ func TestFiles(t *testing.T) {
 		}
 		return nil
 	}
-	un, err := Install(context.Background(), e, noRun{t}, ds, missing[1:], Roots{Files: root}, func(d Dep) runner.Unavailable { return runner.Skip(report.CauseDeclined, "declined "+d.Name()) }, &out)
+	un, _, err := Install(context.Background(), e, noRun{t}, ds, missing[1:], Roots{Files: root}, func(d Dep) runner.Unavailable { return runner.Skip(report.CauseDeclined, "declined "+d.Name()) }, &out)
 	if err != nil || len(fetched) != 1 || fetched[0] != "tool" {
 		t.Fatalf("install %v fetched %v", err, fetched)
 	}
@@ -356,7 +356,7 @@ func TestFiles(t *testing.T) {
 		t.Errorf("unavailable %+v", un)
 	}
 	// All chosen, the binary fails: only p1 fails, with the reason.
-	un, err = Install(context.Background(), e, noRun{t}, ds, missing, Roots{Files: root}, nil, &out)
+	un, _, err = Install(context.Background(), e, noRun{t}, ds, missing, Roots{Files: root}, nil, &out)
 	if err != nil || un["p1"].Status != report.Failed || !strings.Contains(un["p1"].Reason, "could not install tool 1.0.0 file tool: SHA-256 mismatch") {
 		t.Errorf("install %+v %v", un, err)
 	}
@@ -364,13 +364,13 @@ func TestFiles(t *testing.T) {
 		t.Errorf("p2 marked: %+v", un)
 	}
 	// No directory for files.
-	if _, err := Install(context.Background(), e, noRun{t}, ds, missing, Roots{}, nil, &out); err == nil {
+	if _, _, err := Install(context.Background(), e, noRun{t}, ds, missing, Roots{}, nil, &out); err == nil {
 		t.Error("no error without a files directory")
 	}
 	// A cancelled download is the context error.
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if _, err := Install(ctx, e, noRun{t}, ds, missing, Roots{Files: root}, nil, &out); !errors.Is(err, context.Canceled) {
+	if _, _, err := Install(ctx, e, noRun{t}, ds, missing, Roots{Files: root}, nil, &out); !errors.Is(err, context.Canceled) {
 		t.Errorf("cancelled: %v", err)
 	}
 	// Installed only with the unpacked directory and its marker.
@@ -382,5 +382,126 @@ func TestFiles(t *testing.T) {
 	}
 	if ds, _ = Plan(context.Background(), e, []*manifest.Manifest{p1}, Roots{}); ds[2].Installed {
 		t.Error("installed without a files directory")
+	}
+}
+
+// goExec answers the Go module containers: the presence check with
+// present, the download with exit code dl.
+type goExec struct {
+	present bool
+	dl      int
+	specs   []sandbox.Spec
+}
+
+func (g *goExec) Run(_ context.Context, s sandbox.Spec) (*sandbox.Result, error) {
+	g.specs = append(g.specs, s)
+	code := g.dl
+	if s.Network == "none" && !g.present {
+		code = 1
+	} else if s.Network == "none" {
+		code = 0
+	}
+	return &sandbox.Result{Status: sandbox.Completed, ExitCode: code, Stderr: "go: not found\n"}, nil
+}
+
+func gosecPlugin(t *testing.T) *manifest.Manifest {
+	all, err := plugins.Builtin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, m := range all {
+		if m.ID == "gosec" {
+			return m
+		}
+	}
+	t.Fatal("no gosec")
+	return nil
+}
+
+func TestGoModules(t *testing.T) {
+	LookPath = func(string) (string, error) { return "", errors.New("none") }
+	t.Cleanup(func() { LookPath = defaultLookPath })
+	m := gosecPlugin(t)
+	image, _ := runner.ImageFor(m)
+	target := t.TempDir()
+	os.WriteFile(filepath.Join(target, "go.mod"), []byte("module x\nrequire (\n\texample.com/a v1.0.0\n\texample.com/b v1.0.0\n)\n"), 0o644)
+	ctx := context.Background()
+	plan := func(e *eng, g *goExec, roots Roots) []Dep {
+		t.Helper()
+		ds, err := Plan(ctx, e, []*manifest.Manifest{m}, roots)
+		if err == nil {
+			ds, err = PlanGo(ctx, g, ds, []*manifest.Manifest{m}, roots)
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		return ds
+	}
+
+	// No target (siegekit update, URL scans) or no go.mod: nothing added.
+	if ds := plan(&eng{have: map[string]bool{image: true}}, &goExec{}, Roots{Data: t.TempDir()}); len(ds) != 1 {
+		t.Errorf("no target: %+v", ds)
+	}
+	if ds := plan(&eng{have: map[string]bool{image: true}}, &goExec{}, Roots{Data: t.TempDir(), Target: t.TempDir()}); len(ds) != 1 {
+		t.Errorf("no go.mod: %+v", ds)
+	}
+
+	// Image missing: no check can run, the modules are offered with it.
+	g := &goExec{present: true}
+	data := t.TempDir()
+	os.MkdirAll(filepath.Join(data, "gomod"), 0o755)
+	ds := plan(&eng{have: map[string]bool{}}, g, Roots{Data: data, Target: target})
+	if len(ds) != 2 || ds[1].Kind != GoModules || ds[1].Installed || len(g.specs) != 0 {
+		t.Fatalf("image missing: %+v, %d runs", ds, len(g.specs))
+	}
+	var out bytes.Buffer
+	Describe(&out, ds)
+	if !strings.Contains(out.String(), "2. Go modules for gosec: 2 modules named in your go.mod files, from proxy.golang.org, which sees their names and versions (size not known in advance), needed by: gosec") {
+		t.Errorf("describe: %s", out.String())
+	}
+
+	// Image present and every module in the cache: installed, no question.
+	g = &goExec{present: true}
+	ds = plan(&eng{have: map[string]bool{image: true}}, g, Roots{Data: data, Target: target})
+	if len(ds) != 2 || !ds[1].Installed || len(g.specs) != 1 || g.specs[0].Network != "none" {
+		t.Fatalf("present: %+v, %d runs", ds, len(g.specs))
+	}
+	out.Reset()
+	Describe(&out, ds)
+	if !strings.Contains(out.String(), "Go modules for gosec (in SiegeKit's module cache)") {
+		t.Errorf("describe installed: %s", out.String())
+	}
+
+	// Missing modules. Declined: gosec still runs, with a note.
+	g = &goExec{}
+	roots := Roots{Data: data, Target: target, Egress: sandbox.Egress{Proxy: "http://p:1"}}
+	ds = plan(&eng{have: map[string]bool{image: true}}, g, roots)
+	if ds[1].Installed {
+		t.Fatal("counted as installed")
+	}
+	declined := func(d Dep) runner.Unavailable { return runner.Skip(report.CauseDeclined, "you declined "+d.Name()) }
+	un, notes, err := Install(ctx, &eng{have: map[string]bool{image: true}}, g, ds, nil, roots, declined, &out)
+	if err != nil || len(un) != 0 || !strings.HasPrefix(notes["gosec"], "The Go module download was not done: you declined Go modules for gosec") {
+		t.Errorf("declined: %v %v %v", un, notes, err)
+	}
+	// Chosen: downloaded through the person's proxy.
+	g.specs = nil
+	un, notes, err = Install(ctx, &eng{have: map[string]bool{image: true}}, g, ds, ds[1:], roots, declined, &out)
+	if err != nil || len(un) != 0 || len(notes) != 0 || len(g.specs) != 1 || g.specs[0].Network != "egress" || g.specs[0].Egress != roots.Egress {
+		t.Errorf("chosen: %v %v %v %+v", un, notes, err, g.specs)
+	}
+	// The download fails: gosec runs, and the note says why.
+	g = &goExec{dl: 1}
+	un, notes, err = Install(ctx, &eng{have: map[string]bool{image: true}}, g, ds, ds[1:], roots, declined, &out)
+	if err != nil || len(un) != 0 || !strings.Contains(notes["gosec"], "The Go module download did not complete: go mod download failed in 1 of 1 module folders: . (go: not found)") {
+		t.Errorf("failed: %v %v %v", un, notes, err)
+	}
+	// The image was declined: gosec is skipped for that, and no module
+	// is downloaded.
+	ds = plan(&eng{have: map[string]bool{}}, g, roots)
+	g.specs = nil
+	un, notes, err = Install(ctx, &eng{have: map[string]bool{}}, g, ds, ds[1:], roots, declined, &out)
+	if err != nil || un["gosec"].Status != report.Skipped || len(notes) != 0 || len(g.specs) != 0 {
+		t.Errorf("image declined: %v %v %v %d", un, notes, err, len(g.specs))
 	}
 }
