@@ -355,6 +355,38 @@ func TestContainerStderrFile(t *testing.T) {
 	}
 }
 
+// TestContainerTimeoutStopsWrites: when a run times out, its container is
+// stopped before Run returns, so nothing writes to its scratch folder any
+// more and the folder can be deleted. The tool ignores SIGTERM, as a shell
+// as PID 1 does (gosec's entrypoint is bash). On rootless Podman a timed-out
+// gosec left a folder whose cleanup said "Directory not empty" (CI run
+// 45340299829, 2026-11-24).
+func TestContainerTimeoutStopsWrites(t *testing.T) {
+	e := engine(t)
+	s := spec(t, "sh", "-c", "i=0; while :; do mkdir -p "+ScratchMount+"/d/$i; i=$((i+1)); done")
+	s.ScratchDir = t.TempDir()
+	s.Timeout = 3 * time.Second
+	start := time.Now()
+	r := run(t, e, s)
+	if r.Status != TimedOut {
+		t.Fatalf("status %s: %s", r.Status, r.Stderr)
+	}
+	returned := time.Since(start)
+	count := func() int {
+		entries, err := os.ReadDir(filepath.Join(s.ScratchDir, "d"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return len(entries)
+	}
+	n := count()
+	time.Sleep(3 * time.Second)
+	if m := count(); m != n || n == 0 {
+		t.Fatalf("Run returned after %v, then the container wrote on: %d entries, %d three seconds later", returned, n, m)
+	}
+	t.Logf("Run returned after %v with %d entries written", returned, n)
+}
+
 func TestContainerToolExitCodeIsNotEngineFailure(t *testing.T) {
 	e := engine(t)
 	r := run(t, e, spec(t, "sh", "-c", "exit 1"))

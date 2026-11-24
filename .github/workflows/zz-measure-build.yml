@@ -28,7 +28,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, ubuntu-24.04-arm]
-        engine: [podman, docker]
+        engine: [podman] # Docker measured in run 45340299829
         repo:
           - grafana/grafana@5db6ba887630c7fa12e5bfd063f2fa854025468c
           - containerd/containerd@ce1877a1521be793afe42f8c024d9bc199eb063a
@@ -66,6 +66,7 @@ jobs:
           code=$?
           kill $P
           echo "SIEGEKIT exit=$code s=$(( $(date +%s) - t0 )) scratchPeakMB=$(sort -k2 -n $T/du.txt | tail -1 | cut -d' ' -f2) cacheMB=$(sudo du -sm $XDG_DATA_HOME/siegekit/data/gomod | cut -f1) scratchLeft=$(sudo ls -A $S | wc -l)"
+          sudo find $S -maxdepth 4 -printf '%M %u %p\n' 2>/dev/null | head -12 | sed 's/^/LEFT /'
           grep -v '^  ' $T/sk.log | head -12 | cut -c1-600
           jq -c '.plugins[] | {status, findings, suppressed, input, reason: (.reason // "" | .[0:1500])}' $T/rep/report.json
           jq -r '.findings[] | .sources[] as $s | "\($s.ruleId) \(.location.uri) \(.location.startLine)"' $T/rep/report.json | sort -u > $T/sk.txt
@@ -87,7 +88,9 @@ jobs:
             --mount type=bind,source=$T/ref/gc,target=/data/gocache --env GOCACHE=/data/gocache --env GOTMPDIR=/data/gocache/tmp \
             --mount type=bind,source=$T/target,target=/target,readonly --mount type=bind,source=$T/ref/out,target=/out \
             "$IMG" -concurrency 1 -fmt json -out /out/ref.json -no-fail -track-suppressions /target/... > /dev/null 2> $T/ref.err
-          echo "REFERENCE exit=$? s=$(( $(date +%s) - t0 )) SSA_SKIPS $(grep -c 'Error building the SSA' $T/ref.err) NO_SPACE $(grep -c 'no space left' $T/ref.err) scratchMB=$(sudo du -sm $T/ref/gc | cut -f1) cacheMB=$(sudo du -sm $T/ref/gomod | cut -f1)"
+          rc=$?
+          echo "REFERENCE exit=$rc s=$(( $(date +%s) - t0 )) SSA_SKIPS $(grep -c 'Error building the SSA' $T/ref.err) NO_SPACE $(grep -c 'no space left' $T/ref.err) scratchMB=$(sudo du -sm $T/ref/gc | cut -f1) cacheMB=$(sudo du -sm $T/ref/gomod | cut -f1)"
+          [ "$rc" -ne 0 ] && grep -v 'Checking\|Import directory' $T/ref.err | tail -5 | cut -c1-300 | sed 's/^/REFERR /'
           python3 -I - "$T/ref/out/ref.json" "$T/sk.txt" <<'PY'
           import json, sys
           d = json.load(open(sys.argv[1]))
