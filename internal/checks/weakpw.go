@@ -12,6 +12,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/Gobbuwu/SiegeKit/internal/findings"
+	"github.com/Gobbuwu/SiegeKit/internal/testpath"
 )
 
 // weakPasswords reports weak or factory-default passwords written into a
@@ -75,7 +76,6 @@ var skipOrder = []string{skipTest, skipI18n, skipDoc, skipComment, skipTemplate}
 var (
 	// generatedDirs hold build output; they are not read at all.
 	generatedDirs = map[string]bool{"dist": true, "build": true, ".next": true}
-	testDirs      = map[string]bool{"test": true, "tests": true, "testdata": true, "fixtures": true, "__tests__": true, "spec": true, "e2e": true, "cypress": true}
 	i18nDirs      = map[string]bool{"i18n": true, "locale": true, "locales": true, "lang": true, "translations": true, "l10n": true}
 	docDirs       = map[string]bool{"doc": true, "docs": true, "guides": true}
 	docExts       = map[string]bool{".md": true, ".rst": true, ".adoc": true, ".txt": true}
@@ -83,7 +83,6 @@ var (
 	codeExts      = map[string]bool{".js": true, ".ts": true, ".jsx": true, ".tsx": true, ".mjs": true, ".cjs": true, ".java": true, ".php": true, ".py": true, ".go": true, ".rb": true, ".cs": true, ".kt": true, ".rs": true, ".scala": true, ".swift": true}
 	lockFiles     = map[string]bool{"package-lock.json": true, "yarn.lock": true, "composer.lock": true, "pnpm-lock.yaml": true}
 
-	reTestFile = regexp.MustCompile(`(\.(spec|test)\.[jt]sx?$|_test\.(go|py)$|^test_.*\.py$|Tests?\.(java|kt|php|cs)$|_spec\.rb$)`)
 	reTemplate = regexp.MustCompile(`(?i)\.(example|sample|template|dist)$`)
 )
 
@@ -97,6 +96,10 @@ var (
 	reConfXML  = regexp.MustCompile(`(?i)<(?P<k>` + keyRE + `)>(?P<v>[^<]*)</`)
 	reConfAttr = regexp.MustCompile(`(?i)\b(?P<k>` + keyRE + `)\s*=\s*"(?P<v>[^"]*)"`)
 	reConfSQL  = regexp.MustCompile(`(?i)(?P<k>IDENTIFIED\s+BY|PASSWORD)\s+'(?P<v>[^']*)'`)
+	// A password hashed in SQL, as Supabase seeds create users:
+	// crypt('password123', gen_salt('bf')), also extensions.crypt(...)
+	// (ADR 0064 item 6). Only a literal first argument counts.
+	reSQLCrypt = regexp.MustCompile(`(?i)\b(?P<k>crypt)\s*\(\s*'(?P<v>[^']*)'\s*,`)
 	reCode     = regexp.MustCompile(`(?i)\b(?P<k>` + keyRE + `)["']?\s*(?:=|:|=>|:=)\s*["'](?P<v>[^"'\n]*)["']`)
 	reURL      = regexp.MustCompile(`(?i)[a-z][a-z0-9+.\-]*://(?P<k>[^:/@\s"'<>]+):(?P<v>[^@/\s"'<>]+)@`)
 
@@ -170,9 +173,7 @@ func fileSkip(rel string) string {
 	ext := strings.ToLower(path.Ext(base))
 	dirs := strings.Split(strings.ToLower(path.Dir(rel)), "/")
 	switch {
-	case reTestFile.MatchString(base) || anyDir(dirs, func(d string) bool {
-		return testDirs[d] || strings.HasSuffix(d, ".tests") || strings.HasSuffix(d, "unittests") || strings.HasSuffix(d, "functionaltests") || strings.HasSuffix(d, "integrationtests")
-	}):
+	case testpath.IsTest(rel):
 		return skipTest
 	case anyDir(dirs, func(d string) bool { return i18nDirs[d] }):
 		return skipI18n
@@ -234,6 +235,9 @@ func weakHits(rel string, data []byte) []weakHit {
 		for _, re := range confPatterns {
 			add(re, true)
 		}
+	}
+	if ext == ".sql" {
+		add(reSQLCrypt, true)
 	}
 	if isCode {
 		add(reCode, false)
