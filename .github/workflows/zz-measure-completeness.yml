@@ -4,6 +4,9 @@ name: Measure completeness signals (temporary)
 # finish or say so": how to read the kernel's process and memory counters
 # (a waiter inside the container, polling from the host, or inspect after
 # exit) on both engines and both architectures, and the tools' own signals.
+# Round 2 (2026-11-24): peaks of every check through SiegeKit on the gate
+# repositories and Juice Shop, signal frequency, the waiter under the other
+# images, Nuclei's template errors. Round 1 runs: 45459596563, 45460649317.
 on:
   pull_request:
     paths:
@@ -14,14 +17,18 @@ permissions:
   contents: read
 
 jobs:
-  counters:
+  repos:
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, ubuntu-24.04-arm]
         engine: [podman, docker]
+        group:
+          - "pallets/flask psf/requests encode/httpx gin-gonic/gin spf13/cobra go-chi/chi"
+          - "expressjs/express OWASP/NodeGoat juice-shop/juice-shop digininja/DVWA kubernetes/examples terraform-aws-modules/terraform-aws-vpc"
+          - "docker/awesome-compose firebase/quickstart-js vercel/nextjs-subscription-payments fastapi/full-stack-fastapi-template psf/black caddyserver/caddy pallets/click bridgecrewio/terragoat"
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 20
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -32,23 +39,32 @@ jobs:
           cache: false
       - name: Environment
         run: |
-          uname -srm
+          uname -srm; free -m | head -2
           ${{ matrix.engine }} --version
           if [ ${{ matrix.engine }} = podman ]; then podman info --format 'rootless={{.Host.Security.Rootless}} cgroup={{.Host.CgroupsVersion}} manager={{.Host.CgroupManager}}'; else docker info --format 'cgroup={{.CgroupVersion}} driver={{.CgroupDriver}}'; fi
-      - name: Build the waiter
-        run: cd .github/zz-measure/waiter && CGO_ENABLED=0 go build -o "$RUNNER_TEMP/wait" . && chmod 755 "$RUNNER_TEMP/wait"
-      - name: Counters, three ways
+      - name: Build SiegeKit keeping its work directory, Checkov also writing JSON
+        # Measurement build only: nothing here is committed.
+        run: |
+          sed -i 's/^\tdefer os.RemoveAll(work)$/\t_ = work \/\/ measurement keeps it/' internal/runner/runner.go internal/runner/url.go
+          test "$(cat internal/runner/runner.go internal/runner/url.go | grep -c 'measurement keeps it')" = 2
+          jq '.run.args |= (index("sarif") as $i | .[:$i+1] + ["--output", "json"] + .[$i+1:])' plugins/checkov/plugin.json > c.json && mv c.json plugins/checkov/plugin.json
+          jq -c .run.args plugins/checkov/plugin.json
+          CGO_ENABLED=0 go build -o "$RUNNER_TEMP/siegekit" ./cmd/siegekit
+          cd .github/zz-measure/waiter && CGO_ENABLED=0 go build -o "$RUNNER_TEMP/wait" . && chmod 755 "$RUNNER_TEMP/wait"
+      - name: Scan, peaks and signals
         env:
           ENGINE: ${{ matrix.engine }}
-        run: WAITER="$RUNNER_TEMP/wait" .github/zz-measure/counters.sh
+          REPOS: ${{ matrix.group }}
+        run: SK="$RUNNER_TEMP/siegekit" .github/zz-measure/repos.sh
 
-  tools:
+  url:
     strategy:
       fail-fast: false
       matrix:
+        os: [ubuntu-latest, ubuntu-24.04-arm]
         engine: [podman, docker]
-    runs-on: ubuntu-latest
-    timeout-minutes: 60
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -57,9 +73,56 @@ jobs:
         with:
           go-version: "1.27.4"
           cache: false
-      - name: Build the waiter
-        run: cd .github/zz-measure/waiter && CGO_ENABLED=0 go build -o "$RUNNER_TEMP/wait" . && chmod 755 "$RUNNER_TEMP/wait"
-      - name: Tool signals
+      - name: Environment
+        run: |
+          uname -srm; free -m | head -2
+          ${{ matrix.engine }} --version
+          if [ ${{ matrix.engine }} = podman ]; then podman info --format 'rootless={{.Host.Security.Rootless}} cgroup={{.Host.CgroupsVersion}} manager={{.Host.CgroupManager}}'; else docker info --format 'cgroup={{.CgroupVersion}} driver={{.CgroupDriver}}'; fi
+      - name: Build SiegeKit keeping its work directory, Checkov also writing JSON
+        # Measurement build only: nothing here is committed.
+        run: |
+          sed -i 's/^\tdefer os.RemoveAll(work)$/\t_ = work \/\/ measurement keeps it/' internal/runner/runner.go internal/runner/url.go
+          test "$(cat internal/runner/runner.go internal/runner/url.go | grep -c 'measurement keeps it')" = 2
+          jq '.run.args |= (index("sarif") as $i | .[:$i+1] + ["--output", "json"] + .[$i+1:])' plugins/checkov/plugin.json > c.json && mv c.json plugins/checkov/plugin.json
+          jq -c .run.args plugins/checkov/plugin.json
+          CGO_ENABLED=0 go build -o "$RUNNER_TEMP/siegekit" ./cmd/siegekit
+          cd .github/zz-measure/waiter && CGO_ENABLED=0 go build -o "$RUNNER_TEMP/wait" . && chmod 755 "$RUNNER_TEMP/wait"
+      - name: Scan Juice Shop, peaks
         env:
           ENGINE: ${{ matrix.engine }}
-        run: WAITER="$RUNNER_TEMP/wait" .github/zz-measure/tools.sh
+        run: SK="$RUNNER_TEMP/siegekit" .github/zz-measure/url.sh
+
+  extra:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, ubuntu-24.04-arm]
+        engine: [podman, docker]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: "1.27.4"
+          cache: false
+      - name: Environment
+        run: |
+          uname -srm; free -m | head -2
+          ${{ matrix.engine }} --version
+          if [ ${{ matrix.engine }} = podman ]; then podman info --format 'rootless={{.Host.Security.Rootless}} cgroup={{.Host.CgroupsVersion}} manager={{.Host.CgroupManager}}'; else docker info --format 'cgroup={{.CgroupVersion}} driver={{.CgroupDriver}}'; fi
+      - name: Build SiegeKit keeping its work directory, Checkov also writing JSON
+        # Measurement build only: nothing here is committed.
+        run: |
+          sed -i 's/^\tdefer os.RemoveAll(work)$/\t_ = work \/\/ measurement keeps it/' internal/runner/runner.go internal/runner/url.go
+          test "$(cat internal/runner/runner.go internal/runner/url.go | grep -c 'measurement keeps it')" = 2
+          jq '.run.args |= (index("sarif") as $i | .[:$i+1] + ["--output", "json"] + .[$i+1:])' plugins/checkov/plugin.json > c.json && mv c.json plugins/checkov/plugin.json
+          jq -c .run.args plugins/checkov/plugin.json
+          CGO_ENABLED=0 go build -o "$RUNNER_TEMP/siegekit" ./cmd/siegekit
+          cd .github/zz-measure/waiter && CGO_ENABLED=0 go build -o "$RUNNER_TEMP/wait" . && chmod 755 "$RUNNER_TEMP/wait"
+      - name: Waiter under the other images; Nuclei template errors
+        env:
+          ENGINE: ${{ matrix.engine }}
+        run: WAITER="$RUNNER_TEMP/wait" .github/zz-measure/extra.sh
