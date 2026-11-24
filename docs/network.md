@@ -91,4 +91,4 @@ Go modules for gosec: 41 modules named in your go.mod files, from proxy.golang.o
   podman unshare rm -rf ~/.local/share/siegekit/data/gomod                                      # rootless Podman
   ```
 
-- gosec builds in a scratch folder on disk, `~/.local/share/siegekit/data/scratch`, deleted after each run. It needs up to about 1 GB for a large app (caddy: 872 MiB). It is not in the system's temporary folder, which can be in memory and would then count against gosec's memory limit (measured).
+- gosec builds in a scratch folder on disk, `~/.local/share/siegekit/data/scratch`, deleted after each run. It needs about 1 GB for caddy (872 MiB), 3 GB for consul and 7.4 GB for grafana, measured; the module cache for those apps holds 0.9, 1.7 and up to 6.5 GB. It is not in the system's temporary folder, which can be in memory and would then count against gosec's memory limit (measured).

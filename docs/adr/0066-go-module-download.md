@@ -63,10 +63,31 @@ CI runs are on PR #72 (`ubuntu-latest`: rootless Podman 5.7.0 and rootful Docker
 
 Unverified, each with a test in the build or on the M2 check list:
 
-- Repositories larger than caddy (the scratch folder's disk use not pushed to a limit).
-- Real repositories with `go.work`, `vendor/` or an in-repository `replace` (only synthetic fixtures so far).
+- Repositories larger than caddy (the scratch folder's disk use not pushed to a limit). Build: measured on containerd, consul and grafana (section "Build"); grafana needs longer than gosec's 900 s.
+- Real repositories with `go.work`, `vendor/` or an in-repository `replace` (only synthetic fixtures so far). Build: `vendor/` (containerd) and in-repository replaces (consul) equal the reference; `go.work` on a real app (grafana) is not, because it times out.
 - A real Apple-chip Mac, as for every other tool. Under Colima on GitHub's Intel Mac, scans took 17 to 33 times longer than on Linux (go-chi `go list -export`: 21 s on Linux, 368 to 696 s under Colima). That Mac is itself a VM (`kern.hv_vmm_present` = 1) and the same work takes 18 s directly on it, so the cost comes from Colima's VM inside a VM; scan time under Colima on a real Mac is unverified. caddy was not run on macOS. The owner chose to move on without a Mac (2026-11-24).
 - Podman's `registries.conf` mirroring ghcr.io (its documented behaviour, not measured).
+
+## Build (PR #78)
+
+Where the build differs from the decision above, and why:
+
+- **Settings without a config file (point 7).** SiegeKit has no config file, so `--ca-file` and `--proxy` fall back to the environment variables `SIEGEKIT_CA_FILE` and `SIEGEKIT_PROXY` (owner's card, 2026-11-24). The proxy is passed as `HTTP_PROXY`, `HTTPS_PROXY` and their lowercase forms, which some programs read instead. Scan containers still refuse every proxy variable; `GOPROXY` (only `https://proxy.golang.org` or `off`) and `GONOPROXY` are the two exceptions.
+- **The scratch folder is in `~/.local/share/siegekit/data/scratch`, not the run folder (point 2).** The run folder is under the system's temporary directory, which can be a tmpfs, and pages a container writes there count against its memory limit (measured: a 256 MiB container was killed after writing 254 MiB to a host tmpfs, Docker 29.9.3, cgroup v1). That would bring back the limit 2B removes.
+- **The scratch folder is not `noexec` (point 2).** Docker refuses `noexec` on bind mounts (Docker 29.9.3: `--mount ...,noexec` gives "invalid field", `-v ...:noexec` "invalid mode"). gosec's results did not depend on it in the design's measurements.
+- **A cleanup container deletes the scratch folder.** On rootless Podman the files the tool writes belong to a subordinate user ID that SiegeKit's own user cannot delete, so what SiegeKit cannot delete is deleted by an `rm -rf` container running as the tool's user. The module cache is removed the same way by hand (`podman unshare rm -rf`, docs/network.md).
+- **Point 3 is built in this PR, from gosec's log.** The manifest's new `output.stdout.stderrFile` keeps gosec's log; with `-concurrency 1` the last `Import directory:` line before an `Error building the SSA representation` line names the folder (gosec 2.30.0, `analyzer.go`), which answers the design's "two `main` packages" question. The report names the folders whose SSA rules were skipped and that are not already among the load errors. The design had placed this with its parts 3 to 5.
+- **Two more causes are named.** A `go.mod` or `go.work` asking for a newer Go than the image's (grafana's main branch needs Go 1.27.4; the image has 1.27.3, so all 1,227 packages fail), and load errors gosec files under no folder (containerd's cgo compile errors).
+- **The presence check runs per module folder:** `go mod download` with `GOPROXY=off` and the cache read-only, with no network, in each folder with a `go.mod`.
+- **Every engine command gets the same environment.** On rootless Podman a timed-out gosec kept running after SiegeKit returned. Its scratch folder's cleanup then failed with "Directory not empty" while gosec still wrote to it. The cause: `rm --force` and `ps` got the caller's whole environment, while `run` got only the minimal one. With `XDG_DATA_HOME` set, Podman looked in another container store and found nothing, and SiegeKit took the container as removed (measurement run 45347080293, both arches: "Up 2 minutes" after SiegeKit exited). All engine commands now share one builder, and a test fails if one is built another way. The minimal environment also passes `XDG_DATA_HOME`, `XDG_CONFIG_HOME`, `CONTAINERS_REGISTRIES_CONF` and `CONTAINERS_STORAGE_CONF`, so SiegeKit's Podman uses the person's own image store and `registries.conf`. A container that cannot be confirmed removed is now an error.
+
+Measured on real apps larger than caddy (SiegeKit as built with `--yes`, against the same pinned image with network, a writable module cache and SiegeKit's sandbox flags):
+
+| App | What it uses | Result |
+|---|---|---|
+| containerd (ce1877a) | `vendor/`, 1,459 Go files | 681 unique findings, equal to the reference: 0 missed, 0 extra (Docker run 45340299829; Podman run 45347080293, amd64 and arm64). Scratch about 0.8 GB |
+| consul (9736026) | 16 modules, 31 replaces to folders in the repository, 2,477 Go files | 755, equal to the reference, 0 missed, 0 extra (Podman run 45347080293, amd64 and arm64). About 600 s; scratch peak about 3.0 GB; module cache 1.7 GB |
+| grafana v13.3.1 (5db6ba8) | `go.work`, 51 modules, 7,057 Go files | Times out at gosec's 900 s on both engines and both arches. The reference needs 1,975 s (amd64) and 1,549 s (arm64) and finds 798 (Docker run 45340299829); scratch 7.4 GB, module cache 3.9 to 6.5 GB |
 
 ## Alternatives considered
 

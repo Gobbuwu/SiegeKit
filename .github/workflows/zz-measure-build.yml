@@ -28,13 +28,16 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, ubuntu-24.04-arm]
-        engine: [podman] # Docker measured in run 45340299829
+        engine: [podman, docker]
         repo:
-          # grafana's Podman runs (45340299829, 45343442723) timed out at
-          # 900 s and left the scratch folder; consul reproduces that below
-          # with a 120 s limit. containerd and consul matched the reference
-          # on Podman in run 45347080293 (681 and 755, 0 missed, 0 extra).
-          - hashicorp/consul@97360268cce33aa9fea89d9db81ac0f48b13ecb0
+          # The 4 of the design's 10 repositories that the gate does not
+          # hold (ADR 0066, 5A: every finding the image finds with network,
+          # both engines). grafana, containerd and consul: runs 45340299829,
+          # 45343442723, 45347080293 and the timeout fix's run.
+          - gotify/server@912af9f37414ab08fae0cfcc3941c4fd95c183aa
+          - go-shiori/shiori@aebb4021a56048eed4c8feb325399be5f46e5470
+          - pocketbase/pocketbase@7f2773ec234b62d0b80ca47c508397cb3d0da3ea
+          - traefik/whoami@1ce75d01b6978863647da42557a707a479da3a51
     env:
       SIEGEKIT_ENGINE: ${{ matrix.engine }}
       E: ${{ matrix.engine }}
