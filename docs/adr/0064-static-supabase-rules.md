@@ -37,7 +37,7 @@ Two outside facts shape the design. Supabase's database linter, splinter, is the
 
 ## Evidence
 
-Environment: Claude's sandbox, linux/amd64, Go 1.26.0, PostgreSQL 16.15 run natively, 2026-11-23; the fixture's PostgreSQL check was repeated on 15.20 and 17.12 (Docker Hub `postgres:15` and `postgres:17`) with the same answer for every table, role and command. The checks run in SiegeKit's process, so no container engine is involved. Raw files: `supabase-rules-2026-11-23/` in the project files (`versions.txt` names every commit used).
+Environment: Claude's sandbox, linux/amd64, Go 1.26.0, PostgreSQL 16.15 run natively, 2026-11-23; the fixture's PostgreSQL check was repeated on 15.20 and 17.12 (Docker Hub `postgres:15` and `postgres:17`) with the same answer for every table, role and command. On a new hosted project (PostgreSQL 17.12, 2026-11-24, run by the owner in the SQL editor) the same probe gave no difference except tables and views refused for want of a grant, exactly the set refused locally without the old default grants, and Supabase's trigger on direct storage deletes (with it lifted as the Storage API does, 0 of 1 object deleted, as locally). The checks run in SiegeKit's process, so no container engine is involved. Raw files: `supabase-rules-2026-11-23/` in the project files (`versions.txt` names every commit used).
 
 | Claim | Backed by |
 |---|---|
