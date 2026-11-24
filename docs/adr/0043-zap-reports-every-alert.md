@@ -3,6 +3,7 @@
 - Status: Accepted
 - Date: 2026-11-21
 - Amends: [0023](0023-active-web-scans.md) (ZAP's arguments), [0040](0040-tools-that-skip-work.md) (a tool can also drop results it found)
+- Amended by: [0067](0067-checks-finish-or-say-so.md) (the passive scan's alerts-a-rule cap is removed)
 
 ## Context
 
