@@ -526,6 +526,18 @@ func TestConfigFile(t *testing.T) {
 	if !strings.Contains(strings.Join(args, "|"), "type=bind,source="+s.ConfigFile+",target=/siegekit/config.json,readonly") {
 		t.Errorf("config mount missing: %v", args)
 	}
+	toml := s
+	toml.ConfigFile = filepath.Join(t.TempDir(), "gitleaks-config.toml")
+	if err := os.WriteFile(toml.ConfigFile, []byte("title = \"x\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	args, err = toml.EngineArgs("n", 1000, 1000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(strings.Join(args, "|"), "type=bind,source="+toml.ConfigFile+",target=/siegekit/config.toml,readonly") {
+		t.Errorf("TOML config mount missing: %v", args)
+	}
 	link := filepath.Join(t.TempDir(), "link.json")
 	if err := os.Symlink(s.ConfigFile, link); err != nil {
 		t.Fatal(err)

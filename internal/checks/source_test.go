@@ -155,6 +155,8 @@ func TestReadSourceKind(t *testing.T) {
 		{"firestore rules", []string{"firestore.rules"}, false, true},
 		{"storage rules", []string{"storage.rules"}, false, true},
 		{"both", []string{"supabase/config.toml", "firebase.json"}, true, true},
+		// A test folder is never deployed (ADR 0064 item 1): it tells no kind.
+		{"tests only", []string{"supabase/tests/rls.sql", "tests/fixture/supabase/config.toml", "test/firebase.json", "__tests__/storage.rules"}, false, false},
 		{"neither", []string{"config.toml", "db/schema.sql", "supabase.js", "app.rules", "node_modules/x/supabase/config.toml", "node_modules/x/firebase.json"}, false, false},
 	} {
 		root := t.TempDir()

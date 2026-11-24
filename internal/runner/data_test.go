@@ -101,8 +101,8 @@ func TestScanMountsDataReadOnly(t *testing.T) {
 		if s.DataWritable || s.Network != "none" || s.DataDir != filepath.Join(o.DataRoot, "trivy") || s.DataMount != "/tmp/trivy/db" {
 			t.Errorf("scan spec %+v", s)
 		}
-		doc := `{"version":"2.1.0","runs":[{"tool":{"driver":{"name":"Trivy"}},"results":[]}]}`
-		return &sandbox.Result{Status: sandbox.Completed}, os.WriteFile(filepath.Join(s.OutDir, "trivy.sarif"), []byte(doc), 0o644)
+		doc := `{"SchemaVersion":2,"ArtifactName":"/target"}`
+		return &sandbox.Result{Status: sandbox.Completed}, os.WriteFile(filepath.Join(s.OutDir, "trivy.json"), []byte(doc), 0o644)
 	}}
 	r, err := Run(context.Background(), f, []*manifest.Manifest{m}, o)
 	if err != nil || r.Plugins[0].Status != report.Ran {

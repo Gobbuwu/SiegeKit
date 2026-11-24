@@ -87,11 +87,15 @@ var emptySARIF = fakeExec(func(s sandbox.Spec) (*sandbox.Result, error) {
 	if s.DataWritable { // an update run
 		return &sandbox.Result{Status: sandbox.Completed}, os.WriteFile(filepath.Join(s.DataDir, "db"), []byte("x"), 0o644)
 	}
-	for _, name := range []string{"gitleaks.sarif", "results_sarif.sarif", "trivy.sarif", "gosec.sarif"} {
+	for _, name := range []string{"gitleaks.sarif", "results_sarif.sarif", "gosec.sarif"} {
 		doc := `{"version":"2.1.0","runs":[{"tool":{"driver":{"name":"x"}},"results":[]}]}`
 		if err := os.WriteFile(filepath.Join(s.OutDir, name), []byte(doc), 0o644); err != nil {
 			return nil, err
 		}
+	}
+	// Trivy's JSON report with nothing found has no Results (ADR 0063).
+	if err := os.WriteFile(filepath.Join(s.OutDir, "trivy.json"), []byte(`{"SchemaVersion":2,"ArtifactName":"/target"}`), 0o644); err != nil {
+		return nil, err
 	}
 	if err := os.WriteFile(filepath.Join(s.OutDir, "bandit.json"), []byte(`{"results":[]}`), 0o644); err != nil {
 		return nil, err

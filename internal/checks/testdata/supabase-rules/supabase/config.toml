@@ -1,0 +1,9 @@
+[auth]
+enabled = true
+minimum_password_length = 6 # FINDING supabase-auth-short-passwords low
+password_requirements = "" # negative: NIST forbids composition rules
+
+[auth.email]
+enable_signup = true
+double_confirm_changes = false # FINDING supabase-auth-email-change-unconfirmed low
+enable_confirmations = false # FINDING supabase-auth-email-unconfirmed info

@@ -1,8 +1,10 @@
 package runner
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
@@ -277,11 +279,27 @@ func findsPlanted(t *testing.T, filesRoot string, ids ...string) {
 	// the tool asked for them at all.
 	var mu sync.Mutex
 	asked := map[string]int{}
+	// The recorded request's body as it arrives: whole and unchanged when
+	// ZAP sends it as recorded, empty when its body was not framed and
+	// the proxy took it for the start of the next request (ADR 0065).
+	var recordedWhole, recordedEmpty int
 	app := vulnApp()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if p := r.URL.Path; p == "/.env" || p == "/.git/config" {
 			mu.Lock()
 			asked[r.Method+" "+p]++
+			mu.Unlock()
+		}
+		if r.Method == http.MethodPost && r.URL.Path == "/api/import" {
+			b, _ := io.ReadAll(io.LimitReader(r.Body, 64<<10))
+			r.Body = io.NopCloser(bytes.NewReader(b))
+			mu.Lock()
+			switch string(b) {
+			case vulnAppRecordedRequest:
+				recordedWhole++
+			case "":
+				recordedEmpty++
+			}
 			mu.Unlock()
 		}
 		app.ServeHTTP(w, r)
@@ -391,6 +409,14 @@ func findsPlanted(t *testing.T, filesRoot string, ids ...string) {
 		if f.Location.URI != base && !strings.HasPrefix(f.Location.URI, base+"/") {
 			t.Errorf("finding outside the target: %s %+v: %s", f.RuleID, f.Location, f.Message)
 		}
+	}
+	if slices.ContainsFunc(ms, func(m *manifest.Manifest) bool { return m.Run.Recorded }) {
+		mu.Lock()
+		t.Logf("recorded request arrived whole %d times, empty %d times", recordedWhole, recordedEmpty)
+		if recordedWhole == 0 || recordedEmpty != 0 {
+			t.Errorf("the recorded request arrived whole %d times and empty %d times; ZAP must send its body as recorded (ADR 0065)", recordedWhole, recordedEmpty)
+		}
+		mu.Unlock()
 	}
 	noRelaysLeft(t, e, *relays)
 }

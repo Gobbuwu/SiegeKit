@@ -75,7 +75,8 @@ type Spec struct {
 	Relay   string // relay container name, for "target-only"
 	CAFile  string // per-run CA certificate to trust (https targets), for "target-only"
 	// ConfigFile is a configuration file SiegeKit wrote for the tool (ADR
-	// 0023), mounted read-only at ConfigMount; empty for none.
+	// 0023), mounted read-only at ConfigMount, or at ConfigMountTOML when
+	// its name ends in ".toml" (ADR 0063); empty for none.
 	ConfigFile   string
 	DataDir      string // host directory with the tool's data; empty for none
 	DataMount    string // where DataDir is mounted; read-only unless DataWritable
@@ -371,7 +372,11 @@ func (s *Spec) EngineArgs(name string, uid, gid int) ([]string, error) {
 		args = append(args, "--mount", "type=bind,source="+s.TargetDir+",target="+TargetMount+",readonly")
 	}
 	if s.ConfigFile != "" {
-		args = append(args, "--mount", "type=bind,source="+s.ConfigFile+",target="+ConfigMount+",readonly")
+		target := ConfigMount
+		if strings.HasSuffix(s.ConfigFile, ".toml") {
+			target = ConfigMountTOML
+		}
+		args = append(args, "--mount", "type=bind,source="+s.ConfigFile+",target="+target+",readonly")
 	}
 	if s.DataDir != "" {
 		m := "type=bind,source=" + s.DataDir + ",target=" + s.DataMount
@@ -743,6 +748,9 @@ const (
 	CAMount     = "/siegekit/ca.pem"
 	// ConfigMount is where Spec.ConfigFile is mounted (ADR 0023).
 	ConfigMount = "/siegekit/config.json"
+	// ConfigMountTOML is where a TOML Spec.ConfigFile is mounted, such as
+	// the Gitleaks configuration SiegeKit builds (ADR 0063).
+	ConfigMountTOML = "/siegekit/config.toml"
 	// FilesMount holds the pinned downloads of a plugin (ADR 0024).
 	FilesMount = "/siegekit/files"
 )

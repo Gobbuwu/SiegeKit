@@ -132,7 +132,8 @@ func FuzzBackendRules(f *testing.F) {
 	f.Fuzz(func(t *testing.T, rules, sql []byte) {
 		firebaseRules("a.rules", rules)
 		realtimeRules("database.rules.json", rules)
-		supabaseRLS(map[string][]byte{"supabase/m.sql": sql})
+		supabaseSQL(map[string][]byte{"supabase/m.sql": sql})
+		supabaseAuthConfig("supabase/config.toml", sql)
 	})
 }
 

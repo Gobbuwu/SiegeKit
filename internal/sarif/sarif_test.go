@@ -211,3 +211,33 @@ func TestSuppressedResults(t *testing.T) {
 		t.Errorf("without counter: %d findings", len(fs))
 	}
 }
+
+// SiegeKit's Gitleaks rule for Supabase publishable keys gives info
+// findings that say the key is public by design; every other Gitleaks rule,
+// SiegeKit's secret-key rule included, gives high ones (ADR 0063).
+func TestGitleaksPublishableKey(t *testing.T) {
+	doc := `{"version":"2.1.0","runs":[{"tool":{"driver":{"name":"gitleaks","rules":[
+{"id":"siegekit-supabase-publishable-key","shortDescription":{"text":"Supabase publishable key (sb_publishable_)"}},
+{"id":"siegekit-supabase-secret-key","shortDescription":{"text":"Supabase secret key (sb_secret_)"}}]}},"results":[
+{"ruleId":"siegekit-supabase-publishable-key","message":{"text":"siegekit-supabase-publishable-key has detected secret for file a.ts."},"locations":[{"physicalLocation":{"artifactLocation":{"uri":"a.ts"},"region":{"startLine":1}}}]},
+{"ruleId":"siegekit-supabase-secret-key","message":{"text":"siegekit-supabase-secret-key has detected secret for file a.ts."},"locations":[{"physicalLocation":{"artifactLocation":{"uri":"a.ts"},"region":{"startLine":2}}}]}]}]}`
+	l, err := Read(strings.NewReader(doc))
+	if err != nil {
+		t.Fatal(err)
+	}
+	fs, err := ToFindings(l, Options{Plugin: "gitleaks", Family: "secrets", Parser: "sarif-gitleaks"})
+	if err != nil || len(fs) != 2 {
+		t.Fatalf("%+v %v", fs, err)
+	}
+	if fs[0].Severity != findings.Info || fs[0].Message != publishableKeyMessage || fs[0].Title != "Supabase publishable key (sb_publishable_)" {
+		t.Errorf("publishable key: %+v", fs[0])
+	}
+	if fs[1].Severity != findings.High || !strings.Contains(fs[1].Message, "has detected secret") {
+		t.Errorf("secret key: %+v", fs[1])
+	}
+	// The rule id only matters to Gitleaks' parser.
+	fs, _ = ToFindings(l, Options{Plugin: "x", Family: "secrets", Parser: "sarif"})
+	if fs[0].Severity == findings.Info || fs[0].Message == publishableKeyMessage {
+		t.Errorf("plain SARIF: %+v", fs[0])
+	}
+}

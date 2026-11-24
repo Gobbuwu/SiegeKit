@@ -3,7 +3,15 @@
   "measured": "CI gate runs 44834908813 and 44836476025 on 2026-11-20 (ubuntu-latest), each on podman 5.7.0 rootless, cgroup v2, and docker 29.4.2 rootful, cgroup v2: four runs, the same answer on all four unless a check says otherwise",
   "checks": {
     "backend-rules": {
-      "status": "ran"
+      "status": "ran",
+      "match": "exact",
+      "findings": [
+        "supabase-auth-email-unconfirmed supabase/config.toml:94",
+        "supabase-policy-always-true supabase/migrations/20230530034630_init.sql:66",
+        "supabase-policy-always-true supabase/migrations/20230530034630_init.sql:99"
+      ],
+      "count": 3,
+      "why": "ADR 0064: products and prices are readable by anyone (select using (true), low, deliberate public catalogue data) and config.toml has enable_confirmations = false (info). Set from the built check on the pinned commit; the PR's gate run on both engines confirms it."
     },
     "bandit": {
       "status": "skipped",
