@@ -2,7 +2,9 @@ name: Measure Go module download build (temporary)
 
 # Temporary measurement for the ADR 0066 build PR, removed before merge.
 # Earlier runs: 45340299829, 45343442723, 45347080293, 45351534307,
-# 45354545612 (the design's 10 repositories, containerd, consul, grafana).
+# 45354545612 (the design's 10 repositories, containerd, consul, grafana),
+# 45405056394 (grafana profile: 99% of the time loads packages; 1, 2 and 4
+# workers; skips traced).
 #
 # This one asks why gosec needs 26 to 33 minutes on grafana v13.3.1 and why
 # it skips its SSA rules in some packages (grafana 105 log lines,
@@ -22,23 +24,28 @@ permissions:
 
 jobs:
   profile:
-    name: ${{ matrix.repo }} c${{ matrix.conc }} cpus${{ matrix.cpus }}
+    name: ${{ matrix.repo }} ${{ matrix.mode }} cpus${{ matrix.cpus }}
     runs-on: ubuntu-latest
     timeout-minutes: 120
     strategy:
       fail-fast: false
       matrix:
         include:
-          - { repo: grafana/grafana@5db6ba887630c7fa12e5bfd063f2fa854025468c, conc: 1, cpus: 2, deep: 1 }
-          - { repo: grafana/grafana@5db6ba887630c7fa12e5bfd063f2fa854025468c, conc: 2, cpus: 2, deep: 0 }
-          - { repo: grafana/grafana@5db6ba887630c7fa12e5bfd063f2fa854025468c, conc: 4, cpus: 4, deep: 0 }
-          - { repo: containerd/containerd@ce1877a1521be793afe42f8c024d9bc199eb063a, conc: 1, cpus: 2, deep: 1 }
-          - { repo: gotify/server@912af9f37414ab08fae0cfcc3941c4fd95c183aa, conc: 1, cpus: 2, deep: 1 }
+          # warm: a second run reusing the first run's Go build cache.
+          # x: gosec's -exclude-dir for folders the go command ignores
+          # (testdata, and names starting with _ or .). hdr: the pinned image
+          # plus Alpine's linux-headers. nocgo: CGO_ENABLED=0.
+          - { repo: grafana/grafana@5db6ba887630c7fa12e5bfd063f2fa854025468c, conc: 1, cpus: 2, mode: warm }
+          - { repo: grafana/grafana@5db6ba887630c7fa12e5bfd063f2fa854025468c, conc: 1, cpus: 4, mode: base }
+          - { repo: grafana/grafana@5db6ba887630c7fa12e5bfd063f2fa854025468c, conc: 1, cpus: 2, mode: x }
+          - { repo: containerd/containerd@ce1877a1521be793afe42f8c024d9bc199eb063a, conc: 1, cpus: 2, mode: hdr }
+          - { repo: containerd/containerd@ce1877a1521be793afe42f8c024d9bc199eb063a, conc: 1, cpus: 2, mode: nocgo }
+          - { repo: kubernetes/examples@22934a040acbb0c0aa103023ccbd871507bf17f6, conc: 1, cpus: 2, mode: x }
     env:
       REPO: ${{ matrix.repo }}
       CONC: ${{ matrix.conc }}
       CPUS: ${{ matrix.cpus }}
-      DEEP: ${{ matrix.deep }}
+      MODE: ${{ matrix.mode }}
       IMG: ghcr.io/securego/gosec@sha256:7bcf1edbab3e80d8006a28d53e7031a9c9775be8eec30679e4adc1f51d272121
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -52,6 +59,13 @@ jobs:
           name=${REPO%@*}; sha=${REPO#*@}
           git init -q $T/target && git -C $T/target fetch -q --depth 1 "https://github.com/$name.git" "$sha" && git -C $T/target -c advice.detachedHead=false checkout -q FETCH_HEAD
           docker pull -q "$IMG" > /dev/null
+          EXTRA=""; ENV=""
+          if [ "$MODE" = hdr ]; then
+            printf 'FROM %s\nUSER root\nRUN apk add --no-cache linux-headers\n' "$IMG" | docker build -q -t gosec-hdr - > /dev/null && IMG=gosec-hdr
+            echo "IMAGE gosec-hdr: $(docker run --rm --entrypoint sh gosec-hdr -c 'apk info -v 2>/dev/null | grep linux-headers')"
+          fi
+          [ "$MODE" = nocgo ] && ENV="--env CGO_ENABLED=0"
+          [ "$MODE" = x ] && EXTRA="-exclude-dir=/testdata(/|$) -exclude-dir=/[_.][^/]*(/|$)"
           mkdir -p $T/ref/gomod $T/ref/gc/tmp $T/ref/out; chmod -R 777 $T/ref
           run() { # the reference's sandbox: SiegeKit's flags, network, writable cache
             docker run --rm --pull never --user $(id -u):$(id -g) --cap-drop ALL --security-opt no-new-privileges --read-only \
@@ -60,12 +74,12 @@ jobs:
               --env HOME=/tmp --workdir /tmp --env GOPATH=/tmp/go \
               --mount type=bind,source=$T/ref/gomod,target=/data/gomod --env GOMODCACHE=/data/gomod \
               --mount type=bind,source=$T/ref/gc,target=/data/gocache --env GOCACHE=/data/gocache --env GOTMPDIR=/data/gocache/tmp \
-              --mount type=bind,source=$T/target,target=/target,readonly --mount type=bind,source=$T/ref/out,target=/out "$@"
+              --mount type=bind,source=$T/target,target=/target,readonly --mount type=bind,source=$T/ref/out,target=/out $ENV "$@"
           }
           ( while sleep 5; do docker stats --no-stream --format '{{.CPUPerc}} {{.MemUsage}}' prof 2>/dev/null; done ) > $T/stats.txt &
           P=$!
           t0=$(date +%s)
-          run --name prof "$IMG" -concurrency $CONC -fmt json -out /out/ref.json -no-fail -track-suppressions /target/... > /dev/null 2> $T/ref.err
+          run --name prof "$IMG" -concurrency $CONC $EXTRA -fmt json -out /out/ref.json -no-fail -track-suppressions /target/... > /dev/null 2> $T/ref.err
           rc=$?
           kill $P
           echo "GOSEC exit=$rc s=$(( $(date +%s) - t0 )) scratchMB=$(sudo du -sm $T/ref/gc | cut -f1) cacheMB=$(sudo du -sm $T/ref/gomod | cut -f1)"
@@ -143,18 +157,22 @@ jobs:
                   print(f"  nofile {e}")
           open('/tmp/silent.txt', 'w').write('\n'.join(silent))
           PY
-          cat $T/ana.txt | head -80
-          cp /tmp/silent.txt $T/silent.txt 2>/dev/null || : > $T/silent.txt
-          [ "$DEEP" = 1 ] || exit 0
-
-          # Why the silent ones fail: the imported packages that do not build.
-          head -40 $T/silent.txt | sed 's|^|./|' > $T/ref/out/dirs.txt
-          if [ -s $T/ref/out/dirs.txt ]; then
-            run --workdir /target --entrypoint sh "$IMG" -c \
-              'for d in $(cat /out/dirs.txt); do echo "$d => $(go list -e -export -deps -f "{{if .Error}}{{.ImportPath}}: {{.Error.Err}}{{end}}" "$d" 2>&1 | grep -v "^$" | head -3 | cut -c1-300 | tr "\n" " ")"; done' 2>&1 | head -45 | sed 's/^/  DEP /'
+          cat $T/ana.txt | head -40
+          python3 -I - $T/ref/out/ref.json <<'PY'
+          import json, sys, re, collections
+          d = json.load(open(sys.argv[1]))
+          u = set()
+          for i in d.get("Issues") or []:
+              if not i.get("suppressions"):
+                  u.add((i["rule_id"], i["file"].replace("/target/", "", 1), str(i["line"]).split("-")[0]))
+          ign = [x for x in u if re.search(r'(^|/)(testdata|[_.][^/]*)/', x[1])]
+          print("FINDINGS_UNIQUE", len(u), "IN_GO_IGNORED_DIRS", len(ign), "FILES", d.get("Stats", {}).get("files"))
+          for r, n in collections.Counter(x[0] for x in ign).most_common(8): print("  ignored-dir rule", r, n)
+          for x in sorted(ign)[:6]: print("  ignored-dir", *x)
+          PY
+          cp $T/ref/out/ref.json $T/first.json
+          if [ "$MODE" = warm ]; then
+            sudo rm -rf $T/ref/gc/tmp/*; t0=$(date +%s)
+            run "$IMG" -concurrency 1 -fmt json -out /out/ref.json -no-fail -track-suppressions /target/... > /dev/null 2> $T/ref2.err
+            echo "WARM exit=$? s=$(( $(date +%s) - t0 )) same=$(python3 -I -c 'import json,sys; a=json.load(open(sys.argv[1])); b=json.load(open(sys.argv[2])); k=lambda d: sorted((i["rule_id"],i["file"],i["line"]) for i in d.get("Issues") or []); print(k(a)==k(b))' $T/first.json $T/ref/out/ref.json)"
           fi
-
-          # Cost of one go list per package with a warm cache, 12 packages spread over the tree.
-          find $T/target -name '*.go' -not -path '*/testdata/*' -not -path '*/vendor/*' -not -path '*/node_modules/*' -printf '%h\n' | sed "s|^$T/target|.|" | sort -u | awk 'NR%60==1' | head -12 > $T/ref/out/sample.txt
-          run --workdir /target --entrypoint bash "$IMG" -c \
-            'for d in $(cat /out/sample.txt); do s=$(date +%s%N); go list -e -compiled -export -deps -json=ImportPath,Export "$d" > /dev/null 2>&1; ms=$(( ($(date +%s%N)-s)/1000000 )); echo "GOLIST ${ms}ms deps=$(go list -e -deps "$d" 2>/dev/null | wc -l) $d"; done'
