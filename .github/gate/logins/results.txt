@@ -1,9 +1,10 @@
 # What each scan of gate.sh must report (ADR 0062): scan | check | status | requests | result or reason.
 # Measured 2026-11-23 with Supabase Auth v2.198.0 on Docker 29.9.3 rootful (3 runs) and rootless Podman 4.9.3 (1 run), cgroup v1,
 # linux/amd64, Node 22: the same on every run; the request counts of login and limited re-measured (2 runs, Docker) after a
-# wrong login's redirect is followed (ADR 0062 item 4), the results unchanged.
-login | login-throttle | ran | 17 | no limit seen in 5 attempts, all answered 303 to /error?code=invalid_credentials; the right password answered 303 to / setting the cookies sb-127-auth-token
-login2 | login-throttle | ran | 12 | no limit seen in 5 attempts, all answered 200; the right password answered 303 to / setting the cookies sb-127-auth-token
+# wrong login's redirect is followed (ADR 0062 item 4), the results unchanged; login and login2 re-measured with 20 attempts
+# (issue #79, ADR 0062 item 7: fewer give no finding) on 2026-11-24, Docker 29.9.3 rootful, cgroup v1 (2 runs).
+login | login-throttle | ran | 62 | no limit seen in 20 attempts, all answered 303 to /error?code=invalid_credentials; the right password answered 303 to / setting the cookies sb-127-auth-token
+login2 | login-throttle | ran | 42 | no limit seen in 20 attempts, all answered 200; the right password answered 303 to / setting the cookies sb-127-auth-token
 ignored | login-throttle | failed | 2 | a login with the right password (SIEGEKIT_LOGIN_PASSWORD) and one with a wrong password were both answered 200, so SiegeKit cannot tell that its logins reach the app's login code, and a report of no limit could be false. Check --login-url and --login-body and that SIEGEKIT_LOGIN_PASSWORD is the account's password; a login form that needs JavaScript or a CSRF token needs --login-page
 limited | login-throttle | ran | 92 | limited after 30 of 40 attempts: redirected to /error?code=over_request_rate_limit instead of /error?code=invalid_credentials
 limited | login-spray | ran | 3 | limited after 1 of 40 attempts: the first login got the answer that showed login-throttle's limit (answered 303 to /error?code=over_request_rate_limit), so the limit holds for other names too

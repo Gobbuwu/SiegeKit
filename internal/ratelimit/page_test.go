@@ -385,6 +385,27 @@ func TestPageFindings(t *testing.T) {
 			t.Errorf("%s %+v: %+v", c.p, c.r, fs)
 		}
 	}
+	// The "not limited" findings say only what 20 requests show, and fewer
+	// give none (ADR 0062 item 7, issue #79).
+	for _, c := range []struct {
+		p            Page
+		r            Result
+		title, claim string
+	}{
+		{Reset, notLimited, "No limit seen in 20 password-reset requests", "at least 20 reset messages"},
+		{SignUp, notLimited, "No limit seen in 20 sign-ups", "at least 20 accounts in a row"},
+		{Code, Result{Requests: 20, Baseline: 401}, "No limit seen in 20 wrong verification codes", "at least 20 guesses at the second factor"},
+	} {
+		fs := Findings(mk(c.p), c.r, 20)
+		if len(fs) != 1 || fs[0].Title != c.title || !strings.Contains(fs[0].Message, c.claim) || strings.Contains(fs[0].Message, "keep guessing") || strings.Contains(fs[0].Message, "in bulk") {
+			t.Errorf("%s: %+v", c.p, fs)
+		}
+		few := c.r
+		few.Requests, few.Accepted = 5, min(few.Accepted, 5)
+		if fs := Findings(mk(c.p), few, 5); fs != nil {
+			t.Errorf("%s, 5 requests: %+v", c.p, fs)
+		}
+	}
 	for _, c := range []struct {
 		p Page
 		r Result

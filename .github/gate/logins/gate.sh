@@ -114,8 +114,8 @@ start() {
 # Each scan: name | flags | the logins Supabase Auth must get. The limit
 # is reset before each (Supabase Auth keeps it in memory).
 SCANS=(
-  "login|--only login-throttle --login-page $APP/login --login-attempts 5|6"
-  "login2|--only login-throttle --login-page $APP/login2 --login-attempts 5|6"
+  "login|--only login-throttle --login-page $APP/login --login-attempts 20|21"
+  "login2|--only login-throttle --login-page $APP/login2 --login-attempts 20|21"
   "ignored|--only login-throttle --login-url $APP/login --login-attempts 5|0"
   "limited|--only login-throttle,login-spray --login-page $APP/login --login-attempts 40|32"
 )

@@ -706,7 +706,9 @@ func pageFindings(e *Endpoint, r Result, planned int) []findings.Finding {
 		}
 		return nil
 	}
-	if r.Requests < planned || r.Changed > 0 {
+	// Fewer requests than the default give no "not limited" finding (ADR
+	// 0062 item 7); the pages always send the default.
+	if r.Requests < planned || r.Changed > 0 || planned < DefaultRequests {
 		return nil
 	}
 	switch e.Page {
@@ -715,25 +717,26 @@ func pageFindings(e *Endpoint, r Result, planned int) []findings.Finding {
 			return nil
 		}
 		head := fmt.Sprintf("%d password-reset requests to this page, one per second, with wrong answers where the page asks for one, all answered %d, with no 429 or 503 answer and no rate-limit header.", r.Requests, r.Baseline)
-		tail := fmt.Sprintf(" Limit reset requests per account and per client. SiegeKit does not see a limit set above %d requests or one per IP address.", planned)
+		title := fmt.Sprintf("No limit seen in %d password-reset requests", r.Requests)
+		tail := fmt.Sprintf(" If there is no limit, limit reset requests per account and per client. SiegeKit does not see a limit set above %d requests or one per IP address.", planned)
 		if m := r.Mail; m != nil && m.Settled && m.Emails > 0 {
-			return mk("reset-not-limited", "Password-reset requests are not rate limited",
-				head+fmt.Sprintf(" The app sent an email for each: %s. Anyone can flood an address with reset emails (and texts, if the app sends them), and guess reset answers.", m.said(r))+tail,
+			return mk("reset-not-limited", title,
+				head+fmt.Sprintf(" The app sent an email for each: %s. So anyone can send an address at least %d reset emails (and texts, if the app sends them) and make at least %d guesses at reset answers.", m.said(r), r.Requests, r.Requests)+tail,
 				findings.Low, "CWE-799")
 		}
 		why := " The answers do not show whether the app sent an email or a text each time: it may still limit those (Gitea answered 200 to 40 such requests and sent 1 email). Give " + mailcatcher.Flag + " with a local Mailpit the app sends its mail to, and SiegeKit counts them."
 		if m := r.Mail; m != nil {
 			why = " The answers do not show whether the app sent an email or a text each time, and the mail catcher did not settle it: " + m.said(r) + "."
 		}
-		return mk("reset-not-limited", "Password-reset requests are not rate limited",
-			head+why+" If it does not limit them, anyone can flood an address with reset messages, run up the cost of texts, and guess reset answers."+tail,
+		return mk("reset-not-limited", title,
+			head+why+fmt.Sprintf(" If it does not limit them, anyone can send an address at least %d reset messages, run up the cost of texts, and make at least %d guesses at reset answers.", r.Requests, r.Requests)+tail,
 			findings.Low, "CWE-799")
 	case SignUp:
-		return mk("signup-not-limited", "Sign-ups are not rate limited",
-			fmt.Sprintf("%d sign-ups to this page, one per second, each with a new user name, all answered %d, with no 429 or 503 answer and no rate-limit header: up to %d accounts were made, named siegekit-new-..., which you can delete. Anyone can make accounts in bulk (spam, fake reviews, free-tier abuse) and, if the app confirms by email, send that many emails. Limit sign-ups per client, or add a CAPTCHA. SiegeKit does not see a limit set above %d requests or one per IP address.", r.Requests, r.Baseline, r.Accepted, planned),
+		return mk("signup-not-limited", fmt.Sprintf("No limit seen in %d sign-ups", r.Requests),
+			fmt.Sprintf("%d sign-ups to this page, one per second, each with a new user name, all answered %d, with no 429 or 503 answer and no rate-limit header: up to %d accounts were made, named siegekit-new-..., which you can delete. So anyone can make at least %d accounts in a row (spam, fake reviews, free-tier abuse) and, if the app confirms by email, send that many emails. If there is no limit, limit sign-ups per client, or add a CAPTCHA. SiegeKit does not see a limit set above %d requests or one per IP address.", r.Requests, r.Baseline, r.Accepted, r.Requests, planned),
 			findings.Low, "CWE-799")
 	}
-	return mk("code-not-limited", "Wrong verification codes are not limited",
-		fmt.Sprintf("%d wrong codes sent to this verification-code page, one per second, all answered %d, with no 429 or 503 answer, no rate-limit header and no change of answer, so an attacker who has the password can keep guessing the second factor. Lock the login or ask for a new code after a few wrong codes. SiegeKit does not see a limit set above %d requests or one per IP address.", r.Requests, r.Baseline, planned),
+	return mk("code-not-limited", fmt.Sprintf("No limit seen in %d wrong verification codes", r.Requests),
+		fmt.Sprintf("%d wrong codes sent to this verification-code page, one per second, all answered %d, with no 429 or 503 answer, no rate-limit header and no change of answer, so an attacker who has the password can make at least %d guesses at the second factor. NIST SP 800-63B allows at most 100 failed attempts in a row; SiegeKit does not see a limit set above %d requests or one per IP address. If there is no limit, lock the login or ask for a new code after a few wrong codes.", r.Requests, r.Baseline, r.Requests, planned),
 		findings.Medium, "CWE-307")
 }

@@ -2,6 +2,7 @@
 
 - Status: Accepted
 - Date: 2026-11-20
+- Amended by: [0062](0062-form-logins.md) (what `rate-not-limited` claims, and the 20-request floor)
 - Amends: [0011](0011-app-logic-and-ai-checks.md) item 2 (how the URL is given, what counts as a limit, where it runs), [0029](0029-check-selection.md) (what `--profile quick` leaves out)
 
 ## Context

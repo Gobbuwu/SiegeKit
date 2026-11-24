@@ -200,7 +200,11 @@ func (r Result) summary(planned int) string {
 	if r.Changed > 0 {
 		return fmt.Sprintf("no 429, 503 or rate-limit header in %d requests, but %d answered a status other than the first answer's %d, which may be a limit: not reported", r.Requests, r.Changed, r.Baseline)
 	}
-	return fmt.Sprintf("no limit seen in %d requests, all answered %d with no rate-limit header", r.Requests, r.Baseline)
+	s := fmt.Sprintf("no limit seen in %d requests, all answered %d with no rate-limit header", r.Requests, r.Baseline)
+	if planned < DefaultRequests {
+		s += fmt.Sprintf("; too few requests to report a finding: run again with --rate-limit-requests %d or more", DefaultRequests)
+	}
+	return s
 }
 
 // send and sleep are replaced in tests.
@@ -365,20 +369,22 @@ func Signal(status int, h http.Header) string {
 }
 
 // Findings turns a result into findings: one when no limit was seen in
-// all planned requests and every answer had the first one's status. The
-// reset, sign-up and code pages have their own (ADR 0055).
+// all planned requests, at least DefaultRequests, and every answer had the
+// first one's status. A run shows only that the app allowed that many, so
+// the finding says so, and fewer give none (ADR 0062 item 7, issue #79).
+// The reset, sign-up and code pages have their own (ADR 0055).
 func Findings(e *Endpoint, r Result, planned int) []findings.Finding {
 	if e.Page != "" {
 		return pageFindings(e, r, planned)
 	}
-	if r.Limited || r.Requests < planned || r.Changed > 0 {
+	if r.Limited || r.Requests < planned || r.Changed > 0 || planned < DefaultRequests {
 		return nil
 	}
 	f := findings.Finding{
 		RuleID: "rate-not-limited",
-		Title:  "Requests are not rate limited",
-		Message: fmt.Sprintf("%d %s requests to this URL, one per second, all answered %d, with no 429 or 503 answer and no rate-limit header (RateLimit-*, X-RateLimit-*, Retry-After). If this URL is expensive (a search, a report, an AI call), anyone can call it as often as they like and run up load or cost: limit it per client. SiegeKit does not see a limit set above %d requests, one that only slows answers, or one that shows no header and no 429 or 503. Check that this is the URL you meant: an app that answers every unknown page (a single-page app) shows no limit there either.",
-			r.Requests, e.Method, r.Baseline, planned),
+		Title:  fmt.Sprintf("No rate limit seen in %d requests", r.Requests),
+		Message: fmt.Sprintf("%d %s requests to this URL, one per second, all answered %d, with no 429 or 503 answer and no rate-limit header (RateLimit-*, X-RateLimit-*, Retry-After), so anyone can call it at least %d times in a row. If this URL is expensive (a search, a report, an AI call) and has no limit, anyone can run up load or cost: limit it per client. SiegeKit does not see a limit set above %d requests, one that only slows answers, or one that shows no header and no 429 or 503. Check that this is the URL you meant: an app that answers every unknown page (a single-page app) shows no limit there either.",
+			r.Requests, e.Method, r.Baseline, r.Requests, planned),
 		Severity: findings.Low,
 		CWEs:     []string{"CWE-770"},
 		Location: findings.Location{URI: strings.SplitN(e.URL, "?", 2)[0]},

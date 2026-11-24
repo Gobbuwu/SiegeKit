@@ -161,6 +161,19 @@ func TestCheckNoLimit(t *testing.T) {
 	if s := r.Summary(DefaultRequests); s != "no limit seen in 20 requests, all answered 200 with no rate-limit header" {
 		t.Error(s)
 	}
+	// The finding says only what 20 requests show, and fewer give none
+	// (ADR 0062 item 7, issue #79).
+	if f := fs[0]; f.Title != "No rate limit seen in 20 requests" || !strings.Contains(f.Message, "at least 20 times in a row") || strings.Contains(f.Message, "as often as they like") {
+		t.Errorf("%+v", f)
+	}
+	few := r
+	few.Requests = 5
+	if fs := Findings(e, few, 5); fs != nil {
+		t.Errorf("5 requests: %+v", fs)
+	}
+	if s := few.Summary(5); s != "no limit seen in 5 requests, all answered 200 with no rate-limit header; too few requests to report a finding: run again with --rate-limit-requests 20 or more" {
+		t.Error(s)
+	}
 	// A client error the app gives to every request (a 400 for a missing
 	// parameter) is still a baseline: the same request, never limited.
 	f = fake{}
@@ -172,7 +185,7 @@ func TestCheckNoLimit(t *testing.T) {
 	p, cfg := testEndpoint(t, `{"q":"x"}`)
 	f = fake{}
 	f.install(t, p, func(int) (*egress.Answer, error) { return answer(201, nil), nil })
-	if r, err := Check(context.Background(), cfg, p, 3); err != nil || r.Requests != 3 || f.sent != 3 || !strings.Contains(Findings(p, r, 3)[0].Message, "3 POST requests") {
+	if r, err := Check(context.Background(), cfg, p, DefaultRequests); err != nil || r.Requests != DefaultRequests || f.sent != DefaultRequests || !strings.Contains(Findings(p, r, DefaultRequests)[0].Message, "20 POST requests") {
 		t.Errorf("POST: %+v %v", r, err)
 	}
 }

@@ -255,6 +255,9 @@ func (r Result) Summary(planned int) string {
 	if r.Right != "" {
 		s += "; the right password " + r.Right
 	}
+	if planned < DefaultAttempts {
+		s += fmt.Sprintf("; too few attempts to report a finding, since many apps limit failed logins at 5 to 30: run again with --login-attempts %d or more", DefaultAttempts)
+	}
 	return s
 }
 
@@ -684,16 +687,20 @@ func limitStatus(a *egress.Answer) string {
 	return ""
 }
 
-// Findings turns a result into findings: one when no limit was seen.
+// Findings turns a result into findings: one when no limit was seen in
+// at least DefaultAttempts attempts (issue #79). A run shows only that the
+// app allowed that many guesses, never that it has no limit, so the
+// finding says so. Fewer attempts give no finding: many apps limit at 5 to
+// 30, so a limit just past a small N would be reported as none.
 func Findings(l *Login, r Result, planned int) []findings.Finding {
-	if r.Limited || r.Attempts < planned {
+	if r.Limited || r.Attempts < planned || planned < DefaultAttempts {
 		return nil
 	}
 	f := findings.Finding{
 		RuleID: "login-not-limited",
-		Title:  "Failed logins are not limited",
-		Message: fmt.Sprintf("%d logins for the test account %q with a wrong password, one per second, all got the same answer (%s) with no slowdown, block, lockout or CAPTCHA, so an attacker can keep guessing this account's password. A login with the right password first %s, so these logins reached the app's login code. Limit failed logins, for example with a growing delay, a temporary lock or a CAPTCHA. SiegeKit does not see a limit set above %d attempts, one per IP address, or one across many accounts.",
-			r.Attempts, l.User, r.answer(), r.Right, planned),
+		Title:  fmt.Sprintf("No limit seen in %d failed logins", r.Attempts),
+		Message: fmt.Sprintf("%d logins for the test account %q with a wrong password, one per second, all got the same answer (%s) with no slowdown, block, lockout or CAPTCHA, so an attacker can make at least %d guesses at this account's password. A login with the right password first %s, so these logins reached the app's login code. %s If the app has no limit, add one, for example a growing delay, a temporary lock or a CAPTCHA. SiegeKit does not see a limit per IP address or one across many accounts.",
+			r.Attempts, l.User, r.answer(), r.Attempts, r.Right, aboveN(r.Attempts)),
 		Severity: findings.Medium,
 		CWEs:     []string{"CWE-307"},
 		Location: findings.Location{URI: cmp.Or(r.URL, l.URL)},
@@ -704,17 +711,23 @@ func Findings(l *Login, r Result, planned int) []findings.Finding {
 	return []findings.Finding{f}
 }
 
+// aboveN says what a run of n attempts cannot show (issue #79).
+func aboveN(n int) string {
+	return fmt.Sprintf("Many apps limit failed logins at 5 to 30, and NIST SP 800-63B allows at most 100 in a row for one account; SiegeKit does not see a limit set above %d attempts.", n)
+}
+
 // SprayFindings turns a spraying result into findings: one when no limit
-// was seen, medium like a login with no limit (owner 2026-11-22).
+// was seen in at least DefaultAttempts logins, medium like a login with no
+// limit (owner 2026-11-22), and worded like it (issue #79).
 func SprayFindings(l *Login, r Result, planned int) []findings.Finding {
-	if r.Limited || r.Attempts < planned {
+	if r.Limited || r.Attempts < planned || planned < DefaultAttempts {
 		return nil
 	}
 	f := findings.Finding{
 		RuleID: "spray-not-limited",
-		Title:  "Logins across many accounts are not limited",
-		Message: fmt.Sprintf("The app limited failed logins for the one test account, but %d logins for %d different invented user names (siegekit-nobody-1 and on), one per second and all with the same wrong password, all got the same answer (%s) with no slowdown, block or CAPTCHA. So the limit is per account only: an attacker who tries one common password on many accounts (password spraying) is never stopped. Also limit failed logins per client address, or across accounts. SiegeKit does not see a limit set above %d attempts.",
-			r.Attempts, r.Attempts, r.answer(), planned),
+		Title:  fmt.Sprintf("No limit seen in %d failed logins across accounts", r.Attempts),
+		Message: fmt.Sprintf("The app limited failed logins for the one test account, but %d logins for %d different invented user names (siegekit-nobody-1 and on), one per second and all with the same wrong password, all got the same answer (%s) with no slowdown, block or CAPTCHA. So the limit seen is per account: an attacker who tries one common password on many accounts (password spraying) can make at least %d such guesses from one address. %s If the app has no such limit, also limit failed logins per client address, or across accounts.",
+			r.Attempts, r.Attempts, r.answer(), r.Attempts, aboveN(r.Attempts)),
 		Severity: findings.Medium,
 		CWEs:     []string{"CWE-307"},
 		Location: findings.Location{URI: cmp.Or(r.URL, l.URL)},

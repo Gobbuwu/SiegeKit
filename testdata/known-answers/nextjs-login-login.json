@@ -1,6 +1,6 @@
 {
-  "fixture": "Next.js 16.4.6 app (.github/gate/logins, React 19.3.1, @supabase/ssr 0.12.7, @supabase/supabase-js 2.119.2) whose logins are Server Action forms calling Supabase Auth on the server: /login, the form of Supabase's server-side login guide (<button formAction={login}>), with --login-page, 5 attempts; Supabase Auth supabase/gotrue@sha256:ba8c0c82c574756c835c696df2a2c698020cc408a42034013d3712e34de7964d (v2.198.0) on supabase/postgres@sha256:d15ecf03474e4f5437002f3951f758b8fbfb182c3be311a998873c768ff53d37, logins limited by client address (burst 30, then 1 per 5 minutes) behind a gateway that sets it (gate.yml job logins)",
-  "measured": "4 local runs on 2026-11-23, each on a fresh Supabase Auth, database and app build, with Supabase Auth on Docker 29.9.3 rootful (3 runs) and on rootless Podman 4.9.3 (1 run), cgroup v1, linux/amd64: the same answer, requests and Supabase Auth logins on every run; to be confirmed by the CI gate on both engines and both architectures. Minimum requests are the measured ones: each login is one page read and one post, and the count is fixed",
+  "fixture": "Next.js 16.4.6 app (.github/gate/logins, React 19.3.1, @supabase/ssr 0.12.7, @supabase/supabase-js 2.119.2) whose logins are Server Action forms calling Supabase Auth on the server: /login, the form of Supabase's server-side login guide (<button formAction={login}>), with --login-page, 20 attempts (issue #79: fewer give no finding); Supabase Auth supabase/gotrue@sha256:ba8c0c82c574756c835c696df2a2c698020cc408a42034013d3712e34de7964d (v2.198.0) on supabase/postgres@sha256:d15ecf03474e4f5437002f3951f758b8fbfb182c3be311a998873c768ff53d37, logins limited by client address (burst 30, then 1 per 5 minutes) behind a gateway that sets it (gate.yml job logins)",
+  "measured": "4 local runs on 2026-11-23, each on a fresh Supabase Auth, database and app build, with Supabase Auth on Docker 29.9.3 rootful (3 runs) and on rootless Podman 4.9.3 (1 run), cgroup v1, linux/amd64: the same answer, requests and Supabase Auth logins on every run; to be confirmed by the CI gate on both engines and both architectures. Minimum requests are the measured ones: each login is one page read and one post, and the count is fixed; re-measured with 20 attempts on 2026-11-24 (2 runs, Docker 29.9.3 rootful, cgroup v1): 21 Supabase Auth logins, the same answer",
   "checks": {
     "login-throttle": {
       "status": "ran",
@@ -9,8 +9,8 @@
         "login-not-limited /login"
       ],
       "count": 1,
-      "minRequests": 12,
-      "why": "Supabase Auth's burst of 30 is not reached by 6 logins; the right password redirects to /, a wrong one to /error?code=invalid_credentials"
+      "minRequests": 42,
+      "why": "Supabase Auth's burst of 30 is not reached by 21 logins; the right password redirects to /, a wrong one to /error?code=invalid_credentials"
     }
   }
 }

@@ -692,7 +692,7 @@ func useLogin(t *testing.T, res login.Result, err error) *[]egress.Config {
 	t.Setenv(login.PasswordEnv, testPassword)
 	loginCheck = func(_ context.Context, cfg egress.Config, l *login.Login, attempts int, right string) (login.Result, error) {
 		calls = append(calls, cfg)
-		if l.User != "tester" || l.Path != "/rest/user/login" || attempts != 7 || right != testPassword {
+		if l.User != "tester" || l.Path != "/rest/user/login" || attempts != 20 || right != testPassword {
 			t.Errorf("login check %+v, %d attempts", l, attempts)
 		}
 		return res, err
@@ -704,7 +704,7 @@ func useLogin(t *testing.T, res login.Result, err error) *[]egress.Config {
 // testPassword is the test account's password in SIEGEKIT_LOGIN_PASSWORD.
 const testPassword = "Tester-pw-77"
 
-var loginArgs = []string{"--login-url", "http://localhost:3000/rest/user/login", "--login-user", "tester", "--login-body", `{"email":"{user}","password":"{password}"}`, "--login-attempts", "7"}
+var loginArgs = []string{"--login-url", "http://localhost:3000/rest/user/login", "--login-user", "tester", "--login-body", `{"email":"{user}","password":"{password}"}`, "--login-attempts", "20"}
 
 func TestScanURLLogin(t *testing.T) {
 	old := resolver
@@ -758,10 +758,10 @@ func TestScanURLLogin(t *testing.T) {
 	// login without a limit is a medium finding.
 	f := useActive(t)
 	data := useData(t)
-	calls := useLogin(t, login.Result{Attempts: 7, Requests: 8, Baseline: 401, Right: "answered 200"}, nil)
+	calls := useLogin(t, login.Result{Attempts: 20, Requests: 8, Baseline: 401, Right: "answered 200"}, nil)
 	code, out := scan(false, "", append(slices.Clone(loginArgs), "--authorized-host", "localhost", "--only", "login-throttle,zap", "http://localhost:3000/")...)
 	if code != report.ExitClean || len(*calls) != 1 || (*calls)[0].ReadOnly || len(f.specs) != 1 ||
-		!strings.Contains(out, `login-throttle       siegekit 0.0.0-dev: 1 login for "tester" with its password from SIEGEKIT_LOGIN_PASSWORD, then 7 with a random wrong password, POST http://localhost:3000/rest/user/login, one per second; the account may be locked`) {
+		!strings.Contains(out, `login-throttle       siegekit 0.0.0-dev: 1 login for "tester" with its password from SIEGEKIT_LOGIN_PASSWORD, then 20 with a random wrong password, POST http://localhost:3000/rest/user/login, one per second; the account may be locked`) {
 		t.Fatalf("exit %d, %d checks, %d runs\n%s", code, len(*calls), len(f.specs), out)
 	}
 	b, err := os.ReadFile(filepath.Join(data, "siegekit", "audit.log"))
@@ -771,7 +771,7 @@ func TestScanURLLogin(t *testing.T) {
 	}
 	r := readReport()
 	p := r.Plugins[0]
-	if p.Status != report.Ran || p.Requests != 8 || p.Findings != 1 || p.Input != `POST http://localhost:3000/rest/user/login as "tester"` || p.Result != "no limit seen in 7 attempts, all answered 401; the right password answered 200" {
+	if p.Status != report.Ran || p.Requests != 8 || p.Findings != 1 || p.Input != `POST http://localhost:3000/rest/user/login as "tester"` || p.Result != "no limit seen in 20 attempts, all answered 401; the right password answered 200" {
 		t.Errorf("plugin %+v", p)
 	}
 	// The password is never written: not in the output, the report or the
@@ -792,7 +792,7 @@ func TestScanURLLogin(t *testing.T) {
 	// --fail-on medium makes it fail the run.
 	useActive(t)
 	useData(t)
-	useLogin(t, login.Result{Attempts: 7, Baseline: 401}, nil)
+	useLogin(t, login.Result{Attempts: 20, Baseline: 401}, nil)
 	if code, out := scan(false, "", append(slices.Clone(loginArgs), "--authorized-host", "localhost", "--only", "login-throttle", "--fail-on", "medium", "http://localhost:3000/")...); code != report.ExitFindings {
 		t.Errorf("--fail-on medium: exit %d\n%s", code, out)
 	}
@@ -803,7 +803,7 @@ func TestScanURLLogin(t *testing.T) {
 	useData(t)
 	useLogin(t, login.Result{Attempts: 4, Limited: true, Signal: "answered 429", Baseline: 401}, nil)
 	scan(false, "", append(slices.Clone(loginArgs), "--authorized-host", "localhost", "--only", "login-throttle", "http://localhost:3000/")...)
-	if p := readReport().Plugins[0]; p.Status != report.Ran || p.Findings != 0 || p.Result != "limited after 4 of 7 attempts: answered 429" {
+	if p := readReport().Plugins[0]; p.Status != report.Ran || p.Findings != 0 || p.Result != "limited after 4 of 20 attempts: answered 429" {
 		t.Errorf("limited: %+v", p)
 	}
 	useActive(t)
@@ -831,7 +831,7 @@ func TestScanURLLogin(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			useActive(t)
 			useData(t)
-			calls := useLogin(t, login.Result{Attempts: 7, Baseline: 401}, nil)
+			calls := useLogin(t, login.Result{Attempts: 20, Baseline: 401}, nil)
 			extra := c.extra
 			if extra == nil {
 				extra = []string{"--only", "login-throttle"}
@@ -850,13 +850,13 @@ func TestScanURLLogin(t *testing.T) {
 	// Deployed targets: never run, whatever is confirmed (ADR 0025).
 	useActive(t)
 	data = useData(t)
-	calls = useLogin(t, login.Result{Attempts: 7, Baseline: 401}, nil)
+	calls = useLogin(t, login.Result{Attempts: 20, Baseline: 401}, nil)
 	tok, err := verify.Token(filepath.Join(data, "siegekit", "verify"), "shop.example")
 	if err != nil {
 		t.Fatal(err)
 	}
 	useProver(t, &fakeProver{published: map[string]string{"shop.example": verify.Value(tok)}})
-	deployedArgs := []string{"--deployed", "--login-url", "https://shop.example/rest/user/login", "--login-user", "tester", "--login-body", "u={user}&p={password}", "--login-attempts", "7", "--only", "login-throttle,zap", "https://shop.example/"}
+	deployedArgs := []string{"--deployed", "--login-url", "https://shop.example/rest/user/login", "--login-user", "tester", "--login-body", "u={user}&p={password}", "--login-attempts", "20", "--only", "login-throttle,zap", "https://shop.example/"}
 	code, out = scan(true, "shop.example\n", deployedArgs...)
 	if code != exitOK || len(*calls) != 0 || !strings.Contains(out, "login-throttle       not run - runs only on local targets") {
 		t.Errorf("deployed: exit %d, %d checks\n%s", code, len(*calls), out)
@@ -869,7 +869,7 @@ func TestScanURLLogin(t *testing.T) {
 	// any request (ADR 0062).
 	useActive(t)
 	useData(t)
-	calls = useLogin(t, login.Result{Attempts: 7, Baseline: 401}, nil)
+	calls = useLogin(t, login.Result{Attempts: 20, Baseline: 401}, nil)
 	os.Unsetenv(login.PasswordEnv)
 	code, out = scan(false, "", append(slices.Clone(loginArgs), "--authorized-host", "localhost", "--only", "login-throttle", "http://localhost:3000/")...)
 	if p := readReport().Plugins[0]; len(*calls) != 0 || p.Status != report.Skipped || p.Cause != report.CauseNoInput || !strings.Contains(p.Reason, "set SIEGEKIT_LOGIN_PASSWORD") {
@@ -895,14 +895,14 @@ func TestScanURLLogin(t *testing.T) {
 	t.Setenv(login.PasswordEnv, testPassword)
 	loginCheck = func(_ context.Context, cfg egress.Config, l *login.Login, attempts int, right string) (login.Result, error) {
 		pages = append(pages, l)
-		return login.Result{Attempts: 7, Requests: 16, Baseline: 303, Redirect: "/error", Right: "answered 303 to /", URL: "http://localhost:3000/login", Form: `multipart/form-data, button "Log in"`}, nil
+		return login.Result{Attempts: 20, Requests: 16, Baseline: 303, Redirect: "/error", Right: "answered 303 to /", URL: "http://localhost:3000/login", Form: `multipart/form-data, button "Log in"`}, nil
 	}
-	pageArgs := []string{"--login-page", "http://localhost:3000/login", "--login-user", "tester", "--login-body", "email={user}&password={password}", "--login-attempts", "7", "--authorized-host", "localhost", "--only", "login-throttle", "http://localhost:3000/"}
+	pageArgs := []string{"--login-page", "http://localhost:3000/login", "--login-user", "tester", "--login-body", "email={user}&password={password}", "--login-attempts", "20", "--authorized-host", "localhost", "--only", "login-throttle", "http://localhost:3000/"}
 	code, out = scan(false, "", pageArgs...)
 	p = readReport().Plugins[0]
 	if len(pages) != 1 || !pages[0].Page || pages[0].URL != "http://localhost:3000/login" || p.Requests != 16 ||
 		p.Input != `the form on http://localhost:3000/login (POST http://localhost:3000/login, multipart/form-data, button "Log in") as "tester"` ||
-		!strings.Contains(out, "then 7 with a random wrong password, the form on http://localhost:3000/login, one per second") {
+		!strings.Contains(out, "then 20 with a random wrong password, the form on http://localhost:3000/login, one per second") {
 		t.Errorf("--login-page: exit %d %+v\n%s", code, p, out)
 	}
 	for _, c := range []struct {

@@ -336,12 +336,19 @@ func TestFormLogin(t *testing.T) {
 	if a.served != 6 || len(a.posts) != 6 || a.wrong != 5 {
 		t.Errorf("%d pages, %d posts, %d wrong", a.served, len(a.posts), a.wrong)
 	}
-	fs := Findings(l, r, 5)
+	// 5 attempts are too few for a finding (issue #79); the message of 20
+	// such answers names the form's answers.
+	if fs := Findings(l, r, 5); fs != nil {
+		t.Errorf("%+v", fs)
+	}
+	r20 := r
+	r20.Attempts = DefaultAttempts
+	fs := Findings(l, r20, DefaultAttempts)
 	if len(fs) != 1 || fs[0].Location.URI != tu.Origin()+"/login" || !strings.Contains(fs[0].Message, "same answer (303 to /error?code=invalid_credentials)") ||
 		!strings.Contains(fs[0].Message, "right password first answered 303 to /") {
 		t.Errorf("%+v", fs)
 	}
-	if s := r.Summary(5); s != "no limit seen in 5 attempts, all answered 303 to /error?code=invalid_credentials; the right password answered 303 to / setting the cookies sb-auth-token" {
+	if s := r.Summary(5); s != "no limit seen in 5 attempts, all answered 303 to /error?code=invalid_credentials; the right password answered 303 to / setting the cookies sb-auth-token; too few attempts to report a finding, since many apps limit failed logins at 5 to 30: run again with --login-attempts 20 or more" {
 		t.Error(s)
 	}
 	// Supabase's limit shows only in the redirect.

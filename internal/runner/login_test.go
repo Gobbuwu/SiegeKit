@@ -27,17 +27,20 @@ func TestLoginFindsPlantedIssue(t *testing.T) {
 		t.Fatal(err)
 	}
 	cfg := egress.Config{Target: tu, Addrs: []netip.Addr{netip.MustParseAddr("127.0.0.1")}, Version: "test"}
+	// Too few attempts give no finding (issue #79), so the logins with no
+	// limit send the default number; the others stop sooner.
 	const attempts = 4
+	const full = login.DefaultAttempts
 	l, err := login.Parse(srv.URL+"/account/sign-in", "tester@shop.test", `{"email":"{user}","password":"{password}"}`, tu)
 	if err != nil {
 		t.Fatal(err)
 	}
-	r, err := login.Check(context.Background(), cfg, l, attempts, vulnAppPassword)
-	if err != nil || r.Limited || r.Attempts != attempts {
+	r, err := login.Check(context.Background(), cfg, l, full, vulnAppPassword)
+	if err != nil || r.Limited || r.Attempts != full {
 		t.Fatalf("%+v %v", r, err)
 	}
 	found := map[string]bool{}
-	for _, f := range login.Findings(l, r, attempts) {
+	for _, f := range login.Findings(l, r, full) {
 		u, _ := url.Parse(f.Location.URI)
 		found[f.RuleID+" "+u.Path] = true
 	}
@@ -47,11 +50,11 @@ func TestLoginFindsPlantedIssue(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	r, err = login.Check(context.Background(), cfg, l, attempts, vulnAppPassword)
-	if err != nil || r.Limited || r.Attempts != attempts || r.Redirect != "/account/form-sign-in?error=invalid_credentials" {
+	r, err = login.Check(context.Background(), cfg, l, full, vulnAppPassword)
+	if err != nil || r.Limited || r.Attempts != full || r.Redirect != "/account/form-sign-in?error=invalid_credentials" {
 		t.Fatalf("form: %+v %v", r, err)
 	}
-	for _, f := range login.Findings(l, r, attempts) {
+	for _, f := range login.Findings(l, r, full) {
 		u, _ := url.Parse(f.Location.URI)
 		found[f.RuleID+" "+u.Path] = true
 	}

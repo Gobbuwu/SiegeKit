@@ -165,8 +165,38 @@ func TestCheckNoLimit(t *testing.T) {
 		fs[0].Sources[0].Plugin != ID || fs[0].Fingerprint == "" || !strings.Contains(fs[0].Message, "20 logins") || strings.Contains(fs[0].Message, "siegekit-wrong-") {
 		t.Errorf("%+v", fs)
 	}
-	if !strings.Contains(r.Summary(DefaultAttempts), "no limit seen in 20 attempts, all answered 401") {
+	if !strings.Contains(r.Summary(DefaultAttempts), "no limit seen in 20 attempts, all answered 401") || strings.Contains(r.Summary(DefaultAttempts), "too few") {
 		t.Error(r.Summary(DefaultAttempts))
+	}
+	// The finding says only what 20 logins show (issue #79).
+	if f := fs[0]; f.Title != "No limit seen in 20 failed logins" || !strings.Contains(f.Message, "at least 20 guesses") ||
+		!strings.Contains(f.Message, "NIST SP 800-63B allows at most 100") || !strings.Contains(f.Message, "a limit set above 20 attempts") || strings.Contains(f.Message, "keep guessing") {
+		t.Errorf("%+v", f)
+	}
+}
+
+// TestFewAttempts: fewer attempts than DefaultAttempts give no finding, and
+// the result says why (issue #79: Porchlet limits at the 6th failed login,
+// and 5 attempts were reported as no limit).
+func TestFewAttempts(t *testing.T) {
+	l, _ := testLogin(t)
+	r := Result{Attempts: 5, Baseline: 401, Right: "answered 200"}
+	if fs := Findings(l, r, 5); fs != nil {
+		t.Errorf("%+v", fs)
+	}
+	if fs := SprayFindings(l, r, 5); fs != nil {
+		t.Errorf("%+v", fs)
+	}
+	if s := r.Summary(5); s != "no limit seen in 5 attempts, all answered 401; the right password answered 200; too few attempts to report a finding, since many apps limit failed logins at 5 to 30: run again with --login-attempts 20 or more" {
+		t.Error(s)
+	}
+	r.Attempts = DefaultAttempts - 1
+	if Findings(l, r, DefaultAttempts-1) != nil {
+		t.Error("19 attempts gave a finding")
+	}
+	r.Attempts = DefaultAttempts
+	if len(Findings(l, r, DefaultAttempts)) != 1 || len(SprayFindings(l, r, DefaultAttempts)) != 1 {
+		t.Error("20 attempts gave no finding")
 	}
 }
 
@@ -385,8 +415,8 @@ func TestSpray(t *testing.T) {
 	l, cfg := testLogin(t)
 	var f fake
 	f.install(t, func(int) (*egress.Answer, error) { return answer(401, `{"error":"Invalid user"}`), nil })
-	r, err := Spray(context.Background(), cfg, l, 4, Result{})
-	if err != nil || r.Limited || r.Attempts != 4 || r.Baseline != 401 || len(f.waits) != 3 {
+	r, err := Spray(context.Background(), cfg, l, DefaultAttempts, Result{})
+	if err != nil || r.Limited || r.Attempts != DefaultAttempts || r.Baseline != 401 || len(f.waits) != DefaultAttempts-1 {
 		t.Fatalf("%+v %v waits %v", r, err, f.waits)
 	}
 	// Each login is for a new invented name, all with one wrong password,
@@ -402,9 +432,10 @@ func TestSpray(t *testing.T) {
 		}
 		password = m["password"]
 	}
-	fs := SprayFindings(l, r, 4)
+	fs := SprayFindings(l, r, DefaultAttempts)
 	if len(fs) != 1 || fs[0].RuleID != "spray-not-limited" || fs[0].Severity != findings.Medium || fs[0].CWEs[0] != "CWE-307" || fs[0].Sources[0].Plugin != SprayID ||
-		fs[0].Location.URI != "http://localhost:3000/login" || !strings.Contains(fs[0].Message, "4 logins for 4 different invented user names") {
+		fs[0].Location.URI != "http://localhost:3000/login" || !strings.Contains(fs[0].Message, "20 logins for 20 different invented user names") ||
+		fs[0].Title != "No limit seen in 20 failed logins across accounts" || !strings.Contains(fs[0].Message, "at least 20 such guesses") || strings.Contains(fs[0].Message, "never stopped") {
 		t.Errorf("%+v", fs)
 	}
 	// A limit, or fewer logins than planned, gives no finding.
