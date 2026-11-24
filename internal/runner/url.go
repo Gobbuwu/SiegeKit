@@ -358,12 +358,20 @@ func writeRecorded(work, id string, reqs []authz.RecordedRequest) (string, error
 				hs = append(hs, nv{k, v})
 			}
 		}
+		if r.Body != "" {
+			// ZAP sends an imported request's headers exactly as the HAR
+			// gives them and adds no Content-Length, so without one the
+			// body was not part of the request: the proxy read it as the
+			// start of the next request on the connection and answered
+			// that one 400 (ADR 0065).
+			hs = append(hs, nv{"Content-Length", strconv.Itoa(len(r.Body))})
+		}
 		req := map[string]any{
 			"method": r.Method, "url": r.URL, "httpVersion": "HTTP/1.1", "headers": hs, "queryString": []nv{}, "cookies": []nv{},
 			"headersSize": -1, "bodySize": len(r.Body),
 		}
 		if r.Body != "" {
-			req["postData"] = map[string]any{"mimeType": r.MimeType, "text": r.Body}
+			req["postData"] = map[string]any{"mimeType": r.MimeType, "text": zapBodyText(r.Body)}
 		}
 		entries = append(entries, map[string]any{
 			"startedDateTime": "1970-01-01T00:00:00.000Z", "time": 0,
@@ -392,6 +400,19 @@ func writeRecorded(work, id string, reqs []authz.RecordedRequest) (string, error
 		return "", err
 	}
 	return dir, nil
+}
+
+// zapBodyText returns body as HAR text that ZAP's import turns back into
+// exactly body's bytes: one character U+0000 to U+00FF per byte. ZAP makes
+// the request body from the text in ISO-8859-1, so text with other
+// characters would reach the target changed (each such character as one
+// "?") and shorter than its Content-Length (measured, ADR 0065).
+func zapBodyText(body string) string {
+	rs := make([]rune, len(body))
+	for i := range len(body) {
+		rs[i] = rune(body[i])
+	}
+	return string(rs)
 }
 
 const wordlistFile = "paths.txt"

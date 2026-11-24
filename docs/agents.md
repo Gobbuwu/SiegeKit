@@ -101,14 +101,15 @@ Top level:
   - `requests`: how many requests the target answered through the egress proxy. A check with none is reported as `failed`, because it tested nothing.
   - `refused`: how many requests and connections the proxy blocked: those to another host, address or port, and on `--deployed` targets any method other than GET and HEAD.
   - `refusedTo`: what was blocked, such as `CONNECT other.example:443` or `POST app.example (only GET and HEAD)`, each once, at most 20.
-  - `input`: what the check tested from besides the target, such as `OpenAPI spec http://localhost:3000/openapi.json` for `schemathesis`, `POST http://localhost:3000/rest/user/login as "test@example.com"` for `login-throttle`, or `the start page http://localhost:3000/ and the files it links` for `served-secrets`. Absent for other checks.
+  - `input`: what the check tested from besides the target, such as `OpenAPI spec http://localhost:3000/openapi.json` for `schemathesis`, `POST http://localhost:3000/rest/user/login as "test@example.com"` for `login-throttle`, or `the start page http://localhost:3000/ and the files it links` for `served-secrets`. Directory scans set it too for `gitleaks` and `gitleaks-history`: which rules they used, such as `the rules in the repository's .gitleaks.toml and SiegeKit's rules siegekit-supabase-secret-key, siegekit-supabase-publishable-key` (ADR 0063). Absent for other checks.
   - `result`: what a check saw when that is not a finding, such as `limited after 6 of 20 attempts: answered 429` for `login-throttle`, or `scanned 9 file(s): 1 page, 7 scripts, 1 style` for `served-secrets`. Absent for other checks.
 - `findings`: the deduplicated findings, most severe first.
 - `comparison`: present when a saved run of the same `target` exists (runs are saved unless `--no-save` is given). It compares this run with the most recent one:
   - `previousRun`, `previousStarted`, `previousVersion`: that run's ID, start time and SiegeKit version. If the version differs, some changes may come from the upgrade.
   - `new`: the `fingerprint` of each finding in this run that the previous run did not report.
   - `fixed`: findings the previous run reported that are gone, and whose check ran to completion in this run.
-  - `notRechecked`: findings the previous run reported that are gone, but whose check did not complete in this run. Do not treat these as fixed.
+  - `notRechecked`: findings the previous run reported that are gone, but whose check could not run (for example a missing dependency) or did not complete in this run. Do not treat these as fixed.
+  - `notRun`: findings the previous run reported that are gone because every check that reported them was left out of this run with `--only`, `--skip` or `--profile`. They are still open; run those checks to recheck them.
   - `stillPresent`: how many findings both runs reported.
 
 Each finding:

@@ -23,6 +23,7 @@ import (
 	"strings"
 
 	"github.com/Gobbuwu/SiegeKit/internal/authz"
+	"github.com/Gobbuwu/SiegeKit/internal/testpath"
 )
 
 // Limits on what is read: a person's source tree is trusted no more than a
@@ -60,22 +61,21 @@ const (
 )
 
 // skipDir reports directories that hold no server routes of the app:
-// dependencies, version control, build caches, tests, and browser code
-// ("client"), whose HTTP calls (sdk.rest.get('/v1/x', params)) look like
-// Express routes: in Rocket.Chat 8.9.1 they gave 16 paths no server
-// registers.
+// dependencies, version control, build caches, tests (the shared
+// definition, testpath), and browser code ("client"), whose HTTP calls
+// (sdk.rest.get('/v1/x', params)) look like Express routes: in Rocket.Chat
+// 8.9.1 they gave 16 paths no server registers.
 func skipDir(name string) bool {
 	switch name {
-	case ".git", ".hg", ".svn", "node_modules", "vendor", "testdata", "__tests__", "tests", "test", "e2e", ".meteor", ".next", ".cache", "coverage", "dist-tests", "client":
+	case ".git", ".hg", ".svn", "node_modules", "vendor", ".meteor", ".next", ".cache", "coverage", "dist-tests", "client":
 		return true
 	}
-	return false
+	return testpath.IsTestDir(name)
 }
 
 // skipFile reports test files and type declarations.
 func skipFile(name string) bool {
-	return strings.HasSuffix(name, "_test.go") || strings.HasSuffix(name, ".d.ts") ||
-		strings.Contains(name, ".test.") || strings.Contains(name, ".spec.")
+	return strings.HasSuffix(name, ".d.ts") || testpath.IsTestFile(name)
 }
 
 func isJS(name string) bool {

@@ -157,9 +157,9 @@ setrules() {
       ;;
     supabase)
       mkdir -p "$2/supabase/migrations"
-      cp "$H/supabase/$1.sql" "$2/supabase/migrations/1.sql"
+      cp "$H/supabase/$1.sql.txt" "$2/supabase/migrations/1.sql"
       psql -c 'drop policy if exists t1 on storage.objects; drop policy if exists t2 on storage.objects'
-      psql < "$H/supabase/$1.sql"
+      psql < "$H/supabase/$1.sql.txt"
       ;;
   esac
 }

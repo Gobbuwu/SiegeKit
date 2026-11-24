@@ -1,0 +1,82 @@
+# 0066. Consented Go module download, a scratch folder for gosec, and network settings for update containers
+
+- Status: Accepted (owner, 2026-11-24: "1A 2B 3A 4A 5A 6A 7A", the recommended set, on the design's decision card; to be built in its own PR)
+- Date: 2026-11-24
+- Amends: [0014](0014-offline-tool-data.md) (a writable scratch folder for gosec; CA and proxy for the update containers), [0016](0016-dependency-consent.md) (the install question also covers Go modules), [0045](0045-gosec-one-package-at-a-time.md) (its cause is now measured)
+- Related: [0040](0040-tools-that-skip-work.md) (skipped packages are a failed check), 1.0 item 6, Porchlet finding SK-8
+
+## Context
+
+Scans run with no network, so gosec cannot load packages whose modules are not in the repository. Since #48 the check is `failed` with the packages named (ADR 0040), but the findings are lost: on the 10 Go repositories of the 2026-11-21 offline-gap measurement, today's offline scan finds 516 of the 902 findings a scan with network finds. Item 6 of the 1.0 list asks for a consented module download, with the target for findings regained set by the design.
+
+The owner's Porchlet test (2026-11-23, SK-8) adds two network problems for the containers that do use the network: behind a TLS-inspecting proxy the Trivy database update fails with `x509: certificate signed by unknown authority`, and Docker Hub can refuse pulls of the pinned digests with `429 Too Many Requests`.
+
+The owner asked for every option to be measured before choosing (2026-11-23, and on 2026-11-24 for macOS and a signed-in Docker Hub). The design, its seven questions and the options' measured costs are in the design document ("Go module download design (1.0 item 6)"); the full record with scripts and workflow copies is `gomod-download-2026-11-23.md` in the project files. The measurement workflows ran in this PR and are removed before merge.
+
+What the measurements found that shapes the decision:
+
+1. **The download alone is not enough.** With modules present, gosec's 256 MiB `/tmp` (tmpfs) fills with Go's build cache and compile scratch, Go fails to compile some dependency, and gosec skips that package's SSA rules or drops packages. In CI with modules and today's `/tmp`, findings were lost on 6 of 10 repositories; on whoami and gotify the JSON held no error at all.
+2. **ADR 0045's cause is the same limit.** At gosec's default concurrency several `go list` runs keep compile scratch in `/tmp` at once: go-chi peaks at 245 to 293 MiB (sampled every 20 ms), so 256 MiB fills. At `-concurrency 1` the peak is 171 to 200 MiB, which is why that fix worked. It was not a timing race. Today's offline scan therefore has about 56 to 85 MiB of room on go-chi.
+3. **A line count of gosec's SSA errors cannot tell loss from normal.** The complete online scan of gotify also skips SSA rules in `main` and `router`, because they import `ui`, which fails for its own reason (it embeds a `build/` folder not in the repository).
+
+## Decision
+
+1. **Modules come from a download container (1A).** A consented step runs `go mod download` in each module folder, in the pinned gosec image, with network and without the target: only copies of `go.mod`, `go.sum`, `go.work` and `go.work.sum` are mounted. Settings: `GOPROXY=https://proxy.golang.org` (no `direct`), `GOTOOLCHAIN=local`, `GOVCS=*:off`, `GOFLAGS=-mod=mod`, and `GOPRIVATE`/`GONOPROXY` from the environment or Go's own settings file, read as text (Go on the host is never run, ADR 0016). gosec then mounts the cache read-only with no network.
+2. **gosec builds in a per-scan scratch folder on disk (2B).** SiegeKit makes an empty folder in its private run folder for each gosec run, mounts it read-write for `GOCACHE` and `GOTMPDIR`, and deletes it afterwards. It is mounted `noexec` if gosec still finds the same with that (measured natively only; the CI runs mounted it without `noexec`), which the build tests on both engines. This is the one exception to ADR 0014's read-only rule for scan containers; `/tmp` stays 256 MiB and memory stays 2 GiB. This applies to every gosec run, with or without the download.
+3. **SiegeKit reads gosec's error output.** The check is `failed`, with the packages named, when gosec reports `no space left on device` or skips SSA for a package that is not already among the JSON errors. How a package name maps to a folder is for design part 3 (two `main` packages look the same).
+4. **The download is part of the install question (3A).** ADR 0016's question gains one line: "Go modules for gosec: N modules named in your go.mod files, from proxy.golang.org, which sees their names and versions". `--yes` accepts it; `--no-install` and no terminal decline it. Declined or failed: the check is failed with the packages named, as today (exit 4). Module paths matching `GOPRIVATE` or `GONOPROXY` are never requested and their packages are listed as failed. What leaves the machine: each needed module's name and version, sent to proxy.golang.org (run by Google), and checksum lookups at sum.golang.org for modules missing from `go.sum`. The code never leaves: the download container never sees it.
+5. **One shared module cache (4A)** in `~/.local/share/siegekit/data/gomod/` (ADR 0014's private data folder, mode 0700), mounted read-only into gosec. When every module is already there, an offline check finds that with no network and no question. The report shows the cache's size; removing it means deleting the folder until the GUI's Dependencies tab (ADR 0016).
+6. **The target (5A):** on the 10 repositories, on both engines, every finding the same image finds with network, and nothing else; every package that still fails is listed (measured today: gotify's `ui`, and kubernetes/examples, which has no `go.mod`). The gate's five Go fixtures change with it: their gosec answers are rebuilt from complete runs (about 75 more findings by this measurement) and their status becomes "ran"; the gate's Go jobs need network for the download step.
+7. **`--ca-file` and `--proxy` for the network containers only (6A),** also settable in the config file. The CA file is mounted read-only and named by `SSL_CERT_FILE`; the proxy URL is passed as `HTTPS_PROXY` and `HTTP_PROXY`. Only Trivy's database update and the Go module download get them; scan containers still refuse both. A proxy URL with a password is refused (it would sit in the container's environment).
+8. **No mirror option in SiegeKit (7A).** The docs explain the engines' own mirror settings (Docker `registry-mirrors`, Podman `registries.conf`, Colima's `colima.yaml`) and Docker Hub sign-in. When a pull fails with 429, SiegeKit prints how to set a mirror and that signing in to Docker Hub doubles the limit. SiegeKit's pull already uses the engine's stored sign-in.
+9. **ADR 0045's `-concurrency 1` stays.** Its cause is now known (point 2 of Context); with the scratch folder, go-chi at default concurrency was complete in 20 of 20 runs per engine, but this ADR does not change the flag.
+
+## Evidence
+
+CI runs are on PR #72 (`ubuntu-latest`: rootless Podman 5.7.0 and rootful Docker 29.4.2; `ubuntu-24.04-arm`: rootless Podman 4.9.3 and rootful Docker 28.0.4; all cgroup v2; SiegeKit's sandbox flags), with the pinned gosec image (Go 1.27.3, `GOTOOLCHAIN=local`).
+
+| Claim | Backed by |
+|---|---|
+| 1A brings back every finding | Natively (gosec 2.30.0, Go 1.27.4, module cache not writable): 902 of 902, 0 extra, load errors equal online's. In the image: equal to online on 40 of 40 jobs (round 4, run 45261818189: 10 repositories × both engines × amd64 and arm64, with 2B) and 20 of 20 (round 3, run 45260502350) |
+| Why not the other module sources | 1B (SiegeKit fetches every module in `go.sum` and checks hashes): also 40 of 40, but 213 MB against 196 MB on caddy, extraction on every scan (scan scratch up to 1.81 GB against 888 MB), and new download and hash code. 1C (the user's own module cache): 36 of 40, go-chi's 18 findings in nested modules missed on all 4. Today: 516 of 902 |
+| The download runs no other program and sends nothing private | Natively, every program start and connection traced: a module named in `GOPRIVATE`, with `GOVCS=*:off`, is refused with no connection (without them its name reaches proxy.golang.org); `go 1.99` is refused with no toolchain download; a `replace` outside the repository is refused; no `git` ran. `GOVCS=*:off` changed no result in round 4 |
+| go.work, vendor and in-repository replace work | Run 45272957512 (4 jobs, both engines, amd64 and arm64): synthetic fixtures gave exactly the online findings (2, 2 and 1; offline 0, 0 and 1) |
+| 256 MiB `/tmp` loses findings with modules; 2B fixes it | Round 4: with today's `/tmp`, losses on 7 of 10 repositories; with 2B, equal to online on 60 of 60 jobs; caddy repeats (run 45261818329) 18 of 18 for 2B and for 2C. Locally (Docker 29.10.0): 256 MiB `/tmp` alone skipped SSA in 2 of 2 caddy runs, 2 GiB `/tmp` or cache on disk in 0 of 4 |
+| Why 2B rather than 2C (2 GiB `/tmp`, 4 GiB memory) | Same coverage (60 of 60, 18 of 18); caddy needs 871 MiB of build cache, which under 2C is memory that cannot be reclaimed, and a larger app may still not fit |
+| ADR 0045's cause | Run 45261818522 (go-chi, offline, default concurrency, 20 scans per job): 256 MiB `/tmp` complete in 16 of 20 (Podman) and 17 of 20 (Docker), 2B in 20 of 20 on both. Locally, `/tmp` sampled every 20 ms: 3 of 3 default-concurrency runs reached exactly 256 MiB (peaks 245 to 293 MiB needed); `-concurrency 1` peaks 171 to 200 MiB |
+| The detector must list packages, not count lines | Every CI run that lost findings had more `Error building the SSA representation` lines than online, including whoami and gotify, whose JSON had no error; the complete online gotify scan also skips `main` and `router` |
+| 6A works behind TLS inspection and an explicit proxy | Locally, behind a TLS-inspecting gateway: Trivy update fails with x509 (SK-8 reproduced); with `SSL_CERT_FILE` (full bundle, proxy CA only, or `SSL_CERT_DIR`) exit 0, 1.82 GB. Simulated proxy-only network: CA only DNS failure, proxy only x509, both ok, for Trivy and `go mod download`. CI run 45275812617: one throwaway CA in `SSL_CERT_FILE` keeps real chains working in both pinned images on both engines (Go also reads the image's `/etc/ssl/certs`, 237 entries) |
+| Why not 6B (copy the host's settings) | A proxy on the host's 127.0.0.1 gives `connection refused` from a Linux bridge container; on macOS a CA added the usual way is only in the Keychain (run 45318128821: in the System Keychain export, absent from `/etc/ssl/cert.pem` and Homebrew's bundles), so no host file carries it |
+| 7A works on both engines with no SiegeKit code | Locally, Docker Hub 429 reproduced; dockerd `--registry-mirror https://mirror.gcr.io` served the pinned docker.io digest with no request to registry-1.docker.io, run by its original name. Run 45275812617: Podman `registries.conf` and Docker `daemon.json` the same. 7B (pulling the mirror's name) pulls, but the original name then gives `No such image` |
+| Docker Hub sign-in | Run 45298152268 (owner's read-only token, never printed): signed in 200 pulls per 3600 s per account, anonymous 100 per 3600 s per IP, and one shared runner IP had 0 left. `sandbox.Engine.Pull` (a test binary) with no sign-in ok; a wrong stored sign-in fails on both engines (so stored credentials are read); after `docker login` / `podman login` ok |
+| macOS with Colima | GitHub `macos-15-intel`, Colima 0.10.3, Docker 29.5.2 in the VM, virtiofs, cgroup v2, uid 501:20. Run 45298152251: go-chi online 88, offline 70, 1A + 2B 88 (scratch in a Mac folder); Colima's `docker.registry-mirrors` served the pinned Trivy digest from mirror.gcr.io only; `docker login` works. Run 45318128821: `go mod download` with a Mac CA file ok; a proxy on the Mac's 127.0.0.1 unreachable as 127.0.0.1 but reachable as `host.lima.internal`, `host.docker.internal` and `192.168.5.2`. Run 45325075033: Trivy update with a Mac CA file ok (1,745 MB to a Mac folder); 1A + 2B with the scratch in a per-scan volume 88, 0 SSA skips |
+
+## Consequences
+
+- On the 10 repositories, 386 more findings (43% of all), with no loss measured. Every gosec run, with or without modules, stops depending on 256 MiB of `/tmp`.
+- A new network step: proxy.golang.org sees module names and versions; up to 196 MB downloaded and 931 MB on disk for a large app (caddy); gosec scans 2 to 5 times longer on apps with many modules (caddy 19 s offline, about 80 to 150 s with modules, in CI).
+- Scripts that already pass `--yes` start sending module names without a new flag. The install question names what is sent.
+- Scan containers get one writable folder each. It is empty at start, deleted afterwards, and private to SiegeKit's run folder.
+- A compromised gosec image would have network during the download, as the Trivy update does today (ADR 0014); it never sees the code. Anyone who can write the data folder could change module sources and hide findings, the same trust as Trivy's database.
+- Behind a TLS-inspecting proxy or a proxy-only network, updates work with two settings, without rebuilding the update by hand. Not covered: a proxy that needs a password, and on Linux a proxy listening only on the host's loopback (the user gives an address containers can reach; under Colima, `host.docker.internal` works).
+- Docker Hub's limit is handled by the user's engine setting or sign-in. No public mirror for ghcr.io (gosec, bandit) was found; on Docker a 429 from ghcr.io (not seen so far) would need the user's own mirror.
+
+Unverified, each with a test in the build or on the M2 check list:
+
+- Repositories larger than caddy (the scratch folder's disk use not pushed to a limit).
+- Real repositories with `go.work`, `vendor/` or an in-repository `replace` (only synthetic fixtures so far).
+- A real Apple-chip Mac, as for every other tool. Under Colima on GitHub's Intel Mac, scans took 17 to 33 times longer than on Linux (go-chi `go list -export`: 21 s on Linux, 368 to 696 s under Colima). That Mac is itself a VM (`kern.hv_vmm_present` = 1) and the same work takes 18 s directly on it, so the cost comes from Colima's VM inside a VM; scan time under Colima on a real Mac is unverified. caddy was not run on macOS. The owner chose to move on without a Mac (2026-11-24).
+- Podman's `registries.conf` mirroring ghcr.io (its documented behaviour, not measured).
+
+## Alternatives considered
+
+- **1B, SiegeKit downloads and checks hashes:** same coverage, more traffic and scratch, and our own hash check in place of Go's.
+- **1C, the user's own module cache:** misses what the user never built (go-chi's nested modules), and nothing in CI.
+- **2A, keep 256 MiB `/tmp`:** loses findings, sometimes with no error.
+- **2C, 2 GiB `/tmp` and 4 GiB memory:** same coverage as 2B; rejected for memory that grows with the app. Keeps ADR 0014 with no exception, which was its only advantage.
+- **3B, its own flag:** CI and users' scripts would need the new flag to get full coverage.
+- **4B, a cache per scan:** downloads and asks again every scan.
+- **5B, a share of findings as the target:** would hide a new silent skip like the ones found here.
+- **6B, copy the host's proxy and CA settings:** settings meant for other programs silently reach the containers, a loopback proxy fails on Linux, and macOS Keychain CAs are in no file.
+- **7B, `--registry-mirror` in SiegeKit:** new code in install checks, pulls and runs to carry the mirror's name, for what the engine setting already does.
+- **7C alone, Docker Hub sign-in:** no code but still a cap per account; kept in the docs and the 429 message beside 7A.

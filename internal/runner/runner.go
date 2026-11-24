@@ -29,6 +29,7 @@ import (
 	"github.com/Gobbuwu/SiegeKit/internal/sandbox"
 	"github.com/Gobbuwu/SiegeKit/internal/sarif"
 	"github.com/Gobbuwu/SiegeKit/internal/schemathesis"
+	"github.com/Gobbuwu/SiegeKit/internal/trivy"
 )
 
 // Executor runs one sandboxed tool. *sandbox.Engine implements it.
@@ -382,9 +383,16 @@ func runPlugin(ctx context.Context, ex Executor, m *manifest.Manifest, opt Optio
 	if err != nil {
 		return fail(report.Failed, "create output directory: %v", err)
 	}
+	env, configFile := m.Run.Env, ""
+	if m.Run.GitleaksRules != "" {
+		env, configFile, pr.Input, err = gitleaksConfig(m, opt.TargetDir, work)
+		if err != nil {
+			return fail(report.Failed, "%v", err)
+		}
+	}
 	res, err := ex.Run(ctx, sandbox.Spec{
-		Image: image, Args: args, Env: m.Run.Env, TargetDir: opt.TargetDir, OutDir: out, Network: m.Network,
-		DataDir: dataDir, DataMount: dataMount, Files: fileMounts,
+		Image: image, Args: args, Env: env, TargetDir: opt.TargetDir, OutDir: out, Network: m.Network,
+		DataDir: dataDir, DataMount: dataMount, Files: fileMounts, ConfigFile: configFile,
 		CPUs: cpus, MemoryMiB: m.Resources.MemoryMiB,
 		Timeout:    time.Duration(m.Resources.TimeoutSeconds) * time.Second,
 		StdoutFile: stdoutFile(m),
@@ -576,6 +584,9 @@ func readReport(path string, m *manifest.Manifest, suppressed *int, rc reportCon
 	}
 	if m.Output.Parser == "bandit-json" {
 		return bandit.ToFindings(f, bandit.Options{Plugin: m.ID, Family: m.Family, MountPath: mount, Suppressed: suppressed})
+	}
+	if m.Output.Parser == "trivy-json" {
+		return trivy.ToFindings(f, trivy.Options{Plugin: m.ID, Family: m.Family, MountPath: mount})
 	}
 	log, err := sarif.Read(f)
 	if err != nil {

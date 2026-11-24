@@ -2,8 +2,8 @@
   "schemaVersion": 1,
   "id": "trivy",
   "name": "Trivy dependency vulnerability scan",
-  "version": "1.0.0",
-  "description": "Finds known vulnerabilities (CVE, GHSA) in dependency lock and manifest files. Uses a vulnerability database downloaded by 'siegekit update'; the scan itself runs offline. Java archives are not checked yet.",
+  "version": "1.1.0",
+  "description": "Finds known vulnerabilities (CVE, GHSA) in dependency lock and manifest files, including development dependencies of npm, Yarn and Gradle projects, which are marked as such. Uses a vulnerability database downloaded by 'siegekit update'; the scan itself runs offline. Java archives are not checked yet.",
   "family": "sca",
   "mode": "passive",
   "destructive": false,
@@ -43,10 +43,12 @@
       "--offline-scan",
       "--scanners",
       "vuln",
+      "--include-dev-deps",
+      "--list-all-pkgs",
       "--format",
-      "sarif",
+      "json",
       "--output",
-      "{outdir}/trivy.sarif",
+      "{outdir}/trivy.json",
       "--quiet",
       "{target}"
     ]
@@ -63,8 +65,8 @@
     "maxAgeDays": 7
   },
   "output": {
-    "format": "sarif",
-    "parser": "sarif",
-    "file": "trivy.sarif"
+    "format": "json",
+    "parser": "trivy-json",
+    "file": "trivy.json"
   }
 }

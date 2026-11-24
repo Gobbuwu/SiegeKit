@@ -246,15 +246,28 @@
         "CVE-2026-116689 bun.lock:760",
         "CVE-2026-118764 bun.lock:880",
         "CVE-2026-118773 bun.lock:782",
+        "CVE-2026-119346 bun.lock:892",
+        "CVE-2026-119347 bun.lock:892",
+        "CVE-2026-119348 bun.lock:892",
+        "CVE-2026-119349 bun.lock:892",
+        "CVE-2026-119350 bun.lock:892",
+        "CVE-2026-119351 bun.lock:892",
+        "CVE-2026-119790 bun.lock:892",
+        "CVE-2026-53550 bun.lock:822",
+        "CVE-2026-59869 bun.lock:822",
+        "CVE-2026-73088 bun.lock:638",
+        "CVE-2026-73089 bun.lock:638",
         "CVE-2026-75899 bun.lock:756",
         "CVE-2026-75931 bun.lock:756",
         "CVE-2026-75975 bun.lock:756",
         "CVE-2026-76172 bun.lock:756",
         "CVE-2026-84292 bun.lock:756",
+        "CVE-2026-84375 bun.lock:822",
         "CVE-2026-86472 bun.lock:756",
-        "CVE-2026-93749 bun.lock:1008"
+        "CVE-2026-93749 bun.lock:1008",
+        "GHSA-5p4m-2wfm-xmqj bun.lock:822"
       ],
-      "why": "trivy's advisory data is downloaded at run time (--update), so new advisories can add findings; the measured ones must stay"
+      "why": "trivy's advisory data is downloaded at run time (--update), so new advisories can add findings; the measured ones must stay; the 13 development-dependency findings (ADR 0063) were added from a complete local run on 2026-11-23 (docker 29.9.3 rootful, cgroup v1, linux/amd64, Trivy database of 2026-11-23 19:02 UTC)"
     },
     "weak-passwords": {
       "status": "ran",
