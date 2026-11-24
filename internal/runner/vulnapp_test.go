@@ -479,8 +479,9 @@ var (
 )
 
 // vulnAppRecordedRequest is the recorded XML request given to zap-active, as a
-// HAR file would hold it (ADR 0047).
-const vulnAppRecordedRequest = `<?xml version="1.0"?><order><item>hat</item></order>`
+// HAR file would hold it (ADR 0047). Its note is not ISO-8859-1, which ZAP
+// makes imported bodies in (ADR 0065).
+const vulnAppRecordedRequest = `<?xml version="1.0"?><order><item>hat</item><note>€ 😀</note></order>`
 
 // vulnAppSchemathesisSeed is the seed the test passes to Schemathesis, so
 // that its count above is the same every run (see findsPlanted).
