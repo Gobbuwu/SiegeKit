@@ -21,10 +21,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -93,6 +95,10 @@ func Main(args []string) int {
 		return 127
 	}
 	statusPath, argv := args[0], args[1:]
+	// The waiter's threads count against the container's process limit;
+	// one processor keeps them few. The tool is not affected: GOMAXPROCS
+	// is not set in its environment.
+	runtime.GOMAXPROCS(1)
 	cg := findCgroup()
 	st := Status{Version: StatusVersion, Cgroup: cg.version}
 	if cg.err != nil {
@@ -247,6 +253,9 @@ func ParseStatus(b []byte) (Status, error) {
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&st); err != nil {
 		return st, fmt.Errorf("status file: %w", err)
+	}
+	if _, err := dec.Token(); !errors.Is(err, io.EOF) {
+		return st, errors.New("status file: data after the status")
 	}
 	if st.Version != StatusVersion {
 		return st, fmt.Errorf("status file version %d, want %d", st.Version, StatusVersion)
