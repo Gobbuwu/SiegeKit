@@ -166,8 +166,20 @@ func TestCheck(t *testing.T) {
 		t.Errorf("Go too old: %q %v", got, err)
 	}
 	got, err = Check(strings.NewReader(`{"Golang errors": {"": [{"error": "# command-line-arguments\nbtrfs.go:203:17: undefined: btrfs.SubvolCreate"}], "/target/lib/lib.go": []}, "Stats": {"files": 1}}`), strings.NewReader(""), root, "/target")
-	if err != nil || !strings.Contains(got, "could not load 2 Go packages, so their code was not checked: (errors gosec named no folder for), lib.") {
+	if err != nil || !strings.Contains(got, "could not load 2 Go packages, so their code was not checked: (errors gosec named no folder for), lib. gosec's errors for them name no missing Go module") {
 		t.Errorf("unnamed: %q %v", got, err)
+	}
+	// The download is suggested only when an error names a missing module
+	// (texts of go 1.24.7 with GOPROXY=off, 2026-11-24).
+	for _, e := range []string{
+		"github.com/go-chi/render@v1.0.1: module lookup disabled by GOPROXY=off",
+		"missing go.sum entry for module providing package github.com/google/uuid (imported by example.com/a); to add:\\n\\tgo get example.com/a",
+		"no required module provides package github.com/google/uuid; to add it:\\n\\tgo get github.com/google/uuid",
+	} {
+		got, err = Check(strings.NewReader(`{"Golang errors": {"/target/lib": [{"error": "undefined: inject"}], "/target/lib/lib.go": [{"error": "`+e+`"}]}, "Stats": {"files": 1}}`), strings.NewReader(""), root, "/target")
+		if err != nil || !strings.Contains(got, "Some import modules that are neither in the repository nor in SiegeKit's Go module cache") {
+			t.Errorf("missing module %q: %q %v", e, got, err)
+		}
 	}
 }
 
@@ -247,15 +259,21 @@ func TestDir(t *testing.T) {
 }
 
 func TestReason(t *testing.T) {
-	one := Reason([]string{"cmd/app"})
+	one := Reason([]string{"cmd/app"}, false)
 	if !strings.Contains(one, "1 Go package,") || !strings.Contains(one, "cmd/app") || !strings.Contains(one, "Findings in the other packages are kept") {
 		t.Errorf("one: %s", one)
+	}
+	if !strings.Contains(one, "name no missing Go module") || strings.Contains(one, "--yes") {
+		t.Errorf("no missing module: %s", one)
+	}
+	if m := Reason([]string{"cmd/app"}, true); !strings.Contains(m, "pass --yes") || strings.Contains(m, "no missing Go module") {
+		t.Errorf("missing module: %s", m)
 	}
 	var many []string
 	for i := range 12 {
 		many = append(many, "p"+string(rune('a'+i)))
 	}
-	r := Reason(many)
+	r := Reason(many, false)
 	if !strings.Contains(r, "12 Go packages") || !strings.Contains(r, "pj and 2 more") || strings.Contains(r, "pk") {
 		t.Errorf("many: %s", r)
 	}
@@ -278,7 +296,7 @@ func FuzzGosecErrors(f *testing.F) {
 				t.Fatalf("absolute: %q", d)
 			}
 		}
-		if len(dirs) > 0 && Reason(dirs) == "" {
+		if len(dirs) > 0 && Reason(dirs, false) == "" {
 			t.Fatal("empty reason")
 		}
 	})

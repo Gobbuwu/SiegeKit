@@ -58,6 +58,19 @@ type Result struct {
 	// the go.mod or go.work files ask for a newer Go than gosec's image
 	// has ("go.work requires go >= 1.27.4 (running go 1.27.3; ...)").
 	GoNeeded, GoHave string
+	// MissingModules is set when an error says a module is not in the
+	// module cache or not required by go.mod (missingModule).
+	MissingModules bool
+}
+
+// missingModule holds what Go's package loader says, with GOPROXY=off, when
+// a module the code imports is not available (measured with go 1.24.7 and
+// in gosec 2.30.0's reports, 2026-11-21 and 2026-11-24): not in the module
+// cache, not in go.sum, or not required by go.mod.
+var missingModule = []string{
+	"module lookup disabled by GOPROXY=off",
+	"missing go.sum entry",
+	"no required module provides package",
 }
 
 // reGoTooOld matches Go's refusal to load a module that needs a newer Go
@@ -87,15 +100,17 @@ func Read(r io.Reader, mount string) (Result, error) {
 	}
 	res := Result{Files: *rep.Stats.Files, NoSpace: bytes.Contains(b, noSpace)}
 	for p, raw := range *rep.Errors {
-		if res.GoNeeded == "" {
-			var errs []struct {
-				Error string `json:"error"`
-			}
-			if json.Unmarshal(raw, &errs) == nil {
-				for _, e := range errs {
-					if m := reGoTooOld.FindStringSubmatch(e.Error); m != nil {
-						res.GoNeeded, res.GoHave = m[1], m[2]
-						break
+		var errs []struct {
+			Error string `json:"error"`
+		}
+		if json.Unmarshal(raw, &errs) == nil {
+			for _, e := range errs {
+				if m := reGoTooOld.FindStringSubmatch(e.Error); m != nil && res.GoNeeded == "" {
+					res.GoNeeded, res.GoHave = m[1], m[2]
+				}
+				for _, w := range missingModule {
+					if strings.Contains(e.Error, w) {
+						res.MissingModules = true
 					}
 				}
 			}
@@ -234,7 +249,7 @@ func Check(r, logr io.Reader, root, mount string) (string, error) {
 		why = append(why, fmt.Sprintf("Your go.mod or go.work files ask for Go %s or newer, and the Go in gosec's pinned image is %s, so Go refused to load packages; SiegeKit never downloads another Go into the image. A SiegeKit release with a newer gosec image fixes this.", res.GoNeeded, res.GoHave))
 	}
 	if len(res.Uncovered) > 0 {
-		why = append(why, Reason(res.Uncovered))
+		why = append(why, Reason(res.Uncovered, res.MissingModules))
 	}
 	var skipped []string
 	for _, d := range lg.SSASkipped {
@@ -370,8 +385,10 @@ func dir(p, mount string) string {
 }
 
 // Reason says which packages were not checked, for the plugin's reason in
-// reports. dirs is the list from Uncovered and must not be empty.
-func Reason(dirs []string) string {
+// reports. dirs is the list from Uncovered and must not be empty; missing
+// says whether gosec's errors name a missing module, the only cause the Go
+// module download fixes.
+func Reason(dirs []string, missing bool) string {
 	shown := dirs
 	more := ""
 	if len(shown) > MaxListed {
@@ -382,6 +399,10 @@ func Reason(dirs []string) string {
 	if len(dirs) == 1 {
 		noun = "package"
 	}
-	return fmt.Sprintf("gosec could not load %d Go %s, so their code was not checked: %s%s. Usually these import modules that are neither in the repository nor in SiegeKit's Go module cache (scans have no network: allow the Go module download when SiegeKit asks, or pass --yes). Findings in the other packages are kept.",
-		len(dirs), noun, strings.Join(shown, ", "), more)
+	hint := "gosec's errors for them name no missing Go module, so the Go module download does not help: the code does not compile as gosec checks it, for example test fixtures broken on purpose, files a build step makes outside the repository, or cgo code that needs C headers gosec's image lacks."
+	if missing {
+		hint = "Some import modules that are neither in the repository nor in SiegeKit's Go module cache (scans have no network: allow the Go module download when SiegeKit asks, or pass --yes)."
+	}
+	return fmt.Sprintf("gosec could not load %d Go %s, so their code was not checked: %s%s. %s Findings in the other packages are kept.",
+		len(dirs), noun, strings.Join(shown, ", "), more, hint)
 }
