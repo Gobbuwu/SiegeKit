@@ -65,6 +65,7 @@ Each significant design decision is recorded as a short ADR before code is writt
 | [0059](0059-storage-write-known-answers.md) | Known answers for the storage write test on the Firebase emulator and local Supabase Storage, on both engines (amends 0058) | Accepted |
 | [0060](0060-arm-linux-ci.md) | CI and the gates on GitHub's ARM Linux runner, rootless Podman and Docker (amends 0039) | Accepted |
 | [0063](0063-repo-gitleaks-rules-supabase-keys-trivy-dev-deps.md) | The repository's Gitleaks rules in both scans, Supabase key rules, Trivy's development dependencies, and "not run this time" for checks left out (amends 0013, 0039) | Accepted |
+| [0064](0064-static-supabase-rules.md) | Static Supabase rules (migrations replayed: RLS, policies, views, grants, storage policies), Firebase rules that never check the caller, `crypt()` seed passwords, `supabase/config.toml` auth settings, and one definition of a test (amends 0011, 0034, 0053, 0058, 0059) | Accepted |
 | [0065](0065-recorded-request-bodies-framed.md) | Recorded request bodies reach ZAP framed and unchanged (amends 0047) | Accepted |
 
 ADRs 0002 to 0011 were accepted at the M0 design sign-off on 2026-11-18.

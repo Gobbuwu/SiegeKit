@@ -40,6 +40,12 @@ func TestWeakHits(t *testing.T) {
 		{"json", "config.json", `{"db": {"password": "Summer2024!"}}`, []hitWant{{1, ""}}},
 		{"xml element and attribute", "app.xml", "<cfg>\n<password>tomcat</password>\n<user name=\"a\" password=\"s3cret\"/>\n</cfg>\n", []hitWant{{2, ""}, {3, ""}}},
 		{"sql", "seed.sql", "CREATE USER 'app'@'%' IDENTIFIED BY 'app';\n", []hitWant{{1, ""}}},
+		// SK-5: the planted Supabase seed of the Porchlet run, and its other shapes.
+		{"sql crypt seed", "supabase/seed.sql", "insert into auth.users (email, encrypted_password)\nvalues ('a@x.io', crypt('password123', gen_salt('bf')));\n", []hitWant{{2, ""}}},
+		{"sql crypt schema-qualified", "supabase/seed.sql", "select extensions.crypt( 'qwerty' , extensions.gen_salt('bf'));\nselect CRYPT('admin',gen_salt('md5'));\n", []hitWant{{1, ""}, {2, ""}}},
+		{"sql crypt strong or not literal", "supabase/seed.sql", "select crypt('Xk29!fqLw0pZ8sTq', gen_salt('bf'));\nselect crypt(new.password, gen_salt('bf'));\nselect crypt(p_input, stored_hash) = stored_hash;\n", nil},
+		{"sql crypt in a pgTAP test", "supabase/tests/database/users.test.sql", "select crypt('password123', gen_salt('bf'));\n", []hitWant{{1, skipTest}}},
+		{"crypt outside sql", "a.js", "const h = crypt('password123', salt)\n", nil},
 		{"url in any text file", "notes.cfg2", "url = postgres://app:secret@db/app\n", []hitWant{{1, ""}}},
 		{"python code", "app/settings.py", "password = \"hunter2\"\n", []hitWant{{1, ""}}},
 		{"javascript object", "seed.js", "users.insert({ name: 'a', password: 'Admin_123' })\n", []hitWant{{1, ""}}},
