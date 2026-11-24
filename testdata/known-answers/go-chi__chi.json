@@ -43,9 +43,8 @@
       "count": 1
     },
     "gosec": {
-      "status": "failed",
-      "reason": "gosec could not load",
-      "why": "Scans have no network, so gosec cannot load the packages that import modules not in this repository; it names them and reports the rest (ADR 0040). Findings measured 2026-11-21 with native gosec 2.30.0 (Go 1.27.4) run as the sandbox runs it: non-root, no network, writable module cache, nothing downloaded. Findings gosec makes only with the modules present (native run with them downloaded) are under notMetYet. Gap measured in gosec-offline-gap-measurement-2026-11-21.md (project files). The 4 taint-rule (G7xx) findings were unstable until gosec ran with -concurrency 1 (ADR 0045): at gosec's default they were all found in 70 of 80 CI runs, one at a time in 40 of 40",
+      "status": "ran",
+      "why": "gosec loads every package with the Go module download (ADR 0066; the gate passes --yes). Findings from SiegeKit's own run of PR #78 on 2026-11-24, equal by rule, file and line to gosec 2.30.0 run with network on the same commit; the gate holds them on both engines, amd64 and arm64. The 4 taint-rule (G7xx) findings need gosec's -concurrency 1 (ADR 0045).",
       "match": "exact",
       "findings": [
         "G104 _examples/custom-handler/main.go:16",
@@ -72,8 +71,19 @@
         "G104 _examples/pathvalue/main.go:16",
         "G104 _examples/pathvalue/main.go:24",
         "G104 _examples/rest/main.go:111",
+        "G104 _examples/rest/main.go:116",
+        "G104 _examples/rest/main.go:134",
+        "G104 _examples/rest/main.go:138",
+        "G104 _examples/rest/main.go:150",
+        "G104 _examples/rest/main.go:158",
         "G104 _examples/rest/main.go:163",
+        "G104 _examples/rest/main.go:166",
+        "G104 _examples/rest/main.go:180",
+        "G104 _examples/rest/main.go:191",
         "G104 _examples/rest/main.go:195",
+        "G104 _examples/rest/main.go:197",
+        "G104 _examples/rest/main.go:211",
+        "G104 _examples/rest/main.go:215",
         "G104 _examples/rest/main.go:223",
         "G104 _examples/rest/main.go:226",
         "G104 _examples/rest/main.go:229",
@@ -96,6 +106,8 @@
         "G104 _examples/todos-resource/users.go:39",
         "G104 _examples/todos-resource/users.go:43",
         "G104 _examples/todos-resource/users.go:47",
+        "G104 _examples/versions/main.go:139",
+        "G104 _examples/versions/main.go:48",
         "G104 middleware/compress.go:364",
         "G104 middleware/heartbeat.go:18",
         "G104 middleware/recoverer.go:66",
@@ -112,13 +124,19 @@
         "G114 _examples/pathvalue/main.go:16",
         "G114 _examples/rest/main.go:111",
         "G114 _examples/todos-resource/main.go:29",
+        "G114 _examples/versions/main.go:48",
         "G404 _examples/limits/main.go:49",
         "G404 _examples/rest/main.go:470",
+        "G404 _examples/versions/main.go:147",
+        "G404 _examples/versions/main.go:149",
+        "G404 _examples/versions/presenter/v3/article.go:26",
         "G705 _examples/pathvalue/main.go:24",
+        "G705 _examples/rest/main.go:229",
         "G710 middleware/profiler.go:27",
         "G710 middleware/profiler.go:30",
         "G710 middleware/strip.go:62"
-      ]
+      ],
+      "count": 88
     },
     "trivy": {
       "status": "ran",
@@ -134,115 +152,5 @@
     "weak-passwords": {
       "status": "ran"
     }
-  },
-  "notMetYet": [
-    {
-      "check": "gosec",
-      "finding": "G104 _examples/rest/main.go:116",
-      "needs": "Go modules in the scan: vendored, or the consented module download step (ADR 0040; designed after fix PRs B to F, owner 2026-11-21)",
-      "confirmed": "gosec 2.30.0 run natively with the modules downloaded, 2026-11-21"
-    },
-    {
-      "check": "gosec",
-      "finding": "G104 _examples/rest/main.go:134",
-      "needs": "Go modules in the scan: vendored, or the consented module download step (ADR 0040; designed after fix PRs B to F, owner 2026-11-21)",
-      "confirmed": "gosec 2.30.0 run natively with the modules downloaded, 2026-11-21"
-    },
-    {
-      "check": "gosec",
-      "finding": "G104 _examples/rest/main.go:138",
-      "needs": "Go modules in the scan: vendored, or the consented module download step (ADR 0040; designed after fix PRs B to F, owner 2026-11-21)",
-      "confirmed": "gosec 2.30.0 run natively with the modules downloaded, 2026-11-21"
-    },
-    {
-      "check": "gosec",
-      "finding": "G104 _examples/rest/main.go:150",
-      "needs": "Go modules in the scan: vendored, or the consented module download step (ADR 0040; designed after fix PRs B to F, owner 2026-11-21)",
-      "confirmed": "gosec 2.30.0 run natively with the modules downloaded, 2026-11-21"
-    },
-    {
-      "check": "gosec",
-      "finding": "G104 _examples/rest/main.go:158",
-      "needs": "Go modules in the scan: vendored, or the consented module download step (ADR 0040; designed after fix PRs B to F, owner 2026-11-21)",
-      "confirmed": "gosec 2.30.0 run natively with the modules downloaded, 2026-11-21"
-    },
-    {
-      "check": "gosec",
-      "finding": "G104 _examples/rest/main.go:166",
-      "needs": "Go modules in the scan: vendored, or the consented module download step (ADR 0040; designed after fix PRs B to F, owner 2026-11-21)",
-      "confirmed": "gosec 2.30.0 run natively with the modules downloaded, 2026-11-21"
-    },
-    {
-      "check": "gosec",
-      "finding": "G104 _examples/rest/main.go:180",
-      "needs": "Go modules in the scan: vendored, or the consented module download step (ADR 0040; designed after fix PRs B to F, owner 2026-11-21)",
-      "confirmed": "gosec 2.30.0 run natively with the modules downloaded, 2026-11-21"
-    },
-    {
-      "check": "gosec",
-      "finding": "G104 _examples/rest/main.go:191",
-      "needs": "Go modules in the scan: vendored, or the consented module download step (ADR 0040; designed after fix PRs B to F, owner 2026-11-21)",
-      "confirmed": "gosec 2.30.0 run natively with the modules downloaded, 2026-11-21"
-    },
-    {
-      "check": "gosec",
-      "finding": "G104 _examples/rest/main.go:197",
-      "needs": "Go modules in the scan: vendored, or the consented module download step (ADR 0040; designed after fix PRs B to F, owner 2026-11-21)",
-      "confirmed": "gosec 2.30.0 run natively with the modules downloaded, 2026-11-21"
-    },
-    {
-      "check": "gosec",
-      "finding": "G104 _examples/rest/main.go:211",
-      "needs": "Go modules in the scan: vendored, or the consented module download step (ADR 0040; designed after fix PRs B to F, owner 2026-11-21)",
-      "confirmed": "gosec 2.30.0 run natively with the modules downloaded, 2026-11-21"
-    },
-    {
-      "check": "gosec",
-      "finding": "G104 _examples/rest/main.go:215",
-      "needs": "Go modules in the scan: vendored, or the consented module download step (ADR 0040; designed after fix PRs B to F, owner 2026-11-21)",
-      "confirmed": "gosec 2.30.0 run natively with the modules downloaded, 2026-11-21"
-    },
-    {
-      "check": "gosec",
-      "finding": "G104 _examples/versions/main.go:139",
-      "needs": "Go modules in the scan: vendored, or the consented module download step (ADR 0040; designed after fix PRs B to F, owner 2026-11-21)",
-      "confirmed": "gosec 2.30.0 run natively with the modules downloaded, 2026-11-21"
-    },
-    {
-      "check": "gosec",
-      "finding": "G104 _examples/versions/main.go:48",
-      "needs": "Go modules in the scan: vendored, or the consented module download step (ADR 0040; designed after fix PRs B to F, owner 2026-11-21)",
-      "confirmed": "gosec 2.30.0 run natively with the modules downloaded, 2026-11-21"
-    },
-    {
-      "check": "gosec",
-      "finding": "G114 _examples/versions/main.go:48",
-      "needs": "Go modules in the scan: vendored, or the consented module download step (ADR 0040; designed after fix PRs B to F, owner 2026-11-21)",
-      "confirmed": "gosec 2.30.0 run natively with the modules downloaded, 2026-11-21"
-    },
-    {
-      "check": "gosec",
-      "finding": "G404 _examples/versions/main.go:147",
-      "needs": "Go modules in the scan: vendored, or the consented module download step (ADR 0040; designed after fix PRs B to F, owner 2026-11-21)",
-      "confirmed": "gosec 2.30.0 run natively with the modules downloaded, 2026-11-21"
-    },
-    {
-      "check": "gosec",
-      "finding": "G404 _examples/versions/main.go:149",
-      "needs": "Go modules in the scan: vendored, or the consented module download step (ADR 0040; designed after fix PRs B to F, owner 2026-11-21)",
-      "confirmed": "gosec 2.30.0 run natively with the modules downloaded, 2026-11-21"
-    },
-    {
-      "check": "gosec",
-      "finding": "G404 _examples/versions/presenter/v3/article.go:26",
-      "needs": "Go modules in the scan: vendored, or the consented module download step (ADR 0040; designed after fix PRs B to F, owner 2026-11-21)",
-      "confirmed": "gosec 2.30.0 run natively with the modules downloaded, 2026-11-21"
-    },
-    {
-      "check": "gosec",
-      "finding": "G705 _examples/rest/main.go:229",
-      "needs": "Go modules in the scan: vendored, or the consented module download step (ADR 0040; designed after fix PRs B to F, owner 2026-11-21)",
-      "confirmed": "gosec 2.30.0 run natively with the modules downloaded, 2026-11-21"
-    }
-  ]
+  }
 }
