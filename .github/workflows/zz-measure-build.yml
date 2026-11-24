@@ -1,19 +1,16 @@
 name: Measure Go module download build (temporary)
 
 # Temporary measurement for the ADR 0066 build PR, removed before merge.
-# Earlier runs: 45340299829, 45343442723, 45347080293, 45351534307,
-# 45354545612 (the design's 10 repositories, containerd, consul, grafana),
-# 45405056394 (grafana profile: 99% of the time loads packages; 1, 2 and 4
-# workers; skips traced).
-#
-# This one asks why gosec needs 26 to 33 minutes on grafana v13.3.1 and why
-# it skips its SSA rules in some packages (grafana 105 log lines,
-# containerd 4 packages). Each job runs the pinned image with network, a
-# writable module cache and the scratch on disk (SiegeKit's sandbox flags),
-# samples CPU and memory, then reads gosec's log: time per package (load
-# until the first "Checking package" line, then the checks), and every SSA
-# skip, with the package's own errors or, when it has none, the imported
-# packages that failed to build (go list -export -deps).
+# What the design left for the build: apps bigger than caddy, and real apps
+# using go.work, vendor/ or a replace to a folder in the repository.
+#   grafana     v13.3.1: go.work, 51 modules, 7057 Go files (the newer
+#               main needs Go 1.27.4, gosec's image has 1.27.3)
+#   containerd  vendor/, 1459 Go files
+#   consul      16 modules, 31 local replaces, 2477 Go files
+# (caddy: 429 Go files.) Per job: SiegeKit as built (siegekit scan --only
+# gosec --yes), with the scratch folder sampled every 10 s, then the
+# reference: the same pinned image with network, a writable module cache
+# and the scratch on disk, SiegeKit's sandbox flags, one hour.
 on:
   pull_request:
     paths:
@@ -23,156 +20,114 @@ permissions:
   contents: read
 
 jobs:
-  profile:
-    name: ${{ matrix.repo }} ${{ matrix.mode }} cpus${{ matrix.cpus }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 120
+  measure:
+    name: ${{ matrix.repo }} (${{ matrix.engine }}, ${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 300
     strategy:
       fail-fast: false
       matrix:
-        include:
-          # warm: a second run reusing the first run's Go build cache.
-          # x: gosec's -exclude-dir for folders the go command ignores
-          # (testdata, and names starting with _ or .). hdr: the pinned image
-          # plus Alpine's linux-headers. nocgo: CGO_ENABLED=0.
-          - { repo: grafana/grafana@5db6ba887630c7fa12e5bfd063f2fa854025468c, conc: 1, cpus: 2, mode: warm }
-          - { repo: grafana/grafana@5db6ba887630c7fa12e5bfd063f2fa854025468c, conc: 1, cpus: 4, mode: base }
-          - { repo: grafana/grafana@5db6ba887630c7fa12e5bfd063f2fa854025468c, conc: 1, cpus: 2, mode: x }
-          - { repo: containerd/containerd@ce1877a1521be793afe42f8c024d9bc199eb063a, conc: 1, cpus: 2, mode: hdr }
-          - { repo: containerd/containerd@ce1877a1521be793afe42f8c024d9bc199eb063a, conc: 1, cpus: 2, mode: nocgo }
-          - { repo: kubernetes/examples@22934a040acbb0c0aa103023ccbd871507bf17f6, conc: 1, cpus: 2, mode: x }
+        os: [ubuntu-latest, ubuntu-24.04-arm]
+        engine: [podman, docker]
+        repo:
+          # gosec's limit raised to 3600 s (owner, 2026-11-24): grafana must
+          # now complete and equal the reference (798 in run 45340299829).
+          # Profile and options: runs 45405056394 and 45412513218.
+          - grafana/grafana@5db6ba887630c7fa12e5bfd063f2fa854025468c
     env:
+      SIEGEKIT_ENGINE: ${{ matrix.engine }}
+      E: ${{ matrix.engine }}
       REPO: ${{ matrix.repo }}
-      CONC: ${{ matrix.conc }}
-      CPUS: ${{ matrix.cpus }}
-      MODE: ${{ matrix.mode }}
       IMG: ghcr.io/securego/gosec@sha256:7bcf1edbab3e80d8006a28d53e7031a9c9775be8eec30679e4adc1f51d272121
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: Profile
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: "1.27.4"
+          cache: false
+      - name: Build
+        run: |
+          go build -o "$RUNNER_TEMP/siegekit" ./cmd/siegekit
+          # The same build with gosec stopped after 120 s, to reproduce the
+          # scratch folder left after a timeout on rootless Podman.
+          sed -i 's/"timeoutSeconds": 900/"timeoutSeconds": 120/' plugins/gosec/plugin.json
+          go build -o "$RUNNER_TEMP/siegekit-short" ./cmd/siegekit
+          git checkout plugins/gosec/plugin.json
+      - name: Measure
         run: |
           set -u +e
           T=$RUNNER_TEMP
-          echo "ARCH $(uname -m) CPUS $(nproc) MEM $(free -m | awk '/Mem/{print $2}')MiB $(docker --version) cgroup=$(docker info --format '{{.CgroupVersion}}')"
+          echo "ARCH $(uname -m) CPUS $(nproc) MEM $(free -m | awk '/Mem/{print $2}')MiB"
+          if [ "$E" = podman ]; then echo "rootless=$(podman info --format '{{.Host.Security.Rootless}}') cgroup=$(podman info --format '{{.Host.CgroupsVersion}}') $(podman --version)"; else echo "$(docker --version) cgroup=$(docker info --format '{{.CgroupVersion}}')"; fi
+          df -h / "$T" | sed 's/^/DF /'
           name=${REPO%@*}; sha=${REPO#*@}
           git init -q $T/target && git -C $T/target fetch -q --depth 1 "https://github.com/$name.git" "$sha" && git -C $T/target -c advice.detachedHead=false checkout -q FETCH_HEAD
-          docker pull -q "$IMG" > /dev/null
-          EXTRA=""; ENV=""
-          if [ "$MODE" = hdr ]; then
-            printf 'FROM %s\nUSER root\nRUN apk add --no-cache linux-headers\n' "$IMG" | docker build -q -t gosec-hdr - > /dev/null && IMG=gosec-hdr
-            echo "IMAGE gosec-hdr: $(docker run --rm --entrypoint sh gosec-hdr -c 'apk info -v 2>/dev/null | grep linux-headers')"
-          fi
-          [ "$MODE" = nocgo ] && ENV="--env CGO_ENABLED=0"
-          [ "$MODE" = x ] && EXTRA="-exclude-dir=/testdata(/|$) -exclude-dir=/[_.][^/]*(/|$)"
-          mkdir -p $T/ref/gomod $T/ref/gc/tmp $T/ref/out; chmod -R 777 $T/ref
-          run() { # the reference's sandbox: SiegeKit's flags, network, writable cache
-            docker run --rm --pull never --user $(id -u):$(id -g) --cap-drop ALL --security-opt no-new-privileges --read-only \
-              --tmpfs /tmp:rw,nosuid,nodev,noexec,size=256m --tmpfs /dev/shm:rw,nosuid,nodev,noexec,size=64m --pids-limit 256 \
-              --memory 2048m --memory-swap 2048m --cpus "$CPUS" \
-              --env HOME=/tmp --workdir /tmp --env GOPATH=/tmp/go \
-              --mount type=bind,source=$T/ref/gomod,target=/data/gomod --env GOMODCACHE=/data/gomod \
-              --mount type=bind,source=$T/ref/gc,target=/data/gocache --env GOCACHE=/data/gocache --env GOTMPDIR=/data/gocache/tmp \
-              --mount type=bind,source=$T/target,target=/target,readonly --mount type=bind,source=$T/ref/out,target=/out $ENV "$@"
-          }
-          ( while sleep 5; do docker stats --no-stream --format '{{.CPUPerc}} {{.MemUsage}}' prof 2>/dev/null; done ) > $T/stats.txt &
+          export XDG_DATA_HOME=$T/xdg
+          S=$XDG_DATA_HOME/siegekit/data/scratch
+          ( while sleep 10; do echo "$(date +%s) $(sudo du -sm $S 2>/dev/null | cut -f1)"; done ) > $T/du.txt &
           P=$!
           t0=$(date +%s)
-          run --name prof "$IMG" -concurrency $CONC $EXTRA -fmt json -out /out/ref.json -no-fail -track-suppressions /target/... > /dev/null 2> $T/ref.err
-          rc=$?
+          "$T/siegekit" scan --only gosec --yes --no-save --report-dir $T/rep $T/target > $T/sk.log 2>&1
+          code=$?
           kill $P
-          echo "GOSEC exit=$rc s=$(( $(date +%s) - t0 )) scratchMB=$(sudo du -sm $T/ref/gc | cut -f1) cacheMB=$(sudo du -sm $T/ref/gomod | cut -f1)"
-          python3 -I - $T/stats.txt <<'PY'
-          import sys, re
-          cpu, mem = [], []
-          for l in open(sys.argv[1]):
-              m = re.match(r'([\d.]+)% ([\d.]+)(MiB|GiB)', l)
-              if m:
-                  cpu.append(float(m.group(1)))
-                  mem.append(float(m.group(2)) * (1024 if m.group(3) == 'GiB' else 1))
-          if cpu:
-              cpu.sort()
-              print(f"STATS samples={len(cpu)} cpu% median={cpu[len(cpu)//2]:.0f} p90={cpu[int(len(cpu)*.9)]:.0f} memMiB peak={max(mem):.0f} median={sorted(mem)[len(mem)//2]:.0f}")
-          PY
-          python3 -I - $T/ref.err $T/ref/out/ref.json > $T/ana.txt <<'PY'
-          import sys, re, json, os, datetime, collections, statistics
-          pat = re.compile(r'^\[gosec\] (\d{4}/\d\d/\d\d \d\d:\d\d:\d\d) (.*)$')
-          ts = lambda s: datetime.datetime.strptime(s, '%Y/%m/%d %H:%M:%S').timestamp()
-          pk, ssa = [], []
-          cur = start = first = last = None
-          for line in open(sys.argv[1], errors='replace'):
-              m = pat.match(line.rstrip('\n'))
-              if not m:
-                  continue
-              t, msg = ts(m.group(1)), m.group(2)
-              last = t
-              if msg.startswith('Import directory: '):
-                  if cur is not None:
-                      pk.append((cur, start, first, t))
-                  cur, start, first = msg[18:].replace('/target', '', 1).lstrip('/') or '.', t, None
-              elif msg.startswith('Checking package:') and first is None:
-                  first = t
-              elif msg.startswith('Error building the SSA representation of the package '):
-                  ssa.append((cur, msg[len('Error building the SSA representation of the package '):]))
-          if cur is not None:
-              pk.append((cur, start, first, last))
-          if pk:
-              tot = last - pk[0][1]
-              load = sum((f or e) - s for _, s, f, e in pk)
-              d = sorted((e - s, (f or e) - s, x) for x, s, f, e in pk)
-              print(f"PKGS {len(pk)} WALL {tot:.0f}s LOAD {load:.0f}s ({100*load/max(tot,1):.0f}%) CHECK {tot-load:.0f}s")
-              print(f"PER_PKG s: median {statistics.median([x[0] for x in d]):.1f} mean {statistics.mean([x[0] for x in d]):.1f} p90 {d[int(len(d)*.9)][0]:.0f} max {d[-1][0]:.0f}; load median {statistics.median([x[1] for x in d]):.1f}")
-              for x in d[-10:]:
-                  print(f"  slow {x[0]:.0f}s (load {x[1]:.0f}s) {x[2]}")
-          try:
-              errs = json.load(open(sys.argv[2])).get('Golang errors') or {}
-          except Exception as e:
-              errs = {}
-              print('NO_JSON', e)
-          own = collections.defaultdict(list)
-          for f, lst in errs.items():
-              dd = os.path.dirname(f.replace('/target', '', 1).lstrip('/')) or '.' if f else '(no file)'
-              for e in lst or []:
-                  own[dd].append(str(e.get('error', ''))[:160])
-          print(f"LOAD_ERROR_DIRS {len(own)}")
-          silent = sorted({x for x, _ in ssa if x not in own})
-          withown = [x for x, _ in ssa if x in own]
-          print(f"SSA_SKIPS {len(ssa)} UNIQUE_DIRS {len({x for x,_ in ssa})} WITH_OWN_ERRORS {len(withown)} SILENT {len(silent)}")
-          kinds = collections.Counter()
-          for x in set(withown):
-              e = own[x][0]
-              k = ('testdata ' if '/testdata/' in '/' + x + '/' else '') + (
-                  'undefined' if 'undefined:' in e else 'could-not-import' if 'could not import' in e else
-                  'redeclared' if 'redeclared' in e else 'cgo' if 'cgo' in e.lower() or 'C.' in e else 'other')
-              kinds[k] += 1
-          print('OWN_ERROR_KINDS', dict(kinds))
-          for x in sorted(set(withown))[:8]:
-              print(f"  own {x}: {own[x][0]}")
-          for x, m in ssa:
-              if x in silent:
-                  print(f"  silent {x}: {m[:200]}")
-          if '(no file)' in own:
-              for e in own['(no file)'][:5]:
-                  print(f"  nofile {e}")
-          open('/tmp/silent.txt', 'w').write('\n'.join(silent))
-          PY
-          cat $T/ana.txt | head -40
-          python3 -I - $T/ref/out/ref.json <<'PY'
-          import json, sys, re, collections
-          d = json.load(open(sys.argv[1]))
-          u = set()
-          for i in d.get("Issues") or []:
-              if not i.get("suppressions"):
-                  u.add((i["rule_id"], i["file"].replace("/target/", "", 1), str(i["line"]).split("-")[0]))
-          ign = [x for x in u if re.search(r'(^|/)(testdata|[_.][^/]*)/', x[1])]
-          print("FINDINGS_UNIQUE", len(u), "IN_GO_IGNORED_DIRS", len(ign), "FILES", d.get("Stats", {}).get("files"))
-          for r, n in collections.Counter(x[0] for x in ign).most_common(8): print("  ignored-dir rule", r, n)
-          for x in sorted(ign)[:6]: print("  ignored-dir", *x)
-          PY
-          cp $T/ref/out/ref.json $T/first.json
-          if [ "$MODE" = warm ]; then
-            sudo rm -rf $T/ref/gc/tmp/*; t0=$(date +%s)
-            run "$IMG" -concurrency 1 -fmt json -out /out/ref.json -no-fail -track-suppressions /target/... > /dev/null 2> $T/ref2.err
-            echo "WARM exit=$? s=$(( $(date +%s) - t0 )) same=$(python3 -I -c 'import json,sys; a=json.load(open(sys.argv[1])); b=json.load(open(sys.argv[2])); k=lambda d: sorted((i["rule_id"],i["file"],i["line"]) for i in d.get("Issues") or []); print(k(a)==k(b))' $T/first.json $T/ref/out/ref.json)"
+          echo "SIEGEKIT exit=$code s=$(( $(date +%s) - t0 )) scratchPeakMB=$(sort -k2 -n $T/du.txt | tail -1 | cut -d' ' -f2) cacheMB=$(sudo du -sm $XDG_DATA_HOME/siegekit/data/gomod | cut -f1) scratchLeft=$(sudo ls -A $S | wc -l)"
+          sudo find $S -maxdepth 4 -printf '%M %u %p\n' 2>/dev/null | head -12 | sed 's/^/LEFT /'
+          grep -v '^  ' $T/sk.log | head -12 | cut -c1-600
+          jq -c '.plugins[] | {status, findings, suppressed, input, reason: (.reason // "" | .[0:1500])}' $T/rep/report.json
+          jq -r '.findings[] | .sources[] as $s | "\($s.ruleId) \(.location.uri) \(.location.startLine)"' $T/rep/report.json | sort -u > $T/sk.txt
+          echo "SIEGEKIT_UNIQUE $(wc -l < $T/sk.txt)"
+          df -h / | sed 's/^/DF_AFTER /'
+
+          if [ "$name" = hashicorp/consul ] && [ "$E" = podman ]; then
+            "$T/siegekit-short" scan --only gosec --yes --no-save --report-dir $T/rep2 $T/target > $T/sk2.log 2>&1
+            echo "SHORT exit=$? $(jq -c '.plugins[] | {status, reason}' $T/rep2/report.json | cut -c1-400)"
+            podman ps --all --format '{{.Names}} {{.Status}}' | sed 's/^/PS /'
+            a=$(sudo find $S | wc -l); sleep 15; b=$(sudo find $S | wc -l); echo "ENTRIES $a then $b"
+            podman unshare find $S -mindepth 1 ! -uid $(id -u) -printf '%U:%G %M %p\n' 2>&1 | head -8 | sed 's/^/NOTTOOL /'
+            podman unshare find $S -mindepth 1 -type d ! -perm -u+w -printf '%M %p\n' 2>&1 | head -5 | sed 's/^/RODIR /'
+            d=$(ls -d $S/gosec-* 2>/dev/null | head -1)
+            if [ -n "$d" ]; then
+              podman run --rm --pull never --user $(id -u):$(id -g) --network none --mount type=bind,source=$d,target=/s \
+                --entrypoint rm "$IMG" -rf /s/cache /s/tmp 2>&1 | head -6 | cut -c1-300 | sed 's/^/RMERR /'
+              echo "RM_AFTER $(sudo find $d | wc -l)"
+            fi
           fi
+          # The reference for consul ran in 45347080293.
+          [ "$name" = hashicorp/consul ] && exit 0
+
+          # Reference: network on, writable module cache, scratch on disk.
+          # Removing the cache as docs/network.md says.
+          G=$XDG_DATA_HOME/siegekit/data/gomod
+          if [ "$E" = podman ]; then podman unshare rm -rf "$G"; else chmod -R u+w "$G" && rm -rf "$G"; fi
+          echo "CACHE_REMOVED exit=$? left=$(ls -d "$G" 2>/dev/null | wc -l)"
+          mkdir -p $T/ref/gomod $T/ref/gc/tmp $T/ref/out; chmod -R 777 $T/ref
+          ro=--read-only; [ "$E" = podman ] && ro="--read-only --read-only-tmpfs=false"
+          t0=$(date +%s)
+          timeout 4000 $E run --rm --pull never --user $(id -u):$(id -g) --cap-drop ALL --security-opt no-new-privileges $ro \
+            --tmpfs /tmp:rw,nosuid,nodev,noexec,size=256m --tmpfs /dev/shm:rw,nosuid,nodev,noexec,size=64m --pids-limit 256 --memory 2048m --memory-swap 2048m --cpus 2 \
+            --env HOME=/tmp --workdir /tmp --env GOPATH=/tmp/go \
+            --mount type=bind,source=$T/ref/gomod,target=/data/gomod --env GOMODCACHE=/data/gomod \
+            --mount type=bind,source=$T/ref/gc,target=/data/gocache --env GOCACHE=/data/gocache --env GOTMPDIR=/data/gocache/tmp \
+            --mount type=bind,source=$T/target,target=/target,readonly --mount type=bind,source=$T/ref/out,target=/out \
+            "$IMG" -concurrency 1 -fmt json -out /out/ref.json -no-fail -track-suppressions /target/... > /dev/null 2> $T/ref.err
+          rc=$?
+          echo "REFERENCE exit=$rc s=$(( $(date +%s) - t0 )) SSA_SKIPS $(grep -c 'Error building the SSA' $T/ref.err) NO_SPACE $(grep -c 'no space left' $T/ref.err) scratchMB=$(sudo du -sm $T/ref/gc | cut -f1) cacheMB=$(sudo du -sm $T/ref/gomod | cut -f1)"
+          [ "$rc" -ne 0 ] && grep -v 'Checking\|Import directory' $T/ref.err | tail -5 | cut -c1-300 | sed 's/^/REFERR /'
+          python3 -I - "$T/ref/out/ref.json" "$T/sk.txt" <<'PY'
+          import json, sys
+          d = json.load(open(sys.argv[1]))
+          ref = set()
+          for i in d.get("Issues") or []:
+              if i.get("suppressions"):
+                  continue
+              ref.add(f'{i["rule_id"]} {i["file"].replace("/target/", "", 1)} {str(i["line"]).split("-")[0]}')
+          sk = set(l for l in open(sys.argv[2]).read().split("\n") if l)
+          errs = d.get("Golang errors") or {}
+          print("REF_UNIQUE", len(ref), "REF_LOAD_ERRORS", len(errs), "MISSED", len(ref - sk), "EXTRA", len(sk - ref))
+          for x in sorted(ref - sk)[:20]: print("  missed", x)
+          for x in sorted(sk - ref)[:20]: print("  extra", x)
+          for k in list(errs)[:10]: print("  referr", k.replace("/target/", ""), str(errs[k][0].get("error") if errs[k] else "")[:200])
+          PY
+          df -h / | sed 's/^/DF_END /'

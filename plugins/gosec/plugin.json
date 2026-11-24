@@ -31,7 +31,7 @@
     "cpus": 2,
     "memoryMiB": 2048,
     "gpu": "none",
-    "timeoutSeconds": 900,
+    "timeoutSeconds": 3600,
     "maxTimeoutSeconds": 3600
   },
   "network": "none",
