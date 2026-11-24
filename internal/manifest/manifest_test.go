@@ -387,3 +387,36 @@ func TestGitleaksRulesRules(t *testing.T) {
 		}
 	}
 }
+
+// TestGoModulesRules checks where run.goModules is allowed (ADR 0066),
+// starting from the built-in gosec plugin.
+func TestGoModulesRules(t *testing.T) {
+	b, err := os.ReadFile("../../plugins/gosec/plugin.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m, err := Parse(b); err != nil || !m.Run.GoModules {
+		t.Fatalf("gosec: %v", err)
+	}
+	for _, c := range []struct {
+		name   string
+		mutate func(m map[string]any)
+		want   string
+	}{
+		{"url target", func(m map[string]any) { m["targets"] = []string{"repo", "url"} }, "run.goModules is only for passive plugins whose only target is repo"},
+		{"data section", func(m map[string]any) {
+			m["data"] = map[string]any{"mount": "/tmp/x", "updateArgs": []string{"u"}, "maxAgeDays": 7}
+		}, "run.goModules is only for passive plugins whose only target is repo, with no data section"},
+		{"env sets GOCACHE", func(m map[string]any) { m["run"].(map[string]any)["env"].(map[string]any)["GOCACHE"] = "/tmp/c" }, "must not set GOCACHE"},
+		{"env sets GOFLAGS", func(m map[string]any) { m["run"].(map[string]any)["env"].(map[string]any)["GOFLAGS"] = "-mod=mod" }, "must not set GOFLAGS"},
+	} {
+		var m map[string]any
+		if err := json.Unmarshal(b, &m); err != nil {
+			t.Fatal(err)
+		}
+		c.mutate(m)
+		if _, err := Parse(mustMarshal(t, m)); err == nil || !strings.Contains(err.Error(), c.want) {
+			t.Errorf("%s: %v, want %q", c.name, err, c.want)
+		}
+	}
+}

@@ -105,6 +105,11 @@ var emptySARIF = fakeExec(func(s sandbox.Spec) (*sandbox.Result, error) {
 			return nil, err
 		}
 	}
+	if s.StderrFile != "" { // gosec's log: no SSA skipped (ADR 0066)
+		if err := os.WriteFile(filepath.Join(s.OutDir, s.StderrFile), nil, 0o644); err != nil {
+			return nil, err
+		}
+	}
 	return &sandbox.Result{Status: sandbox.Completed}, nil
 })
 

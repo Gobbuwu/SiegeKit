@@ -3,6 +3,9 @@ package sandbox
 import (
 	"context"
 	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -113,6 +116,8 @@ func TestSpecRejections(t *testing.T) {
 		"negative tmp":     func(s *Spec) { s.TmpMiB = -1 },
 		"stdout path":      func(s *Spec) { s.StdoutFile = "../x.json" },
 		"stdout dot file":  func(s *Spec) { s.StdoutFile = ".x" },
+		"stderr path":      func(s *Spec) { s.StderrFile = "a/x.txt" },
+		"stderr = stdout":  func(s *Spec) { s.StdoutFile, s.StderrFile = "x.txt", "x.txt" },
 		"target not a dir": func(s *Spec) { s.TargetDir = filepath.Join(s.TargetDir, "app.txt") },
 		"egress with target": func(s *Spec) {
 			s.Network, s.DataDir, s.DataMount, s.DataWritable = "egress", s.OutDir, "/tmp/db", true
@@ -332,6 +337,68 @@ func TestContainerStdoutFile(t *testing.T) {
 	if r = run(t, e, s); r.Status != Failed || !strings.Contains(r.Stderr, "output exceeded") {
 		t.Fatalf("status %s: %s", r.Status, r.Stderr)
 	}
+}
+
+// TestContainerStderrFile: the tool's standard error goes in full to its
+// own file, Stderr keeps it too, and it counts against the output limit
+// (ADR 0066).
+func TestContainerStderrFile(t *testing.T) {
+	e := engine(t)
+	s := spec(t, "sh", "-c", "echo out-line; echo err-line >&2")
+	s.StdoutFile, s.StderrFile = "stdout.json", "log.txt"
+	r := run(t, e, s)
+	b, err := os.ReadFile(filepath.Join(s.OutDir, "log.txt"))
+	if err != nil || string(b) != "err-line\n" || r.Status != Completed || !strings.Contains(r.Stderr, "err-line") || strings.Contains(r.Stderr, "out-line") {
+		t.Fatalf("status %s, file %q %v, stderr %q", r.Status, b, err, r.Stderr)
+	}
+	s = spec(t, "sh", "-c", "head -c 2000000 /dev/zero >&2")
+	s.StderrFile, s.OutputLimit = "log.txt", 1<<20
+	if r = run(t, e, s); r.Status != Failed || !strings.Contains(r.Stderr, "output exceeded") {
+		t.Fatalf("status %s: %.200s", r.Status, r.Stderr)
+	}
+}
+
+// TestContainerTimeoutStopsWrites: when a run times out, its container is
+// stopped before Run returns, so nothing writes to its scratch folder any
+// more and the folder can be deleted. The tool ignores SIGTERM, as a shell
+// as PID 1 does (gosec's entrypoint is bash). On rootless Podman a timed-out
+// gosec left a folder whose cleanup said "Directory not empty" (CI run
+// 45340299829, 2026-11-24).
+func TestContainerTimeoutStopsWrites(t *testing.T) {
+	e := engine(t)
+	s := spec(t, "sh", "-c", "i=0; while :; do mkdir -p "+ScratchMount+"/d/$i; i=$((i+1)); done")
+	s.ScratchDir = t.TempDir()
+	s.Timeout = 3 * time.Second
+	// With rootless Podman the folders belong to a user of Podman's
+	// namespace, which the test's own user cannot delete; a container
+	// deletes them, as runner.removeScratch does. Registered after
+	// t.TempDir, so it runs before the folder is removed.
+	t.Cleanup(func() {
+		c := spec(t, "rm", "-rf", ScratchMount+"/d")
+		c.ScratchDir = s.ScratchDir
+		if r, err := e.Run(context.Background(), c); err != nil || r.Status != Completed || r.ExitCode != 0 {
+			t.Errorf("cleanup container: %v %+v", err, r)
+		}
+	})
+	start := time.Now()
+	r := run(t, e, s)
+	if r.Status != TimedOut {
+		t.Fatalf("status %s: %s", r.Status, r.Stderr)
+	}
+	returned := time.Since(start)
+	count := func() int {
+		entries, err := os.ReadDir(filepath.Join(s.ScratchDir, "d"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return len(entries)
+	}
+	n := count()
+	time.Sleep(3 * time.Second)
+	if m := count(); m != n || n == 0 {
+		t.Fatalf("Run returned after %v, then the container wrote on: %d entries, %d three seconds later", returned, n, m)
+	}
+	t.Logf("Run returned after %v with %d entries written", returned, n)
 }
 
 func TestContainerToolExitCodeIsNotEngineFailure(t *testing.T) {
@@ -845,5 +912,170 @@ func TestDetectEngineEnv(t *testing.T) {
 	e, err := Detect()
 	if err != nil || e.Bin != fake || !e.Podman {
 		t.Errorf("Detect = %+v, %v", e, err)
+	}
+}
+
+func TestEgressSpec(t *testing.T) {
+	ca := filepath.Join(t.TempDir(), "ca.pem")
+	if err := os.WriteFile(ca, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	s := Spec{
+		Image: testImage, Args: []string{"mod", "download"}, OutDir: t.TempDir(), Network: "egress",
+		DataDir: t.TempDir(), DataMount: "/data/gomod", DataWritable: true, InputDir: t.TempDir(), Entrypoint: "go",
+		CPUs: 1, MemoryMiB: 128, Timeout: time.Minute,
+		Egress: Egress{CAFile: ca, Proxy: "http://proxy.example:3128"},
+	}
+	args, err := s.EngineArgs("n", 1000, 1000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	joined := strings.Join(args, " ")
+	for _, want := range []string{
+		"--env HTTPS_PROXY=http://proxy.example:3128", "--env HTTP_PROXY=http://proxy.example:3128",
+		"--env https_proxy=http://proxy.example:3128", "--env http_proxy=http://proxy.example:3128",
+		"source=" + ca + ",target=" + CAMount + ",readonly", "--env SSL_CERT_FILE=" + CAMount,
+		",target=" + InputMount + ",readonly", "--entrypoint go " + testImage + " mod download",
+	} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("missing %q in %s", want, joined)
+		}
+	}
+	if strings.Contains(joined, "--network") {
+		t.Errorf("egress uses the engine's default network: %s", joined)
+	}
+}
+
+func TestScratchSpec(t *testing.T) {
+	s := spec(t, "scan")
+	s.ScratchDir = t.TempDir()
+	args, err := s.EngineArgs("n", 1000, 1000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	joined := strings.Join(args, " ")
+	if !strings.Contains(joined, "source="+s.ScratchDir+",target="+ScratchMount+" ") || strings.Contains(joined, ScratchMount+",readonly") {
+		t.Errorf("scratch must be mounted read-write: %s", joined)
+	}
+}
+
+func TestEgressRejections(t *testing.T) {
+	ca := filepath.Join(t.TempDir(), "ca.pem")
+	if err := os.WriteFile(ca, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cases := map[string]func(s *Spec){
+		"proxy on a scan":      func(s *Spec) { s.Egress.Proxy = "http://p:1" },
+		"CA file on a scan":    func(s *Spec) { s.Egress.CAFile = ca },
+		"scratch with network": func(s *Spec) { s.TargetDir, s.Network, s.ScratchDir = "", "egress", s.OutDir },
+		"entrypoint path":      func(s *Spec) { s.Entrypoint = "/bin/sh" },
+		"entrypoint option":    func(s *Spec) { s.Entrypoint = "--privileged" },
+		"input comma":          func(s *Spec) { s.InputDir = s.TargetDir + ",readonly=false" },
+		"scratch not a dir":    func(s *Spec) { s.ScratchDir = filepath.Join(s.TargetDir, "app.txt") },
+	}
+	for name, mutate := range cases {
+		t.Run(name, func(t *testing.T) {
+			s := spec(t, "true")
+			s.DataDir, s.DataMount = t.TempDir(), "/data/gomod"
+			mutate(&s)
+			if s.Network == "egress" {
+				s.DataWritable = true
+			}
+			if _, err := s.EngineArgs("n", 1000, 1000); err == nil {
+				t.Fatal("expected rejection")
+			}
+		})
+	}
+	t.Run("egress CA file missing", func(t *testing.T) {
+		s := Spec{Image: testImage, Args: []string{"x"}, OutDir: t.TempDir(), Network: "egress", DataDir: t.TempDir(), DataMount: "/data/x",
+			DataWritable: true, CPUs: 1, MemoryMiB: 128, Timeout: time.Minute, Egress: Egress{CAFile: "/nonexistent/ca.pem"}}
+		if _, err := s.EngineArgs("n", 1000, 1000); err == nil {
+			t.Fatal("expected rejection")
+		}
+	})
+}
+
+func TestCheckProxy(t *testing.T) {
+	for _, ok := range []string{"http://proxy:3128", "https://proxy.example.com:8443", "http://10.0.0.1:3128/", "http://host.docker.internal:3128", "http://[::1]:3128"} {
+		if err := CheckProxy(ok); err != nil {
+			t.Errorf("%s: %v", ok, err)
+		}
+	}
+	for _, bad := range []string{"", "proxy:3128", "socks5://p:1", "http://user:pw@p:1", "http://user@p:1", "http://p:1/path", "http://p:1?x=1", "http://p:1#f", "http://", "http://p:1\n"} {
+		if err := CheckProxy(bad); err == nil {
+			t.Errorf("%q accepted", bad)
+		}
+	}
+	if err := CheckProxy("http://user:secret@p:1"); err == nil || strings.Contains(err.Error(), "secret") {
+		t.Errorf("the error must not repeat the password: %v", err)
+	}
+}
+
+func TestCheckEnvGoProxy(t *testing.T) {
+	for _, v := range []string{"off", GoProxy} {
+		if err := CheckEnv(map[string]string{"GOPROXY": v, "GONOPROXY": "corp.example"}); err != nil {
+			t.Errorf("GOPROXY=%s: %v", v, err)
+		}
+	}
+	for _, env := range []map[string]string{
+		{"GOPROXY": "https://evil.example"}, {"GOPROXY": GoProxy + ",direct"}, {"HTTPS_PROXY": "http://p:1"}, {"ALL_PROXY": "x"}, {"NO_PROXY": "x"},
+	} {
+		if err := CheckEnv(env); err == nil {
+			t.Errorf("%v accepted", env)
+		}
+	}
+}
+
+func TestTooManyPullsHint(t *testing.T) {
+	// Engine output seen on 2026-11-24 in the development sandbox.
+	hub := `Error response from daemon: unknown: failed to resolve reference "docker.io/library/registry:2": unexpected status from HEAD request to https://registry-1.docker.io/v2/library/registry/manifests/2: 429 Too Many Requests`
+	if h := TooManyPullsHint("docker.io/aquasec/trivy@sha256:x", hub); !strings.Contains(h, "docker login") || !strings.Contains(h, "mirror.gcr.io") {
+		t.Errorf("Docker Hub hint: %q", h)
+	}
+	if h := TooManyPullsHint("docker.io/x@sha256:x", "toomanyrequests: You have reached your unauthenticated pull rate limit."); h == "" {
+		t.Error("toomanyrequests not recognised")
+	}
+	if h := TooManyPullsHint("ghcr.io/x@sha256:x", hub); h == "" || strings.Contains(h, "docker login") {
+		t.Errorf("other registry: %q", h)
+	}
+	if h := TooManyPullsHint("docker.io/x@sha256:x", "manifest unknown"); h != "" {
+		t.Errorf("unrelated error: %q", h)
+	}
+}
+
+// TestEngineCommandsShareEnv: every engine command is built by
+// Engine.command (or isPodman, before there is an Engine), so all get
+// minimalEnv. When "rm" and "ps" alone saw the caller's XDG_DATA_HOME,
+// rootless Podman looked for a timed-out container in another store and
+// it kept running (measurement run 45347080293).
+func TestEngineCommandsShareEnv(t *testing.T) {
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, "sandbox.go", nil, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, d := range f.Decls {
+		fn, ok := d.(*ast.FuncDecl)
+		if !ok || fn.Name.Name == "command" || fn.Name.Name == "isPodman" {
+			continue
+		}
+		ast.Inspect(fn, func(n ast.Node) bool {
+			if sel, ok := n.(*ast.SelectorExpr); ok {
+				if x, ok := sel.X.(*ast.Ident); ok && x.Name == "exec" && strings.HasPrefix(sel.Sel.Name, "Command") {
+					t.Errorf("%s: %s builds an engine command itself; use Engine.command", fset.Position(sel.Pos()), fn.Name.Name)
+				}
+			}
+			return true
+		})
+	}
+	for _, k := range []string{"XDG_DATA_HOME", "XDG_CONFIG_HOME", "CONTAINERS_REGISTRIES_CONF"} {
+		t.Setenv(k, "/x")
+		if !slices.Contains(minimalEnv(), k+"=/x") {
+			t.Errorf("%s is not passed to the engine", k)
+		}
+	}
+	t.Setenv("GITHUB_TOKEN", "secret")
+	if slices.ContainsFunc(minimalEnv(), func(v string) bool { return strings.HasPrefix(v, "GITHUB_TOKEN=") }) {
+		t.Error("the engine got an unrelated variable")
 	}
 }

@@ -182,6 +182,15 @@ type Run struct {
 	// read-only at RecordedMount (ADR 0047). Only for destructive,
 	// local-only ZAP plugins.
 	Recorded bool `json:"recordedRequests,omitempty"`
+	// GoModules marks a tool that loads Go packages with the Go in its
+	// image, such as gosec (ADR 0066). SiegeKit gives each run an empty
+	// scratch folder on disk for Go's build cache and compile scratch
+	// (GOCACHE, GOTMPDIR), and mounts the shared Go module cache
+	// read-only (GOMODCACHE, GOPROXY=off) when it exists; the install
+	// question offers to download the target's modules into it. Only for
+	// passive plugins whose only target is repo, with no data section; the
+	// image must have go on its PATH.
+	GoModules bool `json:"goModules,omitempty"`
 }
 
 var reGitleaksRuleID = regexp.MustCompile(`(?m)^id = "([a-z0-9][a-z0-9-]{0,63})"$`)
@@ -229,6 +238,11 @@ type Output struct {
 type Stdout struct {
 	File   string `json:"file"`
 	Parser string `json:"parser"`
+	// StderrFile, if set, also saves the tool's standard error (its log)
+	// to this file inside {outdir} for the parser. The parser
+	// "gosec-errors" needs it: gosec names in its log the packages whose
+	// SSA-based rules it skipped (ADR 0066).
+	StderrFile string `json:"stderrFile,omitempty"`
 }
 
 // ValidationError lists every rule a manifest breaks.
@@ -400,6 +414,16 @@ func (m *Manifest) Validate() error {
 				add("run.recordedRequests needs a spider job in run.config.jobs")
 			}
 		}
+		if m.Run.GoModules {
+			for _, k := range []string{"GOCACHE", "GOTMPDIR", "GOMODCACHE", "GOPROXY", "GOFLAGS"} {
+				if _, ok := m.Run.Env[k]; ok {
+					add("run.env must not set %s with run.goModules", k)
+				}
+			}
+			if m.Mode != "passive" || !slices.Equal(m.Targets, []string{"repo"}) || m.Data != nil {
+				add("run.goModules is only for passive plugins whose only target is repo, with no data section")
+			}
+		}
 		if g := m.Run.GitleaksRules; g != "" {
 			ids := m.Run.GitleaksRuleIDs()
 			_, setsConfig := m.Run.Env["GITLEAKS_CONFIG"]
@@ -488,6 +512,12 @@ func (m *Manifest) Validate() error {
 			checkEnum(&p, "output.stdout.parser", o.Parser, StdoutParsers)
 			if !reOutFile.MatchString(o.File) || o.File == m.Output.File {
 				add("output.stdout.file %q must be a plain file name matching %s, other than output.file", o.File, reOutFile)
+			}
+			if o.StderrFile != "" && (!reOutFile.MatchString(o.StderrFile) || o.StderrFile == m.Output.File || o.StderrFile == o.File) {
+				add("output.stdout.stderrFile %q must be a plain file name matching %s, other than output.file and output.stdout.file", o.StderrFile, reOutFile)
+			}
+			if o.Parser == "gosec-errors" && o.StderrFile == "" {
+				add("output.stdout.parser \"gosec-errors\" needs output.stdout.stderrFile")
 			}
 		}
 	}

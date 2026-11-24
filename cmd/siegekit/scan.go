@@ -88,7 +88,19 @@ Flags:
   --update          refresh downloaded tool data first (network access)
   --yes             install missing dependencies without asking (for CI)
   --no-install      install nothing; tests that need a missing dependency
-                    are skipped
+                    are skipped. The install question also offers the
+                    target's Go modules for gosec, downloaded from
+                    proxy.golang.org (which sees their names and versions)
+                    in a container that gets only copies of the go.mod,
+                    go.sum, go.work and go.work.sum files; modules matching
+                    GOPRIVATE or GONOPROXY are never requested
+  --ca-file FILE    a PEM file of extra CA certificates for the containers
+                    that download (tool data, Go modules), for networks
+                    with TLS inspection; default $SIEGEKIT_CA_FILE
+  --proxy URL       http(s)://host:port of a proxy for those containers,
+                    with no password; default $SIEGEKIT_PROXY. It must be
+                    reachable from a container: not 127.0.0.1 on Linux
+                    (under Colima, host.docker.internal reaches the Mac)
   --deployed        test a public system you control (proof required)
   --authorized-host HOST
                     confirm without a terminal that you are authorized to
@@ -232,6 +244,8 @@ func scan(args []string, stdout, stderr io.Writer) int {
 	backendURL := fl.String("backend-url", "", "")
 	storageURL := fl.String("storage-url", "", "")
 	source := fl.String("source", "", "")
+	caFile := fl.String("ca-file", "", "")
+	proxy := fl.String("proxy", "", "")
 	// Allow flags before and after DIR.
 	var pos []string
 	for {
@@ -321,6 +335,10 @@ func scan(args []string, stdout, stderr io.Writer) int {
 			fmt.Fprint(stderr, "siegekit scan: --update only applies to directory scans\n")
 			return exitUsage
 		}
+		if *caFile != "" || *proxy != "" {
+			fmt.Fprint(stderr, "siegekit scan: --ca-file and --proxy only apply to directory scans and siegekit update\n")
+			return exitUsage
+		}
 		return scanURL(pos[0], urlScan{
 			deployed: *deployed, authorizedHost: *authorizedHost,
 			only: splitList(*only), skip: splitList(*skip), threshold: threshold,
@@ -329,6 +347,11 @@ func scan(args []string, stdout, stderr io.Writer) int {
 			har: *har, harUser: *harUser, replayWrites: *replayWrites, rateLimit: rl, pageFlags: pages,
 			mailCatcher: *mailCatcher, backendURL: *backendURL, storageURL: *storageURL, source: *source,
 		}, stdout, stderr)
+	}
+	egress, err := egressFrom(*caFile, *proxy)
+	if err != nil {
+		fmt.Fprintf(stderr, "siegekit scan: %v\n", err)
+		return exitUsage
 	}
 	if *deployed || *authorizedHost != "" || *openAPI != "" || lf.url != "" || attemptsSet || *har != "" || *replayWrites || rl.url != "" || anyPage || *mailCatcher != "" || *backendURL != "" || *storageURL != "" || *source != "" {
 		fmt.Fprint(stderr, "siegekit scan: --deployed, --authorized-host, --openapi, --har, --replay-writes, --backend-url, --storage-url, --source, --mail-catcher, the --login flags, the --rate-limit flags and the --reset, --signup and --code flags only apply to URL targets\n")
@@ -352,10 +375,11 @@ func scan(args []string, stdout, stderr io.Writer) int {
 	} else if !*noSave {
 		return fail(fmt.Errorf("%w (or use --no-save)", err))
 	}
+	roots.Target, roots.Egress = target, egress
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	dataRoot := roots.Data
-	ex, unavailable, fetched, err := prepare(ctx, selected, roots, consent{yes: *yes, none: *noInstall}, stdout)
+	ex, unavailable, fetched, notes, err := prepare(ctx, selected, roots, consent{yes: *yes, none: *noInstall}, stdout)
 	if err != nil {
 		return fail(err)
 	}
@@ -371,7 +395,7 @@ func scan(args []string, stdout, stderr io.Writer) int {
 		}
 		if len(refresh) > 0 {
 			fmt.Fprintln(stdout, "Updating tool data (network access, none of your files).")
-			results, err := runner.Update(ctx, ex, refresh, dataRoot, "")
+			results, err := runner.Update(ctx, ex, refresh, dataRoot, "", egress)
 			if err != nil {
 				return fail(err)
 			}
@@ -386,7 +410,7 @@ func scan(args []string, stdout, stderr io.Writer) int {
 	env := runner.Environment(ctx, ex)
 	fmt.Fprintf(stdout, "Environment: %s\n", env)
 	fmt.Fprintf(stdout, "Scanning %s with %d check(s).\n", target, len(selected)+len(builtins))
-	run, err := runner.Run(ctx, ex, selected, runner.Options{Version: version, TargetDir: target, DataRoot: dataRoot, FilesRoot: roots.Files, Checks: builtins, Unavailable: unavailable, Environment: env})
+	run, err := runner.Run(ctx, ex, selected, runner.Options{Version: version, TargetDir: target, DataRoot: dataRoot, FilesRoot: roots.Files, Checks: builtins, Unavailable: unavailable, Notes: notes, Environment: env})
 	if errors.Is(err, context.Canceled) {
 		return fail(errors.New("interrupted; no report written"))
 	}
@@ -504,19 +528,22 @@ type consent struct{ yes, none, data bool }
 // before installing missing ones (ADR 0016), and returns the plugins that
 // cannot run and those whose data was downloaded now. ex is nil when there
 // is no working engine.
-func prepare(ctx context.Context, selected []*manifest.Manifest, roots deps.Roots, c consent, out io.Writer) (ex engine, un map[string]runner.Unavailable, fetched map[string]bool, err error) {
+func prepare(ctx context.Context, selected []*manifest.Manifest, roots deps.Roots, c consent, out io.Writer) (ex engine, un map[string]runner.Unavailable, fetched map[string]bool, notes map[string]string, err error) {
 	if len(selected) == 0 {
-		return nil, nil, nil, nil
+		return nil, nil, nil, nil, nil
 	}
 	eng, err := newEngine()
 	if err != nil {
 		fmt.Fprintln(out, deps.EngineHelp(runtime.GOOS))
-		return nil, deps.NoEngine(selected, "no container engine (Docker or Podman) found"), nil, nil
+		return nil, deps.NoEngine(selected, "no container engine (Docker or Podman) found"), nil, nil, nil
 	}
 	all, err := deps.Plan(ctx, eng, selected, roots)
+	if err == nil {
+		all, err = deps.PlanGo(ctx, eng, all, selected, roots)
+	}
 	if err != nil {
 		if ctx.Err() != nil {
-			return nil, nil, nil, ctx.Err()
+			return nil, nil, nil, nil, ctx.Err()
 		}
 		fmt.Fprintf(out, "The container engine is not working, so only built-in checks run: %v\n", err)
 		un := deps.NoEngine(selected, err.Error())
@@ -524,7 +551,7 @@ func prepare(ctx context.Context, selected []*manifest.Manifest, roots deps.Root
 			u.Status = report.Failed
 			un[id] = u
 		}
-		return nil, un, nil, nil
+		return nil, un, nil, nil, nil
 	}
 	if c.data {
 		// Asked for explicitly: data is downloaded without a question.
@@ -576,9 +603,9 @@ func prepare(ctx context.Context, selected []*manifest.Manifest, roots deps.Root
 		chosen = deps.Ask(stdin, out, missing)
 	}
 	chosen = append(chosen, auto...)
-	un, err = deps.Install(ctx, eng, eng, all, chosen, roots, notChosen, out)
+	un, notes, err = deps.Install(ctx, eng, eng, all, chosen, roots, notChosen, out)
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, nil, nil, nil, err
 	}
 	fetched = map[string]bool{}
 	for _, d := range chosen {
@@ -595,7 +622,7 @@ func prepare(ctx context.Context, selected []*manifest.Manifest, roots deps.Root
 	if len(skipped) > 0 {
 		fmt.Fprintf(out, "Skipped because a dependency is not installed: %s.\n", strings.Join(skipped, ", "))
 	}
-	return eng, un, fetched, nil
+	return eng, un, fetched, notes, nil
 }
 
 // resolveDir returns the absolute, symlink-free path of an existing directory,
