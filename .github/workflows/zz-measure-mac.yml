@@ -1,8 +1,9 @@
 name: Measure on macOS with Colima (temporary)
 
-# Temporary, removed before merge. The Go module download design (Q1A, Q2B)
-# and SK-8 (Q6 CA and proxy, Q7 mirror and sign-in) on GitHub's Intel macOS
-# runner with Colima (Docker), the setup the M2 record plans for macOS.
+# Temporary, removed before merge. Round 2 on GitHub's Intel macOS runner with
+# Colima (Docker): Q6 (CA file, Keychain, proxy on the Mac's loopback) first,
+# then why round 1's scans were ~30x slower than Linux, and Q2B with a volume.
+# Round 1 (run 45298152251) covered Q7 and go-chi Q1A/Q2B; caddy timed out.
 on:
   pull_request:
     paths:
@@ -38,73 +39,11 @@ jobs:
           if ! docker info > /dev/null 2>&1; then colima delete -f; colima start --vm-type qemu --cpu 3 --memory 8 --disk 60 2>&1 | tail -3; colima status 2>&1 | tail -5; fi
           docker info --format 'server={{.ServerVersion}} cgroup={{.CgroupVersion}} os={{.OperatingSystem}} arch={{.Architecture}} cpus={{.NCPU}}'
           colima list
-      - name: Q7 mirror and sign-in under Colima
-        env:
-          DH_USER: ${{ secrets.DOCKERHUB_USERNAME }}
-          DH_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
-        run: |
-          set -u +e
-          f=~/.colima/default/colima.yaml; grep -n '^docker:' $f
-          colima stop > /dev/null 2>&1
-          perl -0pi -e 's/^docker: \{\}/docker:\n  registry-mirrors: ["https:\/\/mirror.gcr.io"]\n  debug: true/m' $f; grep -n -A2 '^docker:' $f
-          colima start > /dev/null 2>&1; echo "restart exit=$?"
-          docker info --format 'mirrors={{.RegistryConfig.Mirrors}}'
-          docker rmi -f $TRIVY > /dev/null 2>&1
-          docker pull -q $TRIVY; echo "mirror pull exit=$?"
-          colima ssh -- sh -c 'sudo journalctl -u docker --no-pager 2>/dev/null || sudo cat /var/log/docker.log 2>/dev/null' | grep -o 'https://[a-z0-9.-]*/v2/[a-z]*/[a-z]*/[a-z]*' | sort | uniq -c | head
-          docker run --rm --pull never $TRIVY --version | head -1
-          docker rmi -f $ALPINE > /dev/null 2>&1
-          printf '%s' "$DH_TOKEN" | docker login -u "$DH_USER" --password-stdin > /dev/null 2>&1; echo "docker login exit=$?"
-          grep -o '"credsStore": *"[^"]*"' ~/.docker/config.json || echo "no credsStore"
-          docker pull -q $ALPINE; echo "signed-in pull exit=$?"
-          docker logout > /dev/null
-      - name: Q1A + Q2B Go module download and scan
-        run: |
-          set -u +e
-          T=$RUNNER_TEMP; echo "RUNNER_TEMP=$T"
-          docker pull -q "$IMG" > /dev/null; echo "IMAGE: $(docker run --rm --entrypoint go "$IMG" version)"
-          common="--rm --pull never --user $(id -u):$(id -g) --cap-drop ALL --security-opt no-new-privileges --read-only --tmpfs /tmp:rw,nosuid,nodev,noexec,size=256m --tmpfs /dev/shm:rw,nosuid,nodev,noexec,size=64m --pids-limit 256 --cpus 2 --env HOME=/tmp --workdir /tmp --env GOPATH=/tmp/go"
-          echo "uid:gid $(id -u):$(id -g)"
-          for REPO in go-chi/chi@c64ed7d6635f33a8b2feaff7dcfa55677023ac7d caddyserver/caddy@16618f454ca6f78f37dfd85a90573d8ffd43c1c8; do
-            name=${REPO%@*}; sha=${REPO#*@}; R=$T/$(echo $name | tr / _); echo "######## $name"
-            git init -q $R/target && git -C $R/target fetch -q --depth 1 "https://github.com/$name.git" "$sha" && git -C $R/target -c advice.detachedHead=false checkout -q FETCH_HEAD
-            mkdir -p $R/stage $R/gomod $R/gomod-online $R/out; chmod 777 $R/gomod $R/gomod-online $R/out
-            (cd $R/target && find . \( -name .git -o -name vendor \) -prune -o \( -name go.mod -o -name go.sum -o -name go.work -o -name go.work.sum \) -type f -print) | while read f; do mkdir -p "$R/stage/$(dirname "$f")"; cp "$R/target/$f" "$R/stage/$f"; done
-            t0=$(date +%s)
-            for m in $(cd $R/stage && find . -name go.mod -exec dirname {} \; | sort); do
-              docker run $common --memory 2048m --memory-swap 2048m --env GOMODCACHE=/data/gomod --env GOTOOLCHAIN=local --env GOPROXY=https://proxy.golang.org --env GOFLAGS=-mod=mod --env 'GOVCS=*:off' \
-                --mount type=bind,source=$R/stage,target=/data/stage,readonly --mount type=bind,source=$R/gomod,target=/data/gomod \
-                --workdir /data/stage/$m --entrypoint go "$IMG" mod download > $T/dl.log 2>&1
-              echo "DOWNLOAD $m exit=$? $(tail -c 200 $T/dl.log | tr '\n' ' ')"
-            done
-            echo "DOWNLOAD_S $(( $(date +%s)-t0 )) CACHE_MB $(du -sm $R/gomod | cut -f1)"
-            scr() { mkdir -p $R/gc-$1/tmp; chmod -R 777 $R/gc-$1; echo "--mount type=bind,source=$R/gc-$1,target=/data/gocache --env GOCACHE=/data/gocache --env GOTMPDIR=/data/gocache/tmp"; }
-            scan() { local n=$1; shift; local t0=$(date +%s)
-              docker run $common --memory 2048m --memory-swap 2048m "$@" --mount type=bind,source=$R/target,target=/target,readonly --mount type=bind,source=$R/out,target=/out \
-                "$IMG" -concurrency 1 -fmt json -out /out/$n.json -no-fail -track-suppressions /target/... > /dev/null 2> $T/$n.err
-              echo "SCAN $n exit=$? s=$(( $(date +%s)-t0 )) SSA_SKIPS $(grep -c 'Error building the SSA' $T/$n.err) SCRATCH_MB $(du -sm $R/gc-$n 2>/dev/null | cut -f1)"
-              grep -i 'permission denied\|operation not permitted' $T/$n.err | head -2; rm -rf $R/gc-$n; }
-            mod="--mount type=bind,source=$R/gomod,target=/data/gomod,readonly --env GOMODCACHE=/data/gomod --env GOPROXY=off"
-            scan offline --network none
-            scan A --network none $mod
-            scan Adisk --network none $mod $(scr Adisk)
-            scan online $(scr online) --mount type=bind,source=$R/gomod-online,target=/data/gomod --env GOMODCACHE=/data/gomod
-            python3 - "$R/out" <<'PY'
-          import json, sys
-          o = sys.argv[1]
-          def load(n):
-              d = json.load(open(f"{o}/{n}.json"))
-              return {(i["rule_id"], i["file"], i["line"]) for i in d.get("Issues") or []}, len(d.get("Golang errors") or {})
-          on = load("online")
-          for n in ["online", "offline", "A", "Adisk"]:
-              s, e = load(n)
-              print(f"RESULT {n}: {len(s)} found, {len(on[0]-s)} missed, {len(s-on[0])} extra, {e} pkg errs")
-          PY
-          done
       - name: Q6 CA file, Keychain, and a proxy on the Mac's loopback
         run: |
           set -u +e
           T=$RUNNER_TEMP
+          docker pull -q $IMG > /dev/null; docker pull -q $ALPINE > /dev/null
           openssl req -x509 -newkey rsa:2048 -nodes -keyout $T/k.pem -out $T/ca.pem -days 1 -subj /CN=siegekit-throwaway-ca 2>/dev/null; chmod 644 $T/ca.pem
           base="--rm --pull never --user $(id -u):$(id -g) --cap-drop ALL --security-opt no-new-privileges --read-only --tmpfs /tmp:rw,nosuid,nodev,noexec,size=1024m --memory 2048m --memory-swap 2048m --cpus 2 --pids-limit 256 --env HOME=/tmp"
           CA="--mount type=bind,source=$T/ca.pem,target=/etc/siegekit-ca.pem,readonly --env SSL_CERT_FILE=/etc/siegekit-ca.pem"
@@ -118,7 +57,73 @@ jobs:
           echo "in System.keychain export: $(security find-certificate -a -c siegekit-throwaway-ca -p /Library/Keychains/System.keychain | grep -c BEGIN)"
           for f in /etc/ssl/cert.pem /usr/local/etc/openssl@3/cert.pem /usr/local/etc/ca-certificates/cert.pem; do [ -f $f ] && echo "in $f: $(openssl crl2pkcs7 -nocrl -certfile $f 2>/dev/null | openssl pkcs7 -print_certs -noout 2>/dev/null | grep -c siegekit-throwaway-ca)"; done
           echo "--- proxy on the Mac's 127.0.0.1"
-          go build -o $T/cp ./.github/zz-connect-proxy && ($T/cp 127.0.0.1:3128 > $T/cp.log 2>&1 &) ; sleep 2
+          mkdir -p $T/cpsrc && printf 'module cp\n\ngo 1.24\n' > $T/cpsrc/go.mod
+          cat > $T/cpsrc/main.go <<'GO'
+          // Minimal HTTP CONNECT proxy for a measurement: forwards CONNECT host:443 and logs each target.
+          package main
+
+          import (
+          	"io"
+          	"log"
+          	"net"
+          	"net/http"
+          	"os"
+          	"time"
+          )
+
+          func main() {
+          	log.Fatal(http.ListenAndServe(os.Args[1], http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+          		if r.Method != http.MethodConnect {
+          			http.Error(w, "CONNECT only", http.StatusMethodNotAllowed)
+          			return
+          		}
+          		log.Printf("CONNECT %s", r.Host)
+          		up, err := net.DialTimeout("tcp", r.Host, 10*time.Second)
+          		if err != nil {
+          			http.Error(w, err.Error(), http.StatusBadGateway)
+          			return
+          		}
+          		hj, _ := w.(http.Hijacker)
+          		c, _, _ := hj.Hijack()
+          		c.Write([]byte("HTTP/1.1 200 OK\r\n\r\n"))
+          		go func() { io.Copy(up, c); up.Close() }()
+          		io.Copy(c, up)
+          		c.Close()
+          	})))
+          }
+          GO
+          (cd $T/cpsrc && go build -o $T/cp .) && ($T/cp 127.0.0.1:3128 > $T/cp.log 2>&1 &) ; sleep 2
           curl -sS -o /dev/null -w "host curl via proxy: %{http_code}\n" -x http://127.0.0.1:3128 https://proxy.golang.org/
           for h in 127.0.0.1 host.lima.internal host.docker.internal 192.168.5.2; do echo "container HTTPS_PROXY=http://$h:3128: $(gm --env HTTPS_PROXY=http://$h:3128)"; done
           echo "proxy log: $(awk '{print $NF}' $T/cp.log | sort | uniq -c | tr '\n' ' ')"
+      - name: Why it is slow, and Q2B with a volume (go-chi)
+        run: |
+          set -u +e
+          T=$RUNNER_TEMP; R=$T/chi
+          docker pull -q "$IMG" > /dev/null
+          git init -q $R && git -C $R fetch -q --depth 1 https://github.com/go-chi/chi.git c64ed7d6635f33a8b2feaff7dcfa55677023ac7d && git -C $R -c advice.detachedHead=false checkout -q FETCH_HEAD
+          # Same work (go list -export of go-chi, offline, empty build cache) in four places.
+          t0=$(date +%s); (cd $R && GOCACHE=$(mktemp -d) GOFLAGS=-mod=mod GOPROXY=off go list -e -export ./... > /dev/null 2>&1); echo "TIME host (macOS, Go 1.27.4): $(( $(date +%s)-t0 )) s"
+          common="--rm --pull never --user $(id -u):$(id -g) --network none --read-only --tmpfs /tmp:rw,size=1024m --cpus 2 --memory 2048m --env HOME=/tmp --env GOPATH=/tmp/go --env GOPROXY=off --env GOTOOLCHAIN=local --mount type=bind,source=$R,target=/target,readonly --workdir /target --entrypoint go"
+          t0=$(date +%s); docker run $common $IMG list -e -export ./... > /dev/null 2>&1; echo "TIME container, cache in VM memory (tmpfs): $(( $(date +%s)-t0 )) s"
+          mkdir -p $T/gc/tmp; chmod -R 777 $T/gc
+          t0=$(date +%s); docker run $common --mount type=bind,source=$T/gc,target=/data/gocache --env GOCACHE=/data/gocache --env GOTMPDIR=/data/gocache/tmp $IMG list -e -export ./... > /dev/null 2>&1; echo "TIME container, cache in a Mac folder (virtiofs): $(( $(date +%s)-t0 )) s"
+          docker volume create zzgc > /dev/null
+          t0=$(date +%s); docker run $common --mount type=volume,source=zzgc,target=/data/gocache --env GOCACHE=/data/gocache --env GOTMPDIR=/data/gocache $IMG list -e -export ./... > /dev/null 2>&1; echo "TIME container, cache in a volume (VM disk): $(( $(date +%s)-t0 )) s exit=$?"
+          docker volume rm zzgc > /dev/null
+          cp -R $R $T/chi-copy; docker volume create zzsrc > /dev/null; docker run --rm -v zzsrc:/s -v $T/chi-copy:/c:ro --entrypoint sh $ALPINE -c 'cp -R /c/. /s/ && chown -R 501:20 /s' 
+          t0=$(date +%s); docker run --rm --pull never --user $(id -u):$(id -g) --network none --read-only --tmpfs /tmp:rw,size=1024m --cpus 2 --memory 2048m --env HOME=/tmp --env GOPATH=/tmp/go --env GOPROXY=off --env GOTOOLCHAIN=local --mount type=volume,source=zzsrc,target=/target,readonly --workdir /target --entrypoint go $IMG list -e -export ./... > /dev/null 2>&1; echo "TIME container, source and cache in the VM (no virtiofs): $(( $(date +%s)-t0 )) s"
+          docker volume rm zzsrc > /dev/null
+          t0=$(date +%s); docker run --rm $ALPINE sh -c 'i=0; while [ $i -lt 3000000 ]; do i=$((i+1)); done'; echo "TIME CPU loop in a container: $(( $(date +%s)-t0 )) s"
+          t0=$(date +%s); sh -c 'i=0; while [ $i -lt 3000000 ]; do i=$((i+1)); done'; echo "TIME CPU loop on the Mac: $(( $(date +%s)-t0 )) s"
+          echo "VM: $(colima ssh -- sh -c 'nproc; grep -m1 "model name" /proc/cpuinfo; grep -c -w -E "vmx|svm" /proc/cpuinfo' | tr '\n' ' ')"
+          # Q2B with a per-scan volume instead of a Mac folder: gosec scan of go-chi with its modules.
+          S=$T/chi-stage; mkdir -p $S $T/gomod; chmod 777 $T/gomod
+          (cd $R && find . \( -name .git -o -name vendor \) -prune -o \( -name go.mod -o -name go.sum \) -type f -print) | while read f; do mkdir -p "$S/$(dirname "$f")"; cp "$R/$f" "$S/$f"; done
+          base="--rm --pull never --user $(id -u):$(id -g) --cap-drop ALL --security-opt no-new-privileges --read-only --tmpfs /tmp:rw,nosuid,nodev,noexec,size=256m --pids-limit 256 --cpus 2 --memory 2048m --memory-swap 2048m --env HOME=/tmp --workdir /tmp --env GOPATH=/tmp/go"
+          for m in $(cd $S && find . -name go.mod -exec dirname {} \; | sort); do docker run $base --env GOMODCACHE=/data/gomod --env GOTOOLCHAIN=local --env GOPROXY=https://proxy.golang.org --env GOFLAGS=-mod=mod --env 'GOVCS=*:off' --mount type=bind,source=$S,target=/data/stage,readonly --mount type=bind,source=$T/gomod,target=/data/gomod --workdir /data/stage/$m --entrypoint go "$IMG" mod download > /dev/null 2>&1; echo "DOWNLOAD $m exit=$?"; done
+          mkdir -p $T/out; chmod 777 $T/out
+          docker volume create zzscr > /dev/null; docker run --rm -v zzscr:/s --entrypoint sh $ALPINE -c 'mkdir -p /s/tmp && chown -R 501:20 /s'
+          t0=$(date +%s); docker run $base --network none --mount type=bind,source=$T/gomod,target=/data/gomod,readonly --env GOMODCACHE=/data/gomod --env GOPROXY=off --mount type=volume,source=zzscr,target=/data/gocache --env GOCACHE=/data/gocache --env GOTMPDIR=/data/gocache/tmp --mount type=bind,source=$R,target=/target,readonly --mount type=bind,source=$T/out,target=/out "$IMG" -concurrency 1 -fmt json -out /out/vol.json -no-fail /target/... > /dev/null 2> $T/vol.err
+          echo "SCAN Avolume exit=$? s=$(( $(date +%s)-t0 )) SSA_SKIPS $(grep -c 'Error building the SSA' $T/vol.err) found=$(python3 -c "import json;d=json.load(open('$T/out/vol.json'));print(len({(i['rule_id'],i['file'],i['line']) for i in d['Issues'] or []}), 'pkgerrs', len(d.get('Golang errors') or {}))")"
+          docker volume rm zzscr > /dev/null
