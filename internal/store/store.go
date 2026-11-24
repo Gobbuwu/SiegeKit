@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 
@@ -136,18 +137,18 @@ func (s *Store) Latest(target string) (string, *report.Run, error) {
 }
 
 // Comparison compares cur with the saved run prev, whose ID is id.
-// Findings that prev itself could not check again are still open, so they
-// stay in the baseline: a later run reports them as fixed or still present,
-// never as new.
+// Findings that prev itself did not check again, or left out, are still
+// open, so they stay in the baseline: a later run reports them as fixed or
+// still present, never as new.
 func Comparison(id string, prev, cur *report.Run) *report.Comparison {
 	base := *prev
-	if prev.Comparison != nil && len(prev.Comparison.NotRechecked) > 0 {
-		base.Findings = append(append([]findings.Finding(nil), prev.Findings...), prev.Comparison.NotRechecked...)
+	if c := prev.Comparison; c != nil && len(c.NotRechecked)+len(c.NotRun) > 0 {
+		base.Findings = slices.Concat(prev.Findings, c.NotRechecked, c.NotRun)
 	}
 	d := Compare(&base, cur)
 	c := &report.Comparison{
 		PreviousRun: id, PreviousStarted: prev.Started, PreviousVersion: prev.SiegeKitVersion,
-		New: []string{}, Fixed: d.Fixed, NotRechecked: []findings.Finding{},
+		New: []string{}, Fixed: d.Fixed, NotRechecked: []findings.Finding{}, NotRun: []findings.Finding{},
 	}
 	if c.Fixed == nil {
 		c.Fixed = []findings.Finding{}
@@ -159,11 +160,20 @@ func Comparison(id string, prev, cur *report.Run) *report.Comparison {
 	for _, f := range cur.Findings {
 		inCur[f.Fingerprint] = true
 	}
+	// A check that is not in cur at all was left out by --only or --skip;
+	// one skipped for its profile was left out by --profile.
+	leftOut := map[string]bool{}
+	for _, p := range cur.Plugins {
+		leftOut[p.ID] = p.Status == report.Skipped && p.Cause == report.CauseProfile
+	}
 	for _, f := range d.Still {
-		if inCur[f.Fingerprint] {
+		switch {
+		case inCur[f.Fingerprint]:
 			c.StillPresent++
-		} else {
+		case slices.ContainsFunc(f.Sources, func(s findings.Source) bool { out, listed := leftOut[s.Plugin]; return listed && !out }):
 			c.NotRechecked = append(c.NotRechecked, f)
+		default:
+			c.NotRun = append(c.NotRun, f)
 		}
 	}
 	return c

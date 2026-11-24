@@ -7,6 +7,8 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+
+	"github.com/Gobbuwu/SiegeKit/internal/testpath"
 )
 
 // Source is what a URL scan reads from the app's repository given with
@@ -39,8 +41,13 @@ func ReadSource(ctx context.Context, root string) (Source, error) {
 	paths, fbFolders := map[string]bool{}, map[string]bool{}
 	err := walk(ctx, root, func(rel string) bool {
 		base := path.Base(rel)
-		return base == "database.rules.json" || reSpecName.MatchString(base) || strings.HasSuffix(base, ".rules") ||
-			strings.HasSuffix(base, ".sql") && isSupabasePath(rel)
+		if reSpecName.MatchString(base) {
+			return true // a spec in a test folder is still a spec candidate; the shortest path wins
+		}
+		// Rules and migrations in test folders are never deployed
+		// (testpath, ADR 0064 item 1), as in backend-rules.
+		return !testpath.IsTest(rel) && (base == "database.rules.json" || strings.HasSuffix(base, ".rules") ||
+			strings.HasSuffix(base, ".sql") && isSupabasePath(rel))
 	}, func(rel string, data []byte) error {
 		switch base := path.Base(rel); {
 		case base == "database.rules.json":
