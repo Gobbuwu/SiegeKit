@@ -85,9 +85,10 @@ Measured on real apps larger than caddy (SiegeKit as built with `--yes`, against
 
 | App | What it uses | Result |
 |---|---|---|
-| containerd (ce1877a) | `vendor/`, 1,459 Go files | 681 unique findings, equal to the reference: 0 missed, 0 extra (Docker run 45340299829; Podman run 45347080293, amd64 and arm64). Scratch about 0.8 GB |
-| consul (9736026) | 16 modules, 31 replaces to folders in the repository, 2,477 Go files | 755, equal to the reference, 0 missed, 0 extra (Podman run 45347080293, amd64 and arm64). About 600 s; scratch peak about 3.0 GB; module cache 1.7 GB |
+| containerd (ce1877a) | `vendor/`, 1,459 Go files | 681 unique findings, equal to the reference: 0 missed, 0 extra, on both engines, amd64 and arm64 (Docker run 45340299829, Podman run 45347080293). Scratch about 0.8 GB |
+| consul (9736026) | 16 modules, 31 replaces to folders in the repository, 2,477 Go files | 755, equal to the reference, 0 missed, 0 extra, on both engines, amd64 and arm64 (same runs). 570 to 810 s; scratch peak 2.8 to 3.4 GB; module cache 1.7 GB |
 | grafana v13.3.1 (5db6ba8) | `go.work`, 51 modules, 7,057 Go files | Times out at gosec's 900 s on both engines and both arches. The reference needs 1,975 s (amd64) and 1,549 s (arm64) and finds 798 (Docker run 45340299829); scratch 7.4 GB, module cache 3.9 to 6.5 GB |
+| The design's other 4 repositories (gotify, shiori, pocketbase, whoami) | | 56, 285, 319 and 8, equal to the reference, 0 missed, 0 extra in 16 of 16 jobs (both engines, amd64 and arm64, run 45354545612). gotify's `main` and `router`, which skip SSA rules silently because they import the broken `ui`, are now named |
 
 ## Alternatives considered
 
