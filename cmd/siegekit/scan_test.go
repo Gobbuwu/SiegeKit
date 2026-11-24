@@ -177,7 +177,7 @@ func TestScanErrors(t *testing.T) {
 		{"yes and no-install", []string{"--yes", "--no-install", dir}, nil, nil, exitUsage, "cannot be used together"},
 		{"no engine", []string{"--no-save", "--report-dir", filepath.Join(dir, "r0"), dir}, nil, errors.New("no container engine found"), exitOK, "SiegeKit does not install one"},
 		{"incomplete", []string{"--no-save", "--report-dir", filepath.Join(dir, "r"), dir}, fakeExec(func(sandbox.Spec) (*sandbox.Result, error) {
-			return &sandbox.Result{Status: sandbox.TimedOut}, nil
+			return &sandbox.Result{Status: sandbox.TimedOut, Stop: sandbox.StopTimeLimit, StopReason: "stopped after 30 seconds, its time limit"}, nil
 		}), nil, 4, "incomplete"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

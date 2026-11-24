@@ -35,6 +35,7 @@ Useful scan flags:
 - `--no-install`: install nothing.
 - `--yes`: install missing dependencies without asking, only after the person agrees.
 - `--require-all`: treat checks skipped for a missing or declined dependency (`cause` `missing-dependency` or `declined`) as an incomplete run. Checks left out by the mode, the profile, a missing input or the target's files do not count.
+- `--require-complete`: treat files or items a check could not read (its `gaps`) as an incomplete run. Without it, gaps are named in `report.json` and the summary but do not change the exit code. A check cut short (`stop`) always makes the run incomplete.
 - `--login-url URL`, `--login-user NAME`, `--login-body TEMPLATE`: a login for the login throttling check, all three together. Use only a test account the person gave you for this; the check can lock it.
 - `--login-attempts N`: how many wrong-password logins it sends, from 2 to 50 (default 20).
 
@@ -68,7 +69,7 @@ Every request from the tools goes through SiegeKit's egress proxy, which allows 
 |---|---|
 | 0 | No findings at or above `--fail-on` |
 | 3 | Findings at or above `--fail-on` |
-| 4 | Incomplete: a check failed or timed out, or did only part of its work, such as gosec skipping Go packages whose modules are not in the repository (their findings are kept; the check's `reason` names what was left out). With `--require-all`, also a check skipped for a missing dependency |
+| 4 | Incomplete: a check failed or timed out, was cut short (`stop`, such as a memory kill), or did only part of its work, such as gosec skipping Go packages whose modules are not in the repository (their findings are kept; the check's `reason` names what was left out). With `--require-all`, also a check skipped for a missing dependency; with `--require-complete`, also a check that named `gaps` |
 | 1 | Error, or the target was refused |
 | 2 | Usage error |
 
@@ -103,6 +104,12 @@ Top level:
   - `refusedTo`: what was blocked, such as `CONNECT other.example:443` or `POST app.example (only GET and HEAD)`, each once, at most 20.
   - `input`: what the check tested from besides the target, such as `OpenAPI spec http://localhost:3000/openapi.json` for `schemathesis`, `POST http://localhost:3000/rest/user/login as "test@example.com"` for `login-throttle`, or `the start page http://localhost:3000/ and the files it links` for `served-secrets`. Directory scans set it too for `gitleaks` and `gitleaks-history`: which rules they used, such as `the rules in the repository's .gitleaks.toml and SiegeKit's rules siegekit-supabase-secret-key, siegekit-supabase-publishable-key` (ADR 0063). Absent for other checks.
   - `result`: what a check saw when that is not a finding, such as `limited after 6 of 20 attempts: answered 429` for `login-throttle`, or `scanned 9 file(s): 1 page, 7 scripts, 1 style` for `served-secrets`. Absent for other checks.
+
+  Every check says whether it did all its work (ADR 0067):
+  - `stop`: why the check was cut short, as a fixed word; its `status` is then `failed` (`timed-out` for `time-limit`) and the findings it reported before the stop are kept. `time-limit`: it reached its time limit. `memory-kill`: the kernel killed a process of the tool for memory. `process-limit`: the kernel refused to start a process at the limit. `killed`: the container was killed (exit 137) before SiegeKit could read why; usually memory. `output-limit`: the tool wrote more than its output limit. `counters-unread`: SiegeKit could not read the kernel's counters, so it cannot rule out a stop. `target-stopped`: SiegeKit's proxy stopped the run after the target kept failing. `file-limit`: the target has more files than the check reads (200,000). Never rerun with a smaller target or skip the check to hide a stop; tell the person what stopped it.
+  - `gaps`: what a check that ran could not read, each with `cause` (`too-large`: a file over the size the check reads; `too-deep`: a folder deeper than it descends; `not-parsed`: the tool could not parse it; `over-limit`: more items than the check takes; `no-answer`: a request for it got no usable answer), `path` and sometimes `detail`. At most 200 are listed; `gapCount` counts them all. They do not change the exit code unless `--require-complete` is given.
+  - `completeness`, on every check that ran: `complete` when the check compared what it was given with what it checked and nothing was left out, `gaps` when it named gaps, `not-proven` when its tool gives no count of what it read. Do not tell the person a `not-proven` check covered everything.
+  - `usage`: what the check's container used, as SiegeKit's waiter measured it inside the container: `memoryPeak` (program memory in bytes, sampled every 0.2 s, file cache left out) against `memoryLimit`, and `processPeak` (processes and threads) against `processLimit`. Absent for SiegeKit's own checks, which run without a container.
 - `findings`: the deduplicated findings, most severe first.
 - `comparison`: present when a saved run of the same `target` exists (runs are saved unless `--no-save` is given). It compares this run with the most recent one:
   - `previousRun`, `previousStarted`, `previousVersion`: that run's ID, start time and SiegeKit version. If the version differs, some changes may come from the upgrade.

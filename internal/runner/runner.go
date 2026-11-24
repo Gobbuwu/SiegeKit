@@ -411,19 +411,25 @@ func runPlugin(ctx context.Context, ex Executor, m *manifest.Manifest, opt Optio
 			}
 		}()
 	}
-	res, err := ex.Run(ctx, sandbox.Spec{
+	spec := sandbox.Spec{
 		Image: image, Args: args, Env: env, TargetDir: opt.TargetDir, OutDir: out, Network: m.Network,
 		DataDir: dataDir, DataMount: dataMount, Files: fileMounts, ConfigFile: configFile, ScratchDir: scratch,
 		CPUs: cpus, MemoryMiB: m.Resources.MemoryMiB,
 		Timeout:    time.Duration(m.Resources.TimeoutSeconds) * time.Second,
 		StdoutFile: stdoutFile(m),
 		StderrFile: stderrFile(m),
-	})
+	}
+	res, err := ex.Run(ctx, spec)
+	if err == nil {
+		pr.Usage = usage(res, spec)
+	}
 	switch {
 	case err != nil:
 		return fail(report.Failed, "%v", err)
-	case res.Status == sandbox.TimedOut:
-		return fail(report.TimedOut, "stopped after %d seconds", m.Resources.TimeoutSeconds)
+	case res.Stop != "":
+		return stopped(pr, res.Status, report.Stop(res.Stop), res.StopReason, func() ([]findings.Finding, error) {
+			return readReport(filepath.Join(out, m.Output.File), m, nil, reportContext{})
+		})
 	case res.Status == sandbox.Failed:
 		return fail(report.Failed, "%s", lastLine(res.Stderr))
 	case res.ExitCode != 0 && !slices.Contains(m.Run.FindingsExitCodes, res.ExitCode):
@@ -450,10 +456,15 @@ func runPlugin(ctx context.Context, ex Executor, m *manifest.Manifest, opt Optio
 		// What the tool did not do (ADR 0040): its findings are kept, but
 		// the run is incomplete (exit code 4), as for unreadable files.
 		missed, err := notDone(filepath.Join(out, o.File), filepath.Join(out, o.StderrFile), o.Parser, opt.TargetDir)
-		if err != nil {
+		switch {
+		case err != nil:
 			pr.Status, pr.Reason = report.Failed, err.Error()
-		} else if missed != "" {
+		case missed != "":
 			pr.Status, pr.Reason = report.Failed, missed
+		default:
+			// The tool's own list of what it could not do was read and is
+			// empty (ADR 0040).
+			pr.Completeness = report.Complete
 		}
 		if note := opt.Notes[m.ID]; note != "" && pr.Status == report.Failed {
 			pr.Reason += " " + note
@@ -463,6 +474,40 @@ func runPlugin(ctx context.Context, ex Executor, m *manifest.Manifest, opt Optio
 		}
 	}
 	return pr, fs
+}
+
+// stopped reports a run cut short (ADR 0067): failed, or timed out, with
+// its typed stop, keeping the findings the tool wrote before the stop.
+func stopped(pr report.PluginResult, status sandbox.Status, stop report.Stop, reason string, read func() ([]findings.Finding, error)) (report.PluginResult, []findings.Finding) {
+	pr.Status, pr.Stop, pr.Reason = report.Failed, stop, reason
+	if status == sandbox.TimedOut {
+		pr.Status = report.TimedOut
+	}
+	fs, err := read()
+	if err != nil {
+		pr.Reason += "; no findings kept: " + err.Error()
+		return pr, nil
+	}
+	for i := range fs {
+		fs[i].RedactCredentials()
+	}
+	pr.Findings = len(fs)
+	if len(fs) > 0 {
+		pr.Reason += fmt.Sprintf("; the %d finding(s) reported before the stop are kept", len(fs))
+	}
+	return pr, fs
+}
+
+// usage is what a run's container used against its limits, or nil when
+// the waiter wrote no counters.
+func usage(res *sandbox.Result, s sandbox.Spec) *report.Usage {
+	if res.Usage == nil {
+		return nil
+	}
+	return &report.Usage{
+		MemoryPeak: res.Usage.MemoryPeak, MemoryLimit: int64(s.MemoryMiB) << 20,
+		ProcessPeak: res.Usage.ProcessesPeak, ProcessLimit: int64(s.ProcessLimit()),
+	}
 }
 
 // stderrFile is the file that also receives m's standard error, if any.
