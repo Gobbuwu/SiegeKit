@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"net/url"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -285,7 +286,7 @@ func Check(ctx context.Context, cfg egress.Config, e *Endpoint, n int) (Result, 
 			// Kratos: 400 "The request was submitted too often" after 5
 			// wrong codes), as login-throttle reads them.
 			if w := NewWord(LimitWords(a.Body), baseWords); w != "" {
-				r.Limited, r.Signal, r.Window = true, fmt.Sprintf("the answer says %q", w), Window(a.Header, now())
+				r.Limited, r.Signal, r.Window = true, "the answer has "+Said(w), Window(a.Header, now())
 				return r, nil
 			}
 		}
@@ -328,6 +329,24 @@ func LimitWords(body []byte) []string {
 		}
 	}
 	return out
+}
+
+// Said names limit words for a message: `the limit word "too often"`, or
+// `the limit words "too many" and "try again later"`. They are the words of
+// SiegeKit's list that the answer holds, lowercased and sometimes a word's
+// start ("throttl"), not the answer's own text.
+func Said(words ...string) string {
+	q := make([]string, len(words))
+	for i, w := range words {
+		q[i] = strconv.Quote(w)
+	}
+	switch len(q) {
+	case 0:
+		return "no limit word"
+	case 1:
+		return "the limit word " + q[0]
+	}
+	return "the limit words " + strings.Join(q[:len(q)-1], ", ") + " and " + q[len(q)-1]
 }
 
 // NewWord returns a word of now that base does not hold, or "".

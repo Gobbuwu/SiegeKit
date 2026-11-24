@@ -378,3 +378,22 @@ func FuzzParse(f *testing.F) {
 		}
 	})
 }
+
+// TestSaid: limit words are named as SiegeKit's words, never quoted as one
+// run of the page's text (Porchlet's H1 run printed "too many,try again
+// later" for a page saying "Too many attempts, try again later.").
+func TestSaid(t *testing.T) {
+	for _, c := range []struct {
+		words []string
+		want  string
+	}{
+		{nil, "no limit word"},
+		{[]string{"throttl"}, `the limit word "throttl"`},
+		{[]string{"too many", "try again later"}, `the limit words "too many" and "try again later"`},
+		{[]string{"captcha", "locked", "too often"}, `the limit words "captcha", "locked" and "too often"`},
+	} {
+		if got := Said(c.words...); got != c.want {
+			t.Errorf("%q: %s, want %s", c.words, got, c.want)
+		}
+	}
+}

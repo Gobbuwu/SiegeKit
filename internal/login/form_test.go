@@ -407,7 +407,7 @@ func TestFormPageChanges(t *testing.T) {
 				return 200, `<p>Please solve the CAPTCHA</p><form><input name=email><input name=password type=password><button name="$ACTION_ID_abc123" formAction="" formEncType="multipart/form-data" formMethod="POST">Log in</button></form>`
 			}
 			return 0, ""
-		}, "", `the login page says "captcha"`, true},
+		}, "", `the login page has the limit word "captcha"`, true},
 		{"form gone", func(n int) (int, string) {
 			if n > 3 {
 				return 200, "<p>Maintenance</p>"
@@ -474,7 +474,7 @@ func (a *flashApp) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		msg := ""
 		if c, err := r.Cookie("flash"); err == nil {
 			a.follow++
-			msg = map[string]string{"bad": "Try another email address or password.", "limit": "Try again later."}[c.Value]
+			msg = map[string]string{"bad": "Try another email address or password.", "limit": "Too many attempts, try again later."}[c.Value]
 			http.SetCookie(w, &http.Cookie{Name: "flash", Path: "/", MaxAge: -1})
 		}
 		http.SetCookie(w, &http.Cookie{Name: "_app_session", Value: "s1", Path: "/"})
@@ -520,17 +520,17 @@ func TestFormFlashLimit(t *testing.T) {
 	}
 	a.posts, a.follow, a.limit = 0, 0, 4
 	r, err = Check(context.Background(), cfg, l, 8, right)
-	if err != nil || !r.Limited || r.Attempts != 4 || r.Signal != `the page it redirected to says "try again later"` || Findings(l, r, 8) != nil {
+	if err != nil || !r.Limited || r.Attempts != 4 || r.Signal != `the page it redirected to has the limit word "too many"` || Findings(l, r, 8) != nil {
 		t.Fatalf("limit: %+v %v", r, err)
 	}
 	sr, err := Spray(context.Background(), cfg, l, 8, r)
-	if err != nil || !sr.Limited || sr.Attempts != 1 || !strings.Contains(sr.Signal, "the answer that showed login-throttle's limit") {
+	if err != nil || !sr.Limited || sr.Attempts != 1 || !strings.Contains(sr.Signal, `the answer that showed login-throttle's limit (answered 302 to `+tu.Origin()+`/session/new setting the cookies flash, and the page it redirected to has the limit words "too many" and "try again later"), so the limit holds`) {
 		t.Fatalf("spray: %+v %v", sr, err)
 	}
 	// A limit that holds before the run, seen only after the redirect.
 	a.limit = 1 // every login from now on is limited, the right one too
 	r, err = Check(context.Background(), cfg, l, 8, right)
-	if err != nil || !r.Limited || r.Attempts != 1 || !strings.Contains(r.Signal, `redirected to says "try again later", already at the first login`) {
+	if err != nil || !r.Limited || r.Attempts != 1 || !strings.Contains(r.Signal, `redirected to has the limit word "too many", already at the first login`) {
 		t.Fatalf("already limited: %+v %v", r, err)
 	}
 }

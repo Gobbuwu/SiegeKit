@@ -336,7 +336,7 @@ func TestCheckPage(t *testing.T) {
 		return a
 	})
 	r, err = Check(context.Background(), ccfg, c, 20)
-	if err != nil || !r.Limited || r.Requests != 6 || r.Signal != `the answer says "too often"` || len(Findings(c, r, 20)) != 0 {
+	if err != nil || !r.Limited || r.Requests != 6 || r.Signal != `the answer has the limit word "too often"` || len(Findings(c, r, 20)) != 0 {
 		t.Errorf("words: %+v %v", r, err)
 	}
 	// A header's limit number is kept.

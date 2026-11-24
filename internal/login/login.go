@@ -517,7 +517,7 @@ func run(ctx context.Context, cfg egress.Config, l *Login, attempts int, right s
 			case p.Status != http.StatusOK:
 				r.Limited, r.Signal = true, fmt.Sprintf("the login page answered %d instead of 200", p.Status)
 			case ratelimit.NewWord(at.words, pageWords) != "":
-				r.Limited, r.Signal = true, fmt.Sprintf("the login page says %q", ratelimit.NewWord(at.words, pageWords))
+				r.Limited, r.Signal = true, "the login page has "+ratelimit.Said(ratelimit.NewWord(at.words, pageWords))
 			case at.formErr != nil:
 				return r, fmt.Errorf("after %d login(s) the login page's form could not be sent: %v", k, at.formErr)
 			}
@@ -558,8 +558,8 @@ func run(ctx context.Context, cfg egress.Config, l *Login, attempts int, right s
 			r.normal = kindOf(at)
 			if limited != nil && *r.normal == *limited && (normal == nil || *normal != *limited) {
 				said := ""
-				if w := r.normal.next; w != "" {
-					said = fmt.Sprintf(", and the page it redirected to says %q", w)
+				if len(at.nextWords) > 0 {
+					said = ", and the page it redirected to has " + ratelimit.Said(at.nextWords...)
 				}
 				r.Limited, r.Signal = true, fmt.Sprintf("the first login got the answer that showed login-throttle's limit (%s%s), so the limit holds for other names too", shapeOf(a), said)
 				r.limit = r.normal
@@ -569,7 +569,7 @@ func run(ctx context.Context, cfg egress.Config, l *Login, attempts int, right s
 			// login page does not: a limit already holding (perhaps from an
 			// earlier run), or a warning, either way no report of no limit.
 			if w := ratelimit.NewWord(at.nextWords, pageWords); at.next != nil && w != "" {
-				r.Limited, r.Signal = true, fmt.Sprintf("the page the first wrong login redirected to says %q, already at the first login (perhaps from an earlier run)", w)
+				r.Limited, r.Signal = true, "the page the first wrong login redirected to has "+ratelimit.Said(w)+", already at the first login (perhaps from an earlier run)"
 				r.limit = r.normal
 				return r, nil
 			}
@@ -587,9 +587,9 @@ func run(ctx context.Context, cfg egress.Config, l *Login, attempts int, right s
 		case redirect(a) != r.Redirect:
 			r.Limited, r.Signal = true, fmt.Sprintf("redirected to %s instead of %s", orNone(redirect(a)), orNone(r.Redirect))
 		case ratelimit.NewWord(ratelimit.LimitWords(a.Body), baseWords) != "":
-			r.Limited, r.Signal = true, fmt.Sprintf("the answer says %q", ratelimit.NewWord(ratelimit.LimitWords(a.Body), baseWords))
+			r.Limited, r.Signal = true, "the answer has "+ratelimit.Said(ratelimit.NewWord(ratelimit.LimitWords(a.Body), baseWords))
 		case ratelimit.NewWord(at.nextWords, nextWords) != "":
-			r.Limited, r.Signal = true, fmt.Sprintf("the page it redirected to says %q", ratelimit.NewWord(at.nextWords, nextWords))
+			r.Limited, r.Signal = true, "the page it redirected to has "+ratelimit.Said(ratelimit.NewWord(at.nextWords, nextWords))
 		case a.Took >= 3*base.Took && a.Took >= time.Second:
 			r.Limited, r.Signal = true, fmt.Sprintf("answered in %s instead of %s", a.Took.Round(time.Millisecond), base.Took.Round(time.Millisecond))
 		}

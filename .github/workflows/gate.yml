@@ -294,7 +294,7 @@ jobs:
         # Juice Shop does not limit failed logins (20 logins for
         # jim@juice-sh.op all answered 401, measured 2026-11-20), so
         # login-throttle must send 21 logins, the first with jim's password
-        # from Juice Shop's own seed data (data/static/users.yml: ncc-1701;
+        # from Juice Shop's own seed data (data/static/users.yml;
         # answered 200, measured 2026-11-23; ADR 0062), and report
         # login-not-limited (ADR 0030). served-secrets must fetch the start page and the 8 files
         # it links (9 requests, measured 2026-11-20; ADR 0032), plus a
