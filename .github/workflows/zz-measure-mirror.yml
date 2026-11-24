@@ -43,7 +43,7 @@ jobs:
         run: printf '%s' "$P" | docker login -u "$U" --password-stdin > /dev/null
       - name: Measure
         run: |
-          set -u
+          set -u +e +o pipefail
           T=$RUNNER_TEMP
           echo "ARCH $(uname -m) $(podman --version) rootless=$(podman info --format '{{.Host.Security.Rootless}}')"
           command -v skopeo > /dev/null || { sudo apt-get update -q > /dev/null && sudo apt-get install -y -q skopeo > /dev/null; }
@@ -53,7 +53,7 @@ jobs:
           sleep 3
           skopeo copy --all --preserve-digests "docker://$IMG" docker://localhost:5000/securego/gosec:mirror --dest-tls-verify=false > /dev/null
           echo "MIRROR_DIGEST $(skopeo inspect --raw --tls-verify=false docker://localhost:5000/securego/gosec:mirror | sha256sum | cut -c1-64)"
-          podman images --digests --format '{{.Repository}} {{.Digest}}' | grep gosec | sed 's/^/BEFORE /'
+          podman images --digests --format "{{.Repository}} {{.Digest}}" 2>&1 | grep -i "gosec\|error" | sed 's/^/BEFORE /'
           # Block ghcr.io and its blob host.
           printf '0.0.0.0 ghcr.io\n0.0.0.0 pkg-containers.githubusercontent.com\n' | sudo tee -a /etc/hosts > /dev/null
           # Control: with the block and no mirror, the pull fails.
@@ -72,6 +72,6 @@ jobs:
           grep -v '^  ' $T/sk.log | head -12 | cut -c1-300
           jq -c '.plugins[] | {id, status, findings, reason: (.reason // "" | .[0:300])}' $T/rep/report.json
           jq -r '.findings[] | .sources[] | .ruleId' $T/rep/report.json | sort | uniq -c | sed 's/^/RULE /'
-          podman images --digests --format '{{.Repository}} {{.Digest}}' | grep gosec | sed 's/^/AFTER /'
+          podman images --digests --format "{{.Repository}} {{.Digest}}" 2>&1 | grep -i "gosec\|error" | sed 's/^/AFTER /'
           echo "MIRROR_MANIFEST_GETS $(docker logs mirror 2>&1 | grep -c "GET /v2/securego/gosec/manifests/$DIGEST")"
           echo "MIRROR_BLOB_GETS $(docker logs mirror 2>&1 | grep -c 'GET /v2/securego/gosec/blobs/sha256:')"
