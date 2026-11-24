@@ -85,8 +85,10 @@ type fake struct {
 	bodies []string // the wrong-password logins
 	rights int      // the right-password logins
 	waits  []time.Duration
-	// rightAnswer, when set, answers the right-password login.
+	// rightAnswer, when set, answers the right-password login; rightErr,
+	// when set, is its error instead.
 	rightAnswer *egress.Answer
+	rightErr    error
 }
 
 func (f *fake) install(t *testing.T, answer func(i int) (*egress.Answer, error)) {
@@ -102,6 +104,9 @@ func (f *fake) install(t *testing.T, answer func(i int) (*egress.Answer, error))
 		}
 		if strings.Contains(string(body), right) {
 			f.rights++
+			if f.rightErr != nil {
+				return nil, f.rightErr
+			}
 			if f.rightAnswer != nil {
 				return f.rightAnswer, nil
 			}
@@ -292,6 +297,16 @@ func TestCheckFails(t *testing.T) {
 				t.Errorf("%d logins sent, want %d", len(f.bodies), c.sent)
 			}
 		})
+	}
+	// The first login, the right-password one, gets no answer at all: the
+	// login itself did not answer, and no wrong password is sent.
+	{
+		l, cfg := testLogin(t)
+		f := fake{rightErr: io.EOF}
+		f.install(t, func(int) (*egress.Answer, error) { return answer(401, ""), nil })
+		if _, err := Check(context.Background(), cfg, l, DefaultAttempts, right); err == nil || !strings.Contains(err.Error(), "the login URL did not answer") || f.rights != 1 || len(f.bodies) != 0 {
+			t.Errorf("first login unanswered: %v, %d right, %d wrong", err, f.rights, len(f.bodies))
+		}
 	}
 	// Limited at the very first login: said so, with no finding.
 	l, cfg := testLogin(t)
