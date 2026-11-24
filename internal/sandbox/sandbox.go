@@ -103,6 +103,11 @@ type Spec struct {
 	// the tool's standard output, which is then not mixed into Stderr
 	// (ADR 0040). It counts against OutputLimit.
 	StdoutFile string
+	// StderrFile, if set, is a plain file name inside OutDir that also
+	// receives the tool's standard error in full, for a parser that reads
+	// the tool's log (ADR 0066); Stderr still keeps its tail. It counts
+	// against OutputLimit.
+	StderrFile string
 	// Entrypoint, if set, replaces the image's entrypoint with a program
 	// on the image's PATH, such as "go" for the Go module download
 	// (ADR 0066).
@@ -227,6 +232,9 @@ func (s *Spec) validate() error {
 	}
 	if s.StdoutFile != "" && !reStdoutFile.MatchString(s.StdoutFile) {
 		return fmt.Errorf("stdout file %q is not a plain file name", s.StdoutFile)
+	}
+	if s.StderrFile != "" && (!reStdoutFile.MatchString(s.StderrFile) || s.StderrFile == s.StdoutFile) {
+		return fmt.Errorf("stderr file %q is not a plain file name other than the stdout file", s.StderrFile)
 	}
 	switch s.Network {
 	case "none":
@@ -516,18 +524,20 @@ func (e *Engine) Run(ctx context.Context, s Spec) (*Result, error) {
 	cmd.Stdout = &stderr // tools that log to stdout are captured with stderr
 	cmd.Stderr = &stderr
 	if s.StdoutFile != "" {
-		// Created by SiegeKit before the tool starts, so the tool cannot
-		// make it a link; written only by this process.
-		f, err := os.OpenFile(filepath.Join(s.OutDir, s.StdoutFile), os.O_WRONLY|os.O_CREATE|os.O_EXCL|syscall.O_NOFOLLOW, 0o600) // #nosec G304 -- a plain file name (checked in validate) in the private output directory
+		w, closeFile, err := captureFile(s, s.StdoutFile)
 		if err != nil {
 			return nil, fmt.Errorf("create stdout file: %w", err)
 		}
-		defer f.Close()
-		limit := s.OutputLimit
-		if limit == 0 {
-			limit = DefaultOutputLimit
+		defer closeFile()
+		cmd.Stdout = w
+	}
+	if s.StderrFile != "" {
+		w, closeFile, err := captureFile(s, s.StderrFile)
+		if err != nil {
+			return nil, fmt.Errorf("create stderr file: %w", err)
 		}
-		cmd.Stdout = &cappedWriter{w: f, left: limit + 1}
+		defer closeFile()
+		cmd.Stderr = io.MultiWriter(&stderr, w)
 	}
 	cmd.Env = minimalEnv()
 	start := time.Now()
@@ -795,6 +805,22 @@ func dirSize(root string) (int64, error) {
 // cappedWriter writes at most left bytes and drops the rest, so a tool
 // cannot fill the disk through its standard output. Writing one byte more
 // than the output limit is enough for the size check after the run to fail.
+// captureFile creates name in s.OutDir for one of the tool's output
+// streams. It is created by SiegeKit before the tool starts, so the tool
+// cannot make it a link, and written only by this process, up to one byte
+// past the output limit so that going over it is seen.
+func captureFile(s Spec, name string) (io.Writer, func() error, error) {
+	f, err := os.OpenFile(filepath.Join(s.OutDir, name), os.O_WRONLY|os.O_CREATE|os.O_EXCL|syscall.O_NOFOLLOW, 0o600) // #nosec G304 -- a plain file name (checked in validate) in the private output directory
+	if err != nil {
+		return nil, nil, err
+	}
+	limit := s.OutputLimit
+	if limit == 0 {
+		limit = DefaultOutputLimit
+	}
+	return &cappedWriter{w: f, left: limit + 1}, f.Close, nil
+}
+
 type cappedWriter struct {
 	w    io.Writer
 	left int64

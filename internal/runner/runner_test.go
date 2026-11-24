@@ -351,6 +351,7 @@ func TestRunSkipsPluginWithoutMatchingFiles(t *testing.T) {
 	f := &fake{act: func(s sandbox.Spec) (*sandbox.Result, error) {
 		write(t, s.OutDir, "gosec.sarif", `{"version":"2.1.0","runs":[{"tool":{"driver":{"name":"gosec"}},"results":[]}]}`)
 		write(t, s.OutDir, s.StdoutFile, `{"Golang errors": {}, "Stats": {"files": 1000}}`) // gosec's JSON on stdout (ADR 0040); more files than the target has
+		write(t, s.OutDir, s.StderrFile, "")
 		return &sandbox.Result{Status: sandbox.Completed}, nil
 	}}
 	o := opts(t)
@@ -516,22 +517,28 @@ func TestRunGosecSkippedPackagesIncomplete(t *testing.T) {
 		write        bool
 		status       report.Status
 		reason       string
+		log          string
 	}{
 		// The target holds main.go and lib/lib.go: 2 Go files.
-		{"complete", `{"Golang errors": {}, "Issues": [], "Stats": {"files": 2}}`, true, report.Ran, ""},
-		{"skipped packages", `{"Golang errors": {"/target/cmd/app/main.go": [{"line": 4, "column": 2, "error": "could not import example.com/dep"}], "/target/internal/x": []}, "Issues": [], "Stats": {"files": 2}}`, true, report.Failed, "gosec could not load 2 Go packages, so their code was not checked: cmd/app, internal/x."},
+		{"complete", `{"Golang errors": {}, "Issues": [], "Stats": {"files": 2}}`, true, report.Ran, "", ""},
+		{"skipped packages", `{"Golang errors": {"/target/cmd/app/main.go": [{"line": 4, "column": 2, "error": "could not import example.com/dep"}], "/target/internal/x": []}, "Issues": [], "Stats": {"files": 2}}`, true, report.Failed, "gosec could not load 2 Go packages, so their code was not checked: cmd/app, internal/x.", ""},
 		// gosec dropped files and named no error, as when Go cannot
 		// create its module cache (measured 2026-11-21).
-		{"files left out silently", `{"Golang errors": {}, "Issues": [], "Stats": {"files": 1}}`, true, report.Failed, "gosec checked 1 of the 2 Go files"},
-		{"no error list", `{"Issues": [], "Stats": {"files": 2}}`, true, report.Failed, "could not read the tool's error list"},
-		{"no file count", `{"Golang errors": {}, "Issues": []}`, true, report.Failed, "could not read the tool's error list"},
-		{"no stdout", "", false, report.Failed, "could not read the tool's error list"},
+		{"files left out silently", `{"Golang errors": {}, "Issues": [], "Stats": {"files": 1}}`, true, report.Failed, "gosec checked 1 of the 2 Go files", ""},
+		{"no error list", `{"Issues": [], "Stats": {"files": 2}}`, true, report.Failed, "could not read the tool's error list", ""},
+		{"no file count", `{"Golang errors": {}, "Issues": []}`, true, report.Failed, "could not read the tool's error list", ""},
+		{"no stdout", "", false, report.Failed, "could not read the tool's error list", ""},
+		// gosec's log names a package whose SSA-based rules it skipped,
+		// though its JSON names no error (ADR 0066).
+		{"SSA skipped", `{"Golang errors": {}, "Issues": [], "Stats": {"files": 2}}`, true, report.Failed, "gosec skipped its SSA-based rules (G115, G407, G602, the G7xx data-flow rules and others) in 1 Go package, because they did not type-check, for example because they import a package gosec could not load: lib.",
+			"[gosec] 2026/11/24 06:09:09 Import directory: /target/lib\n[gosec] 2026/11/24 06:09:09 Error building the SSA representation of the package lib: package lib has type errors, skipping SSA analysis, no ssa result\n"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			f := &fake{act: func(s sandbox.Spec) (*sandbox.Result, error) {
 				write(t, s.OutDir, "gosec.sarif", gosecSARIF)
 				if c.write {
 					write(t, s.OutDir, s.StdoutFile, c.stdout)
+					write(t, s.OutDir, s.StderrFile, c.log)
 				}
 				return &sandbox.Result{Status: sandbox.Completed}, nil
 			}}
@@ -545,8 +552,8 @@ func TestRunGosecSkippedPackagesIncomplete(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if f.specs[0].StdoutFile != "gosec-stdout.json" {
-				t.Errorf("stdout file %q", f.specs[0].StdoutFile)
+			if f.specs[0].StdoutFile != "gosec-stdout.json" || f.specs[0].StderrFile != "gosec-log.txt" {
+				t.Errorf("stdout file %q, stderr file %q", f.specs[0].StdoutFile, f.specs[0].StderrFile)
 			}
 			p := r.Plugins[0]
 			if p.Status != c.status || !strings.Contains(p.Reason, c.reason) || p.Findings != 1 || len(r.Findings) != 1 {
@@ -577,6 +584,7 @@ func TestRunGosecGoModules(t *testing.T) {
 				}
 				write(t, s.OutDir, "gosec.sarif", gosecSARIF)
 				write(t, s.OutDir, s.StdoutFile, `{"Golang errors": {"/target/cmd/app/main.go": []}, "Issues": [], "Stats": {"files": 2}}`)
+				write(t, s.OutDir, s.StderrFile, "")
 				return &sandbox.Result{Status: sandbox.Completed}, nil
 			}}
 			o := opts(t)

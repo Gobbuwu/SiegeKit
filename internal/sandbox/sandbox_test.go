@@ -113,6 +113,8 @@ func TestSpecRejections(t *testing.T) {
 		"negative tmp":     func(s *Spec) { s.TmpMiB = -1 },
 		"stdout path":      func(s *Spec) { s.StdoutFile = "../x.json" },
 		"stdout dot file":  func(s *Spec) { s.StdoutFile = ".x" },
+		"stderr path":      func(s *Spec) { s.StderrFile = "a/x.txt" },
+		"stderr = stdout":  func(s *Spec) { s.StdoutFile, s.StderrFile = "x.txt", "x.txt" },
 		"target not a dir": func(s *Spec) { s.TargetDir = filepath.Join(s.TargetDir, "app.txt") },
 		"egress with target": func(s *Spec) {
 			s.Network, s.DataDir, s.DataMount, s.DataWritable = "egress", s.OutDir, "/tmp/db", true
@@ -331,6 +333,25 @@ func TestContainerStdoutFile(t *testing.T) {
 	s.StdoutFile, s.OutputLimit = "stdout.json", 1<<20
 	if r = run(t, e, s); r.Status != Failed || !strings.Contains(r.Stderr, "output exceeded") {
 		t.Fatalf("status %s: %s", r.Status, r.Stderr)
+	}
+}
+
+// TestContainerStderrFile: the tool's standard error goes in full to its
+// own file, Stderr keeps it too, and it counts against the output limit
+// (ADR 0066).
+func TestContainerStderrFile(t *testing.T) {
+	e := engine(t)
+	s := spec(t, "sh", "-c", "echo out-line; echo err-line >&2")
+	s.StdoutFile, s.StderrFile = "stdout.json", "log.txt"
+	r := run(t, e, s)
+	b, err := os.ReadFile(filepath.Join(s.OutDir, "log.txt"))
+	if err != nil || string(b) != "err-line\n" || r.Status != Completed || !strings.Contains(r.Stderr, "err-line") || strings.Contains(r.Stderr, "out-line") {
+		t.Fatalf("status %s, file %q %v, stderr %q", r.Status, b, err, r.Stderr)
+	}
+	s = spec(t, "sh", "-c", "head -c 2000000 /dev/zero >&2")
+	s.StderrFile, s.OutputLimit = "log.txt", 1<<20
+	if r = run(t, e, s); r.Status != Failed || !strings.Contains(r.Stderr, "output exceeded") {
+		t.Fatalf("status %s: %.200s", r.Status, r.Stderr)
 	}
 }
 

@@ -238,6 +238,11 @@ type Output struct {
 type Stdout struct {
 	File   string `json:"file"`
 	Parser string `json:"parser"`
+	// StderrFile, if set, also saves the tool's standard error (its log)
+	// to this file inside {outdir} for the parser. The parser
+	// "gosec-errors" needs it: gosec names in its log the packages whose
+	// SSA-based rules it skipped (ADR 0066).
+	StderrFile string `json:"stderrFile,omitempty"`
 }
 
 // ValidationError lists every rule a manifest breaks.
@@ -507,6 +512,12 @@ func (m *Manifest) Validate() error {
 			checkEnum(&p, "output.stdout.parser", o.Parser, StdoutParsers)
 			if !reOutFile.MatchString(o.File) || o.File == m.Output.File {
 				add("output.stdout.file %q must be a plain file name matching %s, other than output.file", o.File, reOutFile)
+			}
+			if o.StderrFile != "" && (!reOutFile.MatchString(o.StderrFile) || o.StderrFile == m.Output.File || o.StderrFile == o.File) {
+				add("output.stdout.stderrFile %q must be a plain file name matching %s, other than output.file and output.stdout.file", o.StderrFile, reOutFile)
+			}
+			if o.Parser == "gosec-errors" && o.StderrFile == "" {
+				add("output.stdout.parser \"gosec-errors\" needs output.stdout.stderrFile")
 			}
 		}
 	}

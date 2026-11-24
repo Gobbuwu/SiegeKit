@@ -456,6 +456,11 @@
               "enum": [
                 "gosec-errors"
               ]
+            },
+            "stderrFile": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$",
+              "description": "Also saves the tool's standard error (its log) to this file inside {outdir} for the parser. Needed by gosec-errors: gosec names in its log the packages whose SSA-based rules it skipped (ADR 0066)."
             }
           }
         }

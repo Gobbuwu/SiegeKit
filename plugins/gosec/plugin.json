@@ -61,7 +61,8 @@
     "file": "gosec.sarif",
     "stdout": {
       "file": "gosec-stdout.json",
-      "parser": "gosec-errors"
+      "parser": "gosec-errors",
+      "stderrFile": "gosec-log.txt"
     }
   }
 }

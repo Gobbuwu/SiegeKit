@@ -417,6 +417,7 @@ func runPlugin(ctx context.Context, ex Executor, m *manifest.Manifest, opt Optio
 		CPUs: cpus, MemoryMiB: m.Resources.MemoryMiB,
 		Timeout:    time.Duration(m.Resources.TimeoutSeconds) * time.Second,
 		StdoutFile: stdoutFile(m),
+		StderrFile: stderrFile(m),
 	})
 	switch {
 	case err != nil:
@@ -448,7 +449,7 @@ func runPlugin(ctx context.Context, ex Executor, m *manifest.Manifest, opt Optio
 	if o := m.Output.Stdout; o != nil {
 		// What the tool did not do (ADR 0040): its findings are kept, but
 		// the run is incomplete (exit code 4), as for unreadable files.
-		missed, err := notDone(filepath.Join(out, o.File), o.Parser, opt.TargetDir)
+		missed, err := notDone(filepath.Join(out, o.File), filepath.Join(out, o.StderrFile), o.Parser, opt.TargetDir)
 		if err != nil {
 			pr.Status, pr.Reason = report.Failed, err.Error()
 		} else if missed != "" {
@@ -464,6 +465,14 @@ func runPlugin(ctx context.Context, ex Executor, m *manifest.Manifest, opt Optio
 	return pr, fs
 }
 
+// stderrFile is the file that also receives m's standard error, if any.
+func stderrFile(m *manifest.Manifest) string {
+	if m.Output == nil || m.Output.Stdout == nil {
+		return ""
+	}
+	return m.Output.Stdout.StderrFile
+}
+
 // stdoutFile is the file that receives m's standard output, if any.
 func stdoutFile(m *manifest.Manifest) string {
 	if m.Output == nil || m.Output.Stdout == nil {
@@ -472,10 +481,11 @@ func stdoutFile(m *manifest.Manifest) string {
 	return m.Output.Stdout.File
 }
 
-// notDone reads the saved standard output with parser and says what the
-// tool did not do in target, "" if nothing. Unreadable output is an error:
-// the run cannot be called complete without it.
-func notDone(path, parser, target string) (string, error) {
+// notDone reads the saved standard output, and the saved standard error
+// when the parser needs it, with parser and says what the tool did not do
+// in target, "" if nothing. Unreadable output is an error: the run cannot
+// be called complete without it.
+func notDone(path, logPath, parser, target string) (string, error) {
 	f, err := openOutput(path)
 	if err != nil {
 		return "", fmt.Errorf("could not read the tool's error list: %w", err)
@@ -483,7 +493,12 @@ func notDone(path, parser, target string) (string, error) {
 	defer f.Close()
 	switch parser {
 	case "gosec-errors":
-		why, err := gosec.Check(f, target, sandbox.TargetMount)
+		lf, err := openOutput(logPath)
+		if err != nil {
+			return "", fmt.Errorf("could not read the tool's log: %w", err)
+		}
+		defer lf.Close()
+		why, err := gosec.Check(f, lf, target, sandbox.TargetMount)
 		if err != nil {
 			return "", fmt.Errorf("could not read the tool's error list: %w", err)
 		}
