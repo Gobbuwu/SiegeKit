@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -265,7 +266,14 @@ func TestRecordedRequests(t *testing.T) {
 	}
 	opt := urlOpts(t)
 	opt.RecordedFrom = "a.har"
-	opt.Recorded = []authz.RecordedRequest{{Method: "POST", URL: "http://app.test:8000/api/order", Header: http.Header{"Cookie": {"s=A"}, "Content-Type": {"application/xml"}}, MimeType: "application/xml", Body: "<order/>"}}
+	// A body ZAP's ISO-8859-1 import would change, and a GET without one
+	// (ADR 0065).
+	const name = `{"name":"é€😀"}`
+	opt.Recorded = []authz.RecordedRequest{
+		{Method: "POST", URL: "http://app.test:8000/api/order", Header: http.Header{"Cookie": {"s=A"}, "Content-Type": {"application/xml"}}, MimeType: "application/xml", Body: "<order/>"},
+		{Method: "PUT", URL: "http://app.test:8000/api/name", Header: http.Header{"Content-Type": {"application/json"}}, MimeType: "application/json", Body: name},
+		{Method: "GET", URL: "http://app.test:8000/api/me", Header: http.Header{"Cookie": {"s=A"}}},
+	}
 	type seen struct {
 		jobs []string
 		har  []byte
@@ -321,13 +329,39 @@ func TestRecordedRequests(t *testing.T) {
 					}
 				}
 			}
-			if err := json.Unmarshal(s.har, &h); err != nil || len(h.Log.Entries) != 1 {
+			if err := json.Unmarshal(s.har, &h); err != nil || len(h.Log.Entries) != 3 {
 				t.Fatalf("HAR %s %v", s.har, err)
 			}
 			e := h.Log.Entries[0].Request
 			if e.Method != "POST" || e.URL != "http://app.test:8000/api/order" || e.PostData.Text != "<order/>" || e.PostData.MimeType != "application/xml" ||
 				!slices.Contains(e.Headers, struct{ Name, Value string }{"Cookie", "s=A"}) {
 				t.Errorf("entry %+v", e)
+			}
+			// ZAP sends the headers as given and the text in ISO-8859-1
+			// (ADR 0065): each request with a body needs its one
+			// Content-Length, and the text's characters must be the
+			// body's bytes.
+			for i, want := range []string{"<order/>", name, ""} {
+				e := h.Log.Entries[i].Request
+				var lengths []string
+				for _, hd := range e.Headers {
+					if strings.EqualFold(hd.Name, "Content-Length") {
+						lengths = append(lengths, hd.Value)
+					}
+				}
+				sent := make([]byte, 0, len(e.PostData.Text))
+				for _, c := range e.PostData.Text {
+					if c > 0xff {
+						t.Fatalf("entry %d: %q is not one byte in ISO-8859-1", i, c)
+					}
+					sent = append(sent, byte(c))
+				}
+				if string(sent) != want {
+					t.Errorf("entry %d: ZAP would send %q, want %q", i, sent, want)
+				}
+				if wantLen := []string{strconv.Itoa(len(want))}; want == "" && lengths != nil || want != "" && !slices.Equal(lengths, wantLen) {
+					t.Errorf("entry %d: Content-Length %v for a %d-byte body", i, lengths, len(want))
+				}
 			}
 		case !strings.Contains(k, "import"):
 			without++
@@ -339,7 +373,7 @@ func TestRecordedRequests(t *testing.T) {
 	if withImport != 1 || without != 1 {
 		t.Errorf("runs %v", slices.Collect(maps.Keys(got)))
 	}
-	if p := r.Plugins[1]; p.ID != "zap-active" || p.Input != "1 recorded request(s) from a.har" || r.Plugins[0].Input != "" {
+	if p := r.Plugins[1]; p.ID != "zap-active" || p.Input != "3 recorded request(s) from a.har" || r.Plugins[0].Input != "" {
 		t.Errorf("plugins %+v", r.Plugins)
 	}
 

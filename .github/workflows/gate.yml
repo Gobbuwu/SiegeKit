@@ -308,6 +308,8 @@ jobs:
         # zap-active must get the recording's 13 requests and report SQL
         # injection (40018) on the product search and on the JSON login,
         # both confirmed by hand (2 of 2 local runs, 2026-11-21; ADR 0047).
+        # It must not report 40045, which only SiegeKit's HAR caused
+        # (ADR 0065).
         run: |
           # access-control asks a person at a terminal to type that accounts
           # A, B and C are test accounts (ADR 0035 item 11). The gate created
@@ -348,6 +350,9 @@ jobs:
           for u in /rest/products/search /rest/user/login; do
             jq -e --arg u "http://127.0.0.1:3000$u" '[.findings[] | select(.ruleId == "40018" and .severity == "high" and (.location.uri | startswith($u)))] | length > 0' "$r" > /dev/null || { echo "zap-active: no 40018 on $u"; exit 1; }
           done
+          # 40045 (Spring4Shell) came only from requests the proxy answered
+          # 400 after a recorded body without a Content-Length (ADR 0065).
+          jq -e '[.findings[] | select(.ruleId == "40045")] | length == 0' "$r" > /dev/null || { echo "zap-active: 40045 is back (ADR 0065)"; exit 1; }
           jq -e '[.plugins[] | select(.id == "rate-limit" and .requests == 20 and .input == "GET http://127.0.0.1:3000/rest/products/search?q=apple")] | length == 1' "$r"
           jq -e '[.findings[] | select(.ruleId == "rate-not-limited" and .severity == "low" and .location.uri == "http://127.0.0.1:3000/rest/products/search")] | length == 1' "$r"
           jq -e --arg b "/rest/basket/$A_BASKET" --arg u "/api/Users/$A_USER" '[.findings[] | select(.ruleId == "cross-account-read") | .location.uri | ltrimstr("http://127.0.0.1:3000")] | sort == ([$b, $u, "/api/Users", "/api/Complaints"] | sort)' "$r"
