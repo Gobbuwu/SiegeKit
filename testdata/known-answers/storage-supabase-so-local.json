@@ -1,0 +1,16 @@
+{
+  "fixture": "Supabase Storage: supabase/storage-api@sha256:8a211c1024d661aafee98178d26a2da8d1f43d0b9cddb76b0d6445bee70acdaa (v1.94.2) on supabase/postgres@sha256:d15ecf03474e4f5437002f3951f758b8fbfb182c3be311a998873c768ff53d37 (15.19.0.019) behind the /storage/v1 proxy on 127.0.0.1, private bucket files, policy set s2; app = .github/gate/storage/app/so.html, a page that names no backend and serves no key (an app that calls Supabase only from its server); --source = supabase/config.toml, a migration inserting bucket files and policy set s2; SIEGEKIT_SUPABASE_KEY = the stack's anon key (gate.yml job storage, ADR 0061)",
+  "measured": "3 fresh local runs per engine on 2026-11-23 (gate.sh start and scan, new storage, gateway and keys each time), the storage on Docker 29.9.3 rootful and on rootless Podman 4.9.3, cgroup v1, linux/amd64: the same answer and 5 requests on every run. Minimum requests are 90% of the fewest",
+  "checks": {
+    "storage-write": {
+      "status": "ran",
+      "match": "exact",
+      "findings": [
+        "storage-public-write /storage/v1/object/files/"
+      ],
+      "count": 1,
+      "minRequests": 4,
+      "why": "kind from --source (supabase/), bucket from its migration, key from SIEGEKIT_SUPABASE_KEY; on this machine, so no key check: 1 page fetch + upload, read, delete, read"
+    }
+  }
+}

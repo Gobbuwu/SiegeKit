@@ -1,0 +1,16 @@
+{
+  "fixture": "Supabase Storage: supabase/storage-api@sha256:8a211c1024d661aafee98178d26a2da8d1f43d0b9cddb76b0d6445bee70acdaa (v1.94.2) on supabase/postgres@sha256:d15ecf03474e4f5437002f3951f758b8fbfb182c3be311a998873c768ff53d37 (15.19.0.019) behind Supabase's self-hosted API gateway (envoyproxy/envoy@sha256:1fde8efee875e4e4f6a39a90fe49d9338e1caacce5762034ef9fb4bbb9ad6aed v1.39.6, config of supabase/supabase 0af0e9a) with Supabase Auth (supabase/gotrue@sha256:ba8c0c82c574756c835c696df2a2c698020cc408a42034013d3712e34de7964d v2.198.0), reached at the machine's private address; policy set s2; app = .github/gate/storage/app/so.html, a page that names no backend and serves no key (an app that calls Supabase only from its server); --source = supabase/config.toml, a migration inserting bucket files and policy set s2; SIEGEKIT_SUPABASE_KEY = the project's publishable key, host and phrase typed (gate.yml job storage, ADR 0061)",
+  "measured": "3 fresh local runs per engine on 2026-11-23, Docker 29.9.3 rootful and rootless Podman 4.9.3, cgroup v1, linux/amd64, gateway reached at 172.17.0.1: the same answer and 6 requests on every run. Minimum requests are 90% of the fewest",
+  "checks": {
+    "storage-write": {
+      "status": "ran",
+      "match": "exact",
+      "findings": [
+        "storage-public-write /storage/v1/object/files/"
+      ],
+      "count": 1,
+      "minRequests": 5,
+      "why": "not on this machine and not named by the page: the typed host, then GET /auth/v1/settings accepted the key (1 request), then the same 4 as so-local"
+    }
+  }
+}

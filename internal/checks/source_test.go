@@ -138,3 +138,40 @@ func FuzzStorageRuleFolders(f *testing.F) {
 		}
 	})
 }
+
+// TestReadSourceKind: which backend the repository is set up for (ADR 0061).
+func TestReadSourceKind(t *testing.T) {
+	for _, c := range []struct {
+		name               string
+		files              []string
+		supabase, firebase bool
+	}{
+		{"config only", []string{"supabase/config.toml"}, true, false},
+		{"migration only", []string{"supabase/migrations/1.sql"}, true, false},
+		{"nested app", []string{"apps/web/supabase/config.toml"}, true, false},
+		{"seed", []string{"supabase/seed.sql"}, true, false},
+		{"firebase.json", []string{"firebase.json"}, false, true},
+		{"rtdb rules", []string{"database.rules.json"}, false, true},
+		{"firestore rules", []string{"firestore.rules"}, false, true},
+		{"storage rules", []string{"storage.rules"}, false, true},
+		{"both", []string{"supabase/config.toml", "firebase.json"}, true, true},
+		// A test folder is never deployed (ADR 0064 item 1): it tells no kind.
+		{"tests only", []string{"supabase/tests/rls.sql", "tests/fixture/supabase/config.toml", "test/firebase.json", "__tests__/storage.rules"}, false, false},
+		{"neither", []string{"config.toml", "db/schema.sql", "supabase.js", "app.rules", "node_modules/x/supabase/config.toml", "node_modules/x/firebase.json"}, false, false},
+	} {
+		root := t.TempDir()
+		for _, f := range c.files {
+			p := filepath.Join(root, filepath.FromSlash(f))
+			if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(p, []byte("{}"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
+		s, err := ReadSource(context.Background(), root)
+		if err != nil || s.Supabase != c.supabase || s.Firebase != c.firebase {
+			t.Errorf("%s: supabase %v firebase %v %v", c.name, s.Supabase, s.Firebase, err)
+		}
+	}
+}

@@ -390,12 +390,9 @@ func WriteStorage(ctx context.Context, cfg egress.Config, kind StorageKind, key 
 	switch kind {
 	case SupabaseStorage:
 		if key == "" {
-			return r, errors.New("no Supabase public key was found in the app's scripts")
+			return r, ErrNoKey
 		}
-		header = http.Header{"Apikey": {key}}
-		if strings.HasPrefix(key, "eyJ") {
-			header.Set("Authorization", "Bearer "+key)
-		}
+		header = supabaseHeader(key)
 	case FirebaseStorage:
 	default:
 		return r, errors.New("cannot tell whether the storage is Supabase or Firebase")
@@ -627,8 +624,9 @@ func deleteConfirmed(kind StorageKind, l Location, a *egress.Answer) bool {
 // StorageFindings turns each accepted upload into a finding: critical,
 // like an open write in backend-rules, with CWE-284 and CWE-862. The
 // location is the bucket and folder, so the finding is the same on every
-// run whatever the file's random name.
-func StorageFindings(s *Storage, r StorageResult) []findings.Finding {
+// run whatever the file's random name. keyFrom is where the Supabase key
+// came from (a served file or KeyEnv); Firebase ignores it.
+func StorageFindings(s *Storage, r StorageResult, keyFrom string) []findings.Finding {
 	var out []findings.Finding
 	for _, o := range r.Written() {
 		where := (Location{Bucket: o.Bucket, Folder: o.Folder}).Where(r.Kind)
@@ -644,13 +642,13 @@ func StorageFindings(s *Storage, r StorageResult) []findings.Finding {
 			RuleID:   "storage-public-write",
 			Title:    "Anyone can upload files to this storage bucket",
 		}
-		who := "with no login"
+		with, anyone := "with no login", "anyone who loads the app"
 		fix := "Add a write rule with a condition, such as \"allow write: if request.auth != null && request.auth.uid == userId\" under a path that holds the user's ID."
 		if r.Kind == SupabaseStorage {
-			who = "with the public key from the app's scripts"
+			with, anyone = keyReach(keyFrom)
 			fix = "Limit the insert policy on storage.objects to signed-in users and their own folder, for example \"to authenticated with check (bucket_id = '" + o.Bucket + "' and (storage.foldername(name))[1] = auth.uid()::text)\"."
 		}
-		msg := fmt.Sprintf("SiegeKit uploaded a %d-byte text file to %s %s, so anyone who loads the app can store files here: they can fill the bucket, run up its bill, or host files under the app's name.", len(TestContent), o.Where(r.Kind), who)
+		msg := fmt.Sprintf("SiegeKit uploaded a %d-byte text file to %s %s, so %s can store files here: they can fill the bucket, run up its bill, or host files under the app's name.", len(TestContent), o.Where(r.Kind), with, anyone)
 		if o.Readable {
 			msg += " The file could also be read back without signing in."
 		}

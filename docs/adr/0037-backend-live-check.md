@@ -3,7 +3,7 @@
 - Status: Accepted
 - Date: 2026-11-20
 - Amends: [0011](0011-app-logic-and-ai-checks.md) item 3 (live part: which targets, how the backend is confirmed, what is read)
-- Amended by: [0044](0044-typed-confirmations-limit.md) (what the typed confirmation can stop), [0053](0053-routes-from-server-code.md) (on local targets `--source` also gives the route sweep the routes of the server code), [0058](0058-storage-write-test.md) (Firebase and Supabase Storage are tested live, with writes, by `storage-write`)
+- Amended by: [0044](0044-typed-confirmations-limit.md) (what the typed confirmation can stop), [0053](0053-routes-from-server-code.md) (on local targets `--source` also gives the route sweep the routes of the server code), [0058](0058-storage-write-test.md) (Firebase and Supabase Storage are tested live, with writes, by `storage-write`), [0061](0061-backends-the-scripts-do-not-name.md) (a Supabase backend the scripts do not name: the key from `SIEGEKIT_SUPABASE_KEY`, the kind from `--source`, the project must accept the key)
 
 ## Context
 
@@ -31,7 +31,7 @@ The backend is a different host from the target. Its owner may not be the person
    - Firebase: `GET /PATH.json?shallow=true` with no key, the root first. When the root is readable, no paths are sent.
    - Because the check only reads, it runs on every target, `--deployed` and `--profile quick` included.
 5. **Results** (owner answer 3a).
-   - A table that returns a row is "Supabase table is readable with the app's public key" (`supabase-table-readable`). A path that returns data is "Realtime Database data is readable without signing in" (`firebase-rtdb-readable`).
+   - A table that returns a row is "Supabase table is readable with the project's public key" (`supabase-table-readable`). A path that returns data is "Realtime Database data is readable without signing in" (`firebase-rtdb-readable`).
    - Both are **high**, with CWE-284 and CWE-862. The location is the backend URL without its query.
    - The message gives the column names (Supabase) or the number of keys (Firebase), never values.
    - `[]` (empty, or hidden by row-level security), `null`, 401, 403 and 404 give no finding. The plugin's `result` counts each kind.

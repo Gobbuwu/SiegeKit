@@ -755,7 +755,8 @@ jobs:
     # SiegeKit's own process. gate.sh checks each run against its known
     # answer and its measured result (.github/gate/storage/results.txt), and
     # that the files left behind in the storage are exactly the ones the
-    # report names.
+    # report names. ADR 0061: the Supabase jobs also scan an app that calls
+    # Supabase only from its server, behind Supabase's self-hosted gateway.
     name: Storage write on ${{ matrix.backend }} (storage on ${{ matrix.engine }}${{ matrix.os == 'ubuntu-24.04-arm' && ', arm64' || '' }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 20

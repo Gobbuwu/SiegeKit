@@ -499,7 +499,7 @@ func TestStorageFindings(t *testing.T) {
 		{Location: Location{Bucket: "files", Folder: "uploads/", Name: "siegekit-write-test-2.txt"}, Written: true, Left: true},
 		{Location: Location{Bucket: "files", Folder: "x/", Name: "siegekit-write-test-3.txt"}, Refused: true},
 	}}
-	fs := StorageFindings(s, r)
+	fs := StorageFindings(s, r, "002-main.js")
 	if len(fs) != 2 {
 		t.Fatalf("%+v", fs)
 	}
@@ -513,11 +513,11 @@ func TestStorageFindings(t *testing.T) {
 	// The same bucket and folder give the same fingerprint whatever the
 	// random file name.
 	r.Outcomes[0].Name = "siegekit-write-test-9.txt"
-	if again := StorageFindings(s, r); again[0].Fingerprint != fs[0].Fingerprint {
+	if again := StorageFindings(s, r, "002-main.js"); again[0].Fingerprint != fs[0].Fingerprint {
 		t.Error("fingerprint depends on the file name")
 	}
 	fb, _ := ParseStorage("https://firebasestorage.googleapis.com")
-	fr := StorageFindings(fb, StorageResult{Kind: FirebaseStorage, Outcomes: []Outcome{{Location: Location{Bucket: "demo.appspot.com", Folder: "uploads/", Name: "n.txt"}, Written: true}}})
+	fr := StorageFindings(fb, StorageResult{Kind: FirebaseStorage, Outcomes: []Outcome{{Location: Location{Bucket: "demo.appspot.com", Folder: "uploads/", Name: "n.txt"}, Written: true}}}, "")
 	if len(fr) != 1 || fr[0].Location.URI != "gs://demo.appspot.com/uploads/" || !strings.Contains(fr[0].Message, "with no login") {
 		t.Errorf("%+v", fr)
 	}

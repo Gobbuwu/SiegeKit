@@ -35,6 +35,9 @@ type storageRun struct {
 	plan *storagePlan
 	col  *collected
 	repo *checks.Source
+	// supabaseKey is SIEGEKIT_SUPABASE_KEY, for an app whose scripts have
+	// none (ADR 0061).
+	supabaseKey string
 	// backendConfirmed is the host typed for backend-live in this run; the
 	// same Supabase host is not asked twice.
 	backendConfirmed string
@@ -65,14 +68,37 @@ func (o *urlScan) runStorage(ctx context.Context, r storageRun, stdout io.Writer
 		return failed("%v", err)
 	}
 	sc := backend.ReadStorageScripts(p.s, files)
+	kindFrom := ""
 	if sc.Kind == "" {
-		return failed("cannot tell whether %s is Supabase or Firebase Storage: the app's scripts name neither", p.s.URL.Origin())
+		// The repository tells when the scripts do not (ADR 0061); the
+		// scripts are read again for that kind's bucket names.
+		if k := storageKind(sourceKind(r.repo)); k != "" {
+			s := *p.s
+			s.Kind, kindFrom = k, " (from --source)"
+			sc = backend.ReadStorageScripts(&s, files)
+		}
+	}
+	if sc.Kind == "" {
+		return failed("cannot tell whether %s is Supabase or Firebase Storage: the app's scripts name neither%s", p.s.URL.Origin(), sourceHint(r.repo))
 	}
 	// A storage host not on this machine must be the app's: hosted Firebase
 	// Storage is shared by every project, so there the bucket named in the
-	// app's config is what ties it to the app.
-	if p.host.remote && !p.s.Hosted() && !sc.HostSeen {
-		return failed("%s does not appear in the app's start page or scripts (%d file(s) fetched), so SiegeKit cannot tell it is this app's storage; nothing was sent to it", p.s.URL.Host, len(files))
+	// app's config is what ties it to the app. A Supabase project the
+	// scripts do not name is tied by accepting SIEGEKIT_SUPABASE_KEY.
+	tied := !p.host.remote || p.s.Hosted() || sc.HostSeen
+	var key publicKey
+	if sc.Kind == backend.SupabaseStorage {
+		key = supabaseKey(sc.Key, sc.KeyFile, tied, r.supabaseKey)
+	}
+	if !tied && key.from != backend.KeyEnv {
+		hint := ""
+		if sc.Kind == backend.SupabaseStorage {
+			hint = keyHint(backend.Supabase)
+		}
+		return failed("%s does not appear in the app's start page or scripts (%d file(s) fetched), so SiegeKit cannot tell it is this app's storage; nothing was sent to it%s", p.s.URL.Host, len(files), hint)
+	}
+	if key.from == backend.KeyEnv && !backend.KeyForHost(key.key, p.s.URL.Host) {
+		return failed("the anon key in %s is another project's, not %s's; nothing was sent to it", backend.KeyEnv, p.s.URL.Host)
 	}
 	buckets, folders := sc.Buckets, sc.Folders
 	fromSource := 0
@@ -88,18 +114,22 @@ func (o *urlScan) runStorage(ctx context.Context, r storageRun, stdout io.Writer
 			fromSource = len(r.repo.SupabaseBuckets) + len(r.repo.SupabaseFolders)
 		}
 	}
-	pr.Input = fmt.Sprintf("%s %s; %d bucket(s) and %d folder(s) from the app's scripts", sc.Kind, p.s.URL.Origin(), len(sc.Buckets), len(sc.Folders))
+	pr.Input = fmt.Sprintf("%s%s %s; %d bucket(s) and %d folder(s) from the app's scripts", sc.Kind, kindFrom, p.s.URL.Origin(), len(sc.Buckets), len(sc.Folders))
 	if r.repo != nil {
 		pr.Input += fmt.Sprintf(", %d name(s) from --source", fromSource)
 	}
 	if len(buckets) == 0 {
-		return failed("no bucket name was found in the app's scripts (storageBucket in the Firebase config, or .storage.from(\"NAME\") for Supabase); nothing was sent")
+		hint := ""
+		if sc.Kind == backend.SupabaseStorage {
+			hint = bucketHint(r.repo)
+		}
+		return failed("no bucket name was found in the app's scripts (storageBucket in the Firebase config, or .storage.from(\"NAME\") for Supabase)%s; nothing was sent", hint)
 	}
 	if sc.Kind == backend.SupabaseStorage {
-		if sc.Key == "" {
-			return failed("no Supabase public key was found in the app's scripts; nothing was sent")
+		if key.key == "" {
+			return failed("%v; nothing was sent", backend.ErrNoKey)
 		}
-		pr.Input += "; public key from " + sc.KeyFile
+		pr.Input += key.input(r.supabaseKey)
 	}
 	locs, left, err := backend.PlanFiles(buckets, sc.Pairs, folders)
 	if err != nil {
@@ -118,9 +148,20 @@ func (o *urlScan) runStorage(ctx context.Context, r storageRun, stdout io.Writer
 	}); err != nil {
 		return failed("nothing was uploaded: %v", err)
 	}
-	fmt.Fprintf(stdout, "%s: uploading %d test file(s) to %s.\n", backend.StorageID, len(locs), p.s.URL.Origin())
 	cfg := egress.Config{Target: p.s.URL, Addrs: p.host.addrs, VerifyTLS: p.host.public, Version: version}
-	res, err := storageWrite(ctx, cfg, sc.Kind, sc.Key, locs, left)
+	// A key the person gave is checked first on a host not on this machine
+	// (ADR 0061), with a read-only configuration: one GET, no upload yet.
+	if key.from == backend.KeyEnv && p.host.remote {
+		ro := cfg
+		ro.ReadOnly = true
+		n, err := keyCheck(ctx, ro, key.key)
+		pr.Requests += n
+		if err != nil {
+			return failed("nothing was uploaded: %v", err)
+		}
+	}
+	fmt.Fprintf(stdout, "%s: uploading %d test file(s) to %s.\n", backend.StorageID, len(locs), p.s.URL.Origin())
+	res, err := storageWrite(ctx, cfg, sc.Kind, key.key, locs, left)
 	pr.Requests += res.Requests
 	if lo := res.Leftovers(); len(lo) > 0 {
 		fmt.Fprintf(stdout, "%s: %d test file(s) may still be there; delete them:\n", backend.StorageID, len(lo))
@@ -138,7 +179,7 @@ func (o *urlScan) runStorage(ctx context.Context, r storageRun, stdout io.Writer
 		}
 		return pr, nil, false
 	}
-	fs = backend.StorageFindings(p.s, res)
+	fs = backend.StorageFindings(p.s, res, key.from)
 	pr.Status, pr.Result, pr.Findings = report.Ran, res.Summary(), len(fs)
 	return pr, fs, false
 }
@@ -190,6 +231,26 @@ func (o *urlScan) confirmStorage(p *storagePlan, kind backend.StorageKind, locs 
 		return "", "", fmt.Sprintf("not confirmed: %q was not typed", writeTestFiles)
 	}
 	return verification + " + typed phrase", confirmed, ""
+}
+
+// storageKind is the storage service of a backend kind.
+func storageKind(k backend.Kind) backend.StorageKind {
+	switch k {
+	case backend.Supabase:
+		return backend.SupabaseStorage
+	case backend.Firebase:
+		return backend.FirebaseStorage
+	}
+	return ""
+}
+
+// bucketHint says where a Supabase bucket name can come from when the
+// scripts name none.
+func bucketHint(src *checks.Source) string {
+	if src == nil {
+		return "; pass --source with the app's repository: buckets also come from insert into storage.buckets (id, ...) in its migrations"
+	}
+	return ", nor in an insert into storage.buckets in --source's migrations"
 }
 
 func bucketsOf(locs []backend.Location) []string {

@@ -126,6 +126,9 @@ type urlScan struct {
 	backend *backend.Backend
 	storage *backend.Storage
 	repo    *checks.Source
+	// Read from SIEGEKIT_SUPABASE_KEY before any request, for an app whose
+	// scripts have no Supabase key (ADR 0061).
+	supabaseKey string
 	// Read from --source on local targets: the routes of the app's
 	// server code, for the route sweep (ADR 0053).
 	code    *coderoutes.Result
@@ -322,6 +325,15 @@ func scanURL(raw string, o urlScan, stdout, stderr io.Writer) int {
 	if o.storageURL != "" {
 		if o.storage, err = backend.ParseStorage(o.storageURL); err != nil {
 			return refuse("%v", err)
+		}
+	}
+	// So is the Supabase key for an app whose scripts have none (ADR 0061):
+	// a secret or service key is refused here, before any request.
+	if o.backend != nil || o.storage != nil {
+		if k, ok := os.LookupEnv(backend.KeyEnv); ok {
+			if o.supabaseKey, err = backend.ParseKey(k); err != nil {
+				return refuse("%v", err)
+			}
 		}
 	}
 	if o.source != "" {
@@ -868,10 +880,14 @@ func runURL(ctx context.Context, u *target.URL, addrs []netip.Addr, mode target.
 			if o.repo != nil {
 				from += " and " + o.source
 			}
-			how := "with the app's own public key for Supabase, with no login for Firebase"
+			sbKey := "the app's own public key"
+			if o.supabaseKey != "" {
+				sbKey += " (" + backend.KeyEnv + " when the app's scripts have none)"
+			}
+			how := "with " + sbKey + " for Supabase, with no login for Firebase"
 			switch o.backend.Kind {
 			case backend.Supabase:
-				how = "with the app's own public key"
+				how = "with " + sbKey
 			case backend.Firebase:
 				how = "with no login"
 			}
@@ -1366,7 +1382,7 @@ func runURL(ctx context.Context, u *target.URL, addrs []netip.Addr, mode target.
 			}
 			collectCounted = true
 			fmt.Fprintf(stdout, "%s: reading %s.\n", backend.ID, o.backend)
-			pr, backendFindings = runBackend(ctx, bp, col, o.repo, extra, pr)
+			pr, backendFindings = runBackend(ctx, bp, col, o.repo, o.supabaseKey, extra, pr)
 			if ctx.Err() != nil {
 				return fail(errors.New("interrupted; no report written"))
 			}
@@ -1388,7 +1404,7 @@ func runURL(ctx context.Context, u *target.URL, addrs []netip.Addr, mode target.
 			collectCounted = true
 			var interrupted bool
 			pr, storageFindings, interrupted = o.runStorage(ctx, storageRun{
-				plan: sp, col: col, repo: o.repo, backendConfirmed: backendConfirmed,
+				plan: sp, col: col, repo: o.repo, supabaseKey: o.supabaseKey, backendConfirmed: backendConfirmed,
 				auditLog: filepath.Join(dir, "audit.log"), mode: string(mode), env: env.String(), extraRequests: extra,
 			}, stdout)
 			if interrupted || ctx.Err() != nil {
