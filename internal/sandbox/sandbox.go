@@ -694,6 +694,17 @@ const (
 // directory in parent, which must be private (checked by the caller).
 func installWaiter(parent string) (string, error) {
 	bin, err := waiterbin.Binary(runtime.GOARCH)
+	// TEMP (removed before merge): options B and C of the waiter-delivery
+	// measurement.
+	switch os.Getenv("SIEGEKIT_MEASURE_WAITER") {
+	case "own-binary":
+		var self string
+		if self, err = os.Executable(); err == nil {
+			bin, err = os.ReadFile(self) // #nosec G304 -- TEMP measurement
+		}
+	case "none":
+		bin, err = nil, errors.New("this SiegeKit build has no waiter: it is built only for releases")
+	}
 	if err != nil {
 		return "", err
 	}

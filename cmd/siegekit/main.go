@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 
 	"github.com/Gobbuwu/SiegeKit/docs"
@@ -21,6 +22,7 @@ import (
 	"github.com/Gobbuwu/SiegeKit/internal/ratelimit"
 	"github.com/Gobbuwu/SiegeKit/internal/relay"
 	"github.com/Gobbuwu/SiegeKit/internal/served"
+	"github.com/Gobbuwu/SiegeKit/internal/waiter"
 	"github.com/Gobbuwu/SiegeKit/plugins"
 )
 
@@ -49,6 +51,11 @@ const (
 )
 
 func main() {
+	// TEMP (removed before merge): option B of the waiter-delivery
+	// measurement, SiegeKit's own binary run as the waiter.
+	if filepath.Base(os.Args[0]) == "wait" {
+		os.Exit(waiter.Main(os.Args[1:]))
+	}
 	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
 }
 
