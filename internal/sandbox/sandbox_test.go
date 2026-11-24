@@ -3,6 +3,9 @@ package sandbox
 import (
 	"context"
 	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -1037,5 +1040,42 @@ func TestTooManyPullsHint(t *testing.T) {
 	}
 	if h := TooManyPullsHint("docker.io/x@sha256:x", "manifest unknown"); h != "" {
 		t.Errorf("unrelated error: %q", h)
+	}
+}
+
+// TestEngineCommandsShareEnv: every engine command is built by
+// Engine.command (or isPodman, before there is an Engine), so all get
+// minimalEnv. When "rm" and "ps" alone saw the caller's XDG_DATA_HOME,
+// rootless Podman looked for a timed-out container in another store and
+// it kept running (measurement run 45347080293).
+func TestEngineCommandsShareEnv(t *testing.T) {
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, "sandbox.go", nil, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, d := range f.Decls {
+		fn, ok := d.(*ast.FuncDecl)
+		if !ok || fn.Name.Name == "command" || fn.Name.Name == "isPodman" {
+			continue
+		}
+		ast.Inspect(fn, func(n ast.Node) bool {
+			if sel, ok := n.(*ast.SelectorExpr); ok {
+				if x, ok := sel.X.(*ast.Ident); ok && x.Name == "exec" && strings.HasPrefix(sel.Sel.Name, "Command") {
+					t.Errorf("%s: %s builds an engine command itself; use Engine.command", fset.Position(sel.Pos()), fn.Name.Name)
+				}
+			}
+			return true
+		})
+	}
+	for _, k := range []string{"XDG_DATA_HOME", "XDG_CONFIG_HOME", "CONTAINERS_REGISTRIES_CONF"} {
+		t.Setenv(k, "/x")
+		if !slices.Contains(minimalEnv(), k+"=/x") {
+			t.Errorf("%s is not passed to the engine", k)
+		}
+	}
+	t.Setenv("GITHUB_TOKEN", "secret")
+	if slices.ContainsFunc(minimalEnv(), func(v string) bool { return strings.HasPrefix(v, "GITHUB_TOKEN=") }) {
+		t.Error("the engine got an unrelated variable")
 	}
 }
