@@ -30,7 +30,9 @@ jobs:
         os: [ubuntu-latest, ubuntu-24.04-arm]
         engine: [podman] # Docker measured in run 45340299829
         repo:
-          - grafana/grafana@5db6ba887630c7fa12e5bfd063f2fa854025468c
+          # grafana's Podman runs (45340299829, 45343442723) timed out at
+          # 900 s and left the scratch folder; consul reproduces that below
+          # with a 120 s limit.
           - containerd/containerd@ce1877a1521be793afe42f8c024d9bc199eb063a
           - hashicorp/consul@97360268cce33aa9fea89d9db81ac0f48b13ecb0
     env:
@@ -47,7 +49,13 @@ jobs:
           go-version: "1.27.4"
           cache: false
       - name: Build
-        run: go build -o "$RUNNER_TEMP/siegekit" ./cmd/siegekit
+        run: |
+          go build -o "$RUNNER_TEMP/siegekit" ./cmd/siegekit
+          # The same build with gosec stopped after 120 s, to reproduce the
+          # scratch folder left after a timeout on rootless Podman.
+          sed -i 's/"timeoutSeconds": 900/"timeoutSeconds": 120/' plugins/gosec/plugin.json
+          go build -o "$RUNNER_TEMP/siegekit-short" ./cmd/siegekit
+          git checkout plugins/gosec/plugin.json
       - name: Measure
         run: |
           set -u +e
@@ -73,6 +81,21 @@ jobs:
           echo "SIEGEKIT_UNIQUE $(wc -l < $T/sk.txt)"
           df -h / | sed 's/^/DF_AFTER /'
 
+          if [ "$name" = hashicorp/consul ] && [ "$E" = podman ]; then
+            "$T/siegekit-short" scan --only gosec --yes --no-save --report-dir $T/rep2 $T/target > $T/sk2.log 2>&1
+            echo "SHORT exit=$? $(jq -c '.plugins[] | {status, reason}' $T/rep2/report.json | cut -c1-400)"
+            env -u XDG_DATA_HOME podman ps --all --format '{{.Names}} {{.Status}}' | sed 's/^/PS /'
+            a=$(sudo find $S | wc -l); sleep 15; b=$(sudo find $S | wc -l); echo "ENTRIES $a then $b"
+            podman unshare find $S -mindepth 1 ! -uid $(id -u) -printf '%U:%G %M %p\n' 2>&1 | head -8 | sed 's/^/NOTTOOL /'
+            podman unshare find $S -mindepth 1 -type d ! -perm -u+w -printf '%M %p\n' 2>&1 | head -5 | sed 's/^/RODIR /'
+            d=$(ls -d $S/gosec-* 2>/dev/null | head -1)
+            if [ -n "$d" ]; then
+              env -u XDG_DATA_HOME podman run --rm --pull never --user $(id -u):$(id -g) --network none --mount type=bind,source=$d,target=/s \
+                --entrypoint rm "$IMG" -rf /s/cache /s/tmp 2>&1 | head -6 | cut -c1-300 | sed 's/^/RMERR /'
+              echo "RM_AFTER $(sudo find $d | wc -l)"
+            fi
+          fi
+
           # Reference: network on, writable module cache, scratch on disk.
           # Removing the cache as docs/network.md says.
           G=$XDG_DATA_HOME/siegekit/data/gomod
@@ -81,7 +104,9 @@ jobs:
           mkdir -p $T/ref/gomod $T/ref/gc/tmp $T/ref/out; chmod -R 777 $T/ref
           ro=--read-only; [ "$E" = podman ] && ro="--read-only --read-only-tmpfs=false"
           t0=$(date +%s)
-          timeout 3600 $E run --rm --pull never --user $(id -u):$(id -g) --cap-drop ALL --security-opt no-new-privileges $ro \
+          # SiegeKit's Podman uses the default image store; this shell's
+          # XDG_DATA_HOME would point Podman at an empty one.
+          timeout 3600 env -u XDG_DATA_HOME $E run --rm --pull never --user $(id -u):$(id -g) --cap-drop ALL --security-opt no-new-privileges $ro \
             --tmpfs /tmp:rw,nosuid,nodev,noexec,size=256m --tmpfs /dev/shm:rw,nosuid,nodev,noexec,size=64m --pids-limit 256 --memory 2048m --memory-swap 2048m --cpus 2 \
             --env HOME=/tmp --workdir /tmp --env GOPATH=/tmp/go \
             --mount type=bind,source=$T/ref/gomod,target=/data/gomod --env GOMODCACHE=/data/gomod \
