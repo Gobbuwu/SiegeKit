@@ -197,9 +197,8 @@ func findUnreadable(ctx context.Context, root string) *unreadable {
 	}
 	uid, gid := sandbox.ToolIdentity(getuid(), getgid())
 	paths, err := checks.Unreadable(ctx, root, uint32(uid), uint32(gid)) // #nosec G115 -- ToolIdentity returns a fixed non-root ID for root
-	if errors.Is(err, checks.ErrTooManyFiles) {
-		err = nil // the tree is too large to check fully; report what was found
-	}
+	// A tree too large to check fully leaves err set: files after the cap
+	// may be unreadable too, so the run cannot be called complete (ADR 0067).
 	return &unreadable{paths: paths, err: err}
 }
 
@@ -277,15 +276,28 @@ func Run(ctx context.Context, ex Executor, selected []*manifest.Manifest, opt Op
 			return nil, err
 		}
 		pr := report.PluginResult{ID: c.ID, Family: c.Family, Tool: "siegekit", Version: opt.Version}
-		fs, result, err := c.Run(ctx, opt.TargetDir)
+		o, err := c.Run(ctx, opt.TargetDir)
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
 		}
-		if err != nil {
+		var na checks.NotApplicable
+		switch {
+		case errors.As(err, &na):
+			pr.Status, pr.Cause, pr.Reason = report.Skipped, report.CauseNoFiles, na.Reason
+		case errors.Is(err, checks.ErrTooManyFiles):
+			// A cap reached: a run cut short (ADR 0067).
+			pr.Status, pr.Stop, pr.Reason = report.Failed, report.StopFileLimit, fmt.Sprintf("stopped at %d files and folders, the most SiegeKit's own checks read", checks.MaxFiles)
+		case err != nil:
 			pr.Status, pr.Reason = report.Failed, err.Error()
-		} else {
-			pr.Status, pr.Findings, pr.Result = report.Ran, len(fs), result
-			all = append(all, fs...)
+		default:
+			pr.Status, pr.Findings, pr.Result = report.Ran, len(o.Findings), o.Result
+			for _, g := range o.Gaps {
+				pr.AddGap(g)
+			}
+			// SiegeKit's own checks read every file they want, within
+			// limits that are named as gaps when reached.
+			pr.Completeness = report.Complete
+			all = append(all, o.Findings...)
 		}
 		run.Plugins = append(run.Plugins, pr)
 	}
@@ -566,7 +578,9 @@ func repoIgnores(ctx context.Context, pr *report.PluginResult, m *manifest.Manif
 		}
 	}
 	n, err := checks.CountMarker(ctx, root, r.Marker)
-	if err != nil && !errors.Is(err, checks.ErrTooManyFiles) {
+	if errors.Is(err, checks.ErrTooManyFiles) {
+		pr.AddGap(report.Gap{Cause: report.GapOverLimit, Path: ".", Detail: fmt.Sprintf("%q comments were counted in the first %d files and folders only, so ignoreMarkers may be low", r.Marker, checks.MaxFiles)})
+	} else if err != nil {
 		return fmt.Errorf("count %q comments: %w", r.Marker, err)
 	}
 	pr.IgnoreMarkers = n

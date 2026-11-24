@@ -326,11 +326,11 @@ func TestSelectAndRunBuiltinChecks(t *testing.T) {
 	o := opts(t)
 	os.WriteFile(filepath.Join(o.TargetDir, "database.rules.json"), []byte(`{"rules":{".read":true}}`), 0o644)
 	o.Checks = cs
-	failing := checks.Check{ID: "broken", Family: "iac", Run: func(context.Context, string) ([]findings.Finding, string, error) {
-		return nil, "", errors.New("boom")
+	failing := checks.Check{ID: "broken", Family: "iac", Run: func(context.Context, string) (checks.Outcome, error) {
+		return checks.Outcome{}, errors.New("boom")
 	}}
-	saying := checks.Check{ID: "saying", Family: "secrets", Run: func(context.Context, string) ([]findings.Finding, string, error) {
-		return nil, "nothing seen", nil
+	saying := checks.Check{ID: "saying", Family: "secrets", Run: func(context.Context, string) (checks.Outcome, error) {
+		return checks.Outcome{Result: "nothing seen"}, nil
 	}}
 	o.Checks = append(o.Checks, failing, saying)
 	r, err := Run(context.Background(), &fake{}, nil, o)
