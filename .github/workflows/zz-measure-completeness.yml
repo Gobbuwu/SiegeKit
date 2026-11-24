@@ -1,0 +1,65 @@
+name: Measure completeness signals (temporary)
+
+# Temporary, removed before merge. Design parts 3 to 5 of "checks that
+# finish or say so": how to read the kernel's process and memory counters
+# (a waiter inside the container, polling from the host, or inspect after
+# exit) on both engines and both architectures, and the tools' own signals.
+on:
+  pull_request:
+    paths:
+      - .github/workflows/zz-measure-completeness.yml
+      - .github/zz-measure/**
+
+permissions:
+  contents: read
+
+jobs:
+  counters:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, ubuntu-24.04-arm]
+        engine: [podman, docker]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: "1.27.4"
+          cache: false
+      - name: Environment
+        run: |
+          uname -srm
+          ${{ matrix.engine }} --version
+          if [ ${{ matrix.engine }} = podman ]; then podman info --format 'rootless={{.Host.Security.Rootless}} cgroup={{.Host.CgroupsVersion}} manager={{.Host.CgroupManager}}'; else docker info --format 'cgroup={{.CgroupVersion}} driver={{.CgroupDriver}}'; fi
+      - name: Build the waiter
+        run: cd .github/zz-measure/waiter && CGO_ENABLED=0 go build -o "$RUNNER_TEMP/wait" . && chmod 755 "$RUNNER_TEMP/wait"
+      - name: Counters, three ways
+        env:
+          ENGINE: ${{ matrix.engine }}
+        run: WAITER="$RUNNER_TEMP/wait" .github/zz-measure/counters.sh
+
+  tools:
+    strategy:
+      fail-fast: false
+      matrix:
+        engine: [podman, docker]
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: "1.27.4"
+          cache: false
+      - name: Build the waiter
+        run: cd .github/zz-measure/waiter && CGO_ENABLED=0 go build -o "$RUNNER_TEMP/wait" . && chmod 755 "$RUNNER_TEMP/wait"
+      - name: Tool signals
+        env:
+          ENGINE: ${{ matrix.engine }}
+        run: WAITER="$RUNNER_TEMP/wait" .github/zz-measure/tools.sh
