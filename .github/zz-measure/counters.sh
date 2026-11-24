@@ -11,17 +11,19 @@ CMD[normal]='echo hi; sleep 1'
 CMD[latefork]='sleep 3; sh -c "for i in \$(seq 1 25); do sleep 30 & done" 2>/dev/null; exit 0'
 # a child is killed for memory, the parent exits 0 right after
 CMD[childoom]='sleep 3; head -c 300m /dev/zero | tail >/dev/null; exit 0'
+CMD[childoom2]=${CMD[childoom]}; CMD[childoom3]=${CMD[childoom]}; CMD[childoomnoadj]=${CMD[childoom]}
 base() { echo --pids-limit 20 --memory 64m --memory-swap 64m --cap-drop ALL --security-opt no-new-privileges --read-only --user "$(id -u):$(id -g)"; }
 cgpath() { # host cgroup dir of a running container's pid
   local pid=$1 rel
   if [ -f /sys/fs/cgroup/cgroup.controllers ]; then rel=$(awk -F: '$1=="0"{print $3}' /proc/$pid/cgroup); echo "/sys/fs/cgroup$rel"
   else rel=$(awk -F: '$2 ~ /(^|,)pids(,|$)/{print $3}' /proc/$pid/cgroup); echo "/sys/fs/cgroup/pids$rel"; fi
 }
-for c in normal latefork childoom; do
+for c in normal latefork childoom childoom2 childoom3 childoomnoadj; do
   echo "=== case $c engine $E"
   # B: waiter
-  $E run --rm $(base) -v "$W:/sk/wait:ro" -v "$OUT:/out" -e COUNTERS_OUT=/out/b-$c.json --entrypoint /sk/wait $IMG sh -c "${CMD[$c]}" >/dev/null 2>&1; echo "B exit $?"
-  python3 -c "import json,sys;d=json.load(open('$OUT/b-$c.json'));[print('B',k,'=',v.replace(chr(10),' | ')) for k,v in d.items() if not v.startswith('ERR')]"
+  adj=1; [ $c = childoomnoadj ] && adj=0
+  $E run --rm $(base) -v "$W:/sk/wait:ro" -v "$OUT:/out" -e COUNTERS_OUT=/out/b-$c.json -e OOM_ADJ=$adj --entrypoint /sk/wait $IMG sh -c "${CMD[$c]}" >/dev/null 2>&1; echo "B exit $?"
+  [ -f "$OUT/b-$c.json" ] || echo "B no counters written"; [ -f "$OUT/b-$c.json" ] && python3 -c "import json,sys;d=json.load(open('$OUT/b-$c.json'));[print('B',k,'=',v.replace(chr(10),' | ')) for k,v in d.items() if not v.startswith('ERR')]"
   # A: host poll every 2 s
   n=a$RANDOM; $E run -d --rm --name $n $(base) $IMG sh -c "${CMD[$c]}" >/dev/null
   last=""; lastm=""
