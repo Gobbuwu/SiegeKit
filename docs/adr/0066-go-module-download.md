@@ -66,7 +66,7 @@ Unverified, each with a test in the build or on the M2 check list:
 - Repositories larger than caddy (the scratch folder's disk use not pushed to a limit). Build: measured on containerd, consul and grafana (section "Build"), all equal to the reference; grafana needed the limit raised to 60 minutes.
 - Real repositories with `go.work`, `vendor/` or an in-repository `replace` (only synthetic fixtures so far). Build: `vendor/` (containerd) and in-repository replaces (consul) equal the reference; `go.work` on a real app (grafana) equals it with the 60-minute limit.
 - A real Apple-chip Mac, as for every other tool. Under Colima on GitHub's Intel Mac, scans took 17 to 33 times longer than on Linux (go-chi `go list -export`: 21 s on Linux, 368 to 696 s under Colima). That Mac is itself a VM (`kern.hv_vmm_present` = 1) and the same work takes 18 s directly on it, so the cost comes from Colima's VM inside a VM; scan time under Colima on a real Mac is unverified. caddy was not run on macOS. The owner chose to move on without a Mac (2026-11-24).
-- Podman's `registries.conf` mirroring ghcr.io (its documented behaviour, not measured).
+- Podman's `registries.conf` mirroring ghcr.io. Build: measured (run 45448158944, rootless Podman 5.7.0 amd64 and 4.9.3 arm64). A local registry held a copy of gosec's pinned image with the same digest, and ghcr.io was blocked; a pull without the mirror failed. With `~/.config/containers/registries.conf` naming the mirror for `ghcr.io`, `siegekit scan --only gosec --yes` pulled the image from the mirror, by its original name and digest (1 manifest and 9 blob requests at the mirror), and gosec ran (2 findings).
 
 ## Build (PR #78)
 

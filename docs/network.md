@@ -70,7 +70,7 @@ docker login        # or: podman login docker.io
       - https://mirror.gcr.io
   ```
 
-Images on `ghcr.io` (gosec, bandit) have no public mirror that SiegeKit knows of; a limit there has not been seen.
+Images on `ghcr.io` (gosec, bandit) have no public mirror that SiegeKit knows of; a limit there has not been seen. Podman can use a mirror you run yourself for `ghcr.io` in the same way (`prefix` and `location` set to `ghcr.io`, the mirror's address under `[[registry.mirror]]`), if the mirror holds the images with their digests unchanged (measured with a local registry and ghcr.io blocked, rootless Podman 5.7.0 and 4.9.3).
 
 ## Go modules for gosec
 
