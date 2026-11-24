@@ -179,7 +179,13 @@ Flags:
                     GET per table or path with the app's own public key.
                     A backend that is not on this machine must appear in
                     the app's scripts, and you type its host name in a
-                    terminal; no flag skips that
+                    terminal; no flag skips that. An app that calls
+                    Supabase only from its server serves no key: set
+                    SIEGEKIT_SUPABASE_KEY to the project's anon or
+                    publishable key (never a secret or service_role key).
+                    On a host not on this machine the project must accept
+                    it (one GET of /auth/v1/settings first), and then the
+                    scripts need not name the host
   --storage-url URL the app's file storage, for the storage-write test
                     (local targets only): the Supabase project URL, or
                     https://firebasestorage.googleapis.com or a local
@@ -190,9 +196,13 @@ Flags:
                     "write test files" after reading the list, and the host
                     name (the bucket name for hosted Firebase) when the
                     storage is not on this machine; no flag skips that. A
-                    file whose delete is refused stays and is listed
-  --source DIR      the app's repository: table names from its Supabase
-                    migrations, paths from database.rules.json, and an
+                    file whose delete is refused stays and is listed.
+                    SIEGEKIT_SUPABASE_KEY works as for --backend-url
+  --source DIR      the app's repository: whether it uses Supabase (a
+                    supabase/ directory) or Firebase (firebase.json or a
+                    rules file) when the app's scripts do not say, table
+                    names from its Supabase migrations, paths from
+                    database.rules.json, and an
                     OpenAPI file for Schemathesis when the app serves none,
                     and on local targets the GET routes of its server code
                     (Go routers, Rocket.Chat REST API, Express) for the

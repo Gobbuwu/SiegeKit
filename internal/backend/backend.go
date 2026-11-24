@@ -9,7 +9,6 @@ package backend
 
 import (
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -173,10 +172,7 @@ func ReadScripts(b *Backend, files map[string][]byte) Scripts {
 	}
 	tables, paths := map[string]bool{}, map[string]bool{}
 	var jwtKey, jwtFile, pubKey, pubFile string
-	ref := ""
-	if b.Kind == Supabase {
-		ref, _, _ = strings.Cut(b.URL.Host, ".")
-	}
+	ref := ProjectRef(b.URL.Host)
 	for _, n := range names {
 		data := string(files[n])
 		for _, m := range reFrom.FindAllStringSubmatch(data, -1) {
@@ -235,22 +231,8 @@ func detectKind(files map[string][]byte, names []string) Kind {
 // anonKey reports whether k is a Supabase anon JWT, for project ref when
 // ref is known. Its signature is not checked: the backend checks it.
 func anonKey(k, ref string) bool {
-	parts := strings.Split(k, ".")
-	if len(parts) != 3 {
-		return false
-	}
-	b, err := base64.RawURLEncoding.DecodeString(strings.TrimRight(parts[1], "="))
-	if err != nil {
-		return false
-	}
-	var p struct {
-		Role string `json:"role"`
-		Ref  string `json:"ref"`
-	}
-	if json.Unmarshal(b, &p) != nil || p.Role != "anon" {
-		return false
-	}
-	return ref == "" || p.Ref == "" || p.Ref == ref
+	role, r, ok := jwtClaims(k)
+	return ok && role == "anon" && (ref == "" || r == "" || r == ref)
 }
 
 // FirebasePath turns a path from code or rules into at most two segments
@@ -372,12 +354,10 @@ func Check(ctx context.Context, cfg egress.Config, b *Backend, kind Kind, key st
 	switch kind {
 	case Supabase:
 		if key == "" {
-			return r, errors.New("no Supabase public key was found in the app's scripts")
+			return r, ErrNoKey
 		}
-		header = http.Header{"Apikey": {key}, "Accept": {"application/json"}}
-		if strings.HasPrefix(key, "eyJ") {
-			header.Set("Authorization", "Bearer "+key)
-		}
+		header = supabaseHeader(key)
+		header.Set("Accept", "application/json")
 	case Firebase:
 		names = append([]string{""}, slices.DeleteFunc(slices.Clone(names), func(n string) bool { return n == "" })...)
 	default:
@@ -493,8 +473,9 @@ func empty(kind Kind, body []byte) bool {
 }
 
 // Findings turns readable tables and paths into findings: high, CWE-284
-// and CWE-862 (owner answer 3a), with names only.
-func Findings(b *Backend, r Result) []findings.Finding {
+// and CWE-862 (owner answer 3a), with names only. keyFrom is where the
+// Supabase key came from (a served file or KeyEnv); Firebase ignores it.
+func Findings(b *Backend, r Result, keyFrom string) []findings.Finding {
 	var out []findings.Finding
 	for _, rd := range r.Readable {
 		p, _, _ := strings.Cut(RequestPath(r.Kind, rd.Name, ""), "?")
@@ -509,8 +490,9 @@ func Findings(b *Backend, r Result) []findings.Finding {
 			if len(rd.Columns) > 0 {
 				cols = strings.Join(rd.Columns, ", ")
 			}
-			f.RuleID, f.Title = "supabase-table-readable", "Supabase table is readable with the app's public key"
-			f.Message = fmt.Sprintf("GET %s?select=*&limit=1 with the public key from the app's scripts returned a row. Anyone who loads the app has this key, so anyone can read this table. Columns: %s. Enable row-level security on %s and add policies that return only the rows a user may see (for example auth.uid() = user_id). If the table is meant to be public, such as a product list, check the columns above and ignore this. SiegeKit read one row and kept only the column names.", p, cols, rd.Name)
+			f.RuleID, f.Title = "supabase-table-readable", "Supabase table is readable with the project's public key"
+			with, anyone := keyReach(keyFrom)
+			f.Message = fmt.Sprintf("GET %s?select=*&limit=1 %s returned a row, so %s can read this table. Columns: %s. Enable row-level security on %s and add policies that return only the rows a user may see (for example auth.uid() = user_id). If the table is meant to be public, such as a product list, check the columns above and ignore this. SiegeKit read one row and kept only the column names.", p, with, anyone, cols, rd.Name)
 		} else {
 			name := "/" + rd.Name
 			f.RuleID, f.Title = "firebase-rtdb-readable", "Realtime Database data is readable without signing in"

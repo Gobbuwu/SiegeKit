@@ -3,6 +3,7 @@
 - Status: Accepted (design approved by the owner 2026-11-21: live write at the root and app paths, Firebase and Supabase, leftovers reported; local targets only until M2.10: chosen by the owner 2026-11-23, see item 1)
 - Date: 2026-11-23
 - Amends: [0037](0037-backend-live-check.md) (Cloud Storage is now tested live, and writes are tested), [0044](0044-typed-confirmations-limit.md) (one more typed phrase)
+- Amended by: [0061](0061-backends-the-scripts-do-not-name.md) (a Supabase storage the scripts do not name: the key from `SIEGEKIT_SUPABASE_KEY`, the kind from `--source`, the project must accept the key)
 
 ## Context
 
