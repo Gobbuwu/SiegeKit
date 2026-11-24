@@ -54,14 +54,18 @@ pull() {
   return 1
 }
 
+# Every port the gate listens on is below Linux's ephemeral range (32768 to
+# 60999 by default): a port in it can already be the local port of an
+# outgoing connection, such as an image pull, and then the listener's bind
+# fails (seen once on rootless Podman for 54322, PR #73).
 BUCKET=demo-siegekit.appspot.com
 FB=http://127.0.0.1:9199
-SB=http://127.0.0.1:54321
+SB=http://127.0.0.1:15421
 # The server-only app, and the gateway's port (on every address, so that it
 # can be reached at this machine's private address, which SiegeKit treats as
 # not on this machine).
 APPSO=http://127.0.0.1:8081/
-GW=54322
+GW=15422
 psql() { $E exec -i sbdb psql -q -v ON_ERROR_STOP=1 -U postgres -h localhost "$@"; }
 
 # objects prints every object in the storage, one full path per line, as
@@ -150,7 +154,7 @@ start() {
       curl -sf -X POST http://127.0.0.1:5000/bucket -H "apikey: $service" -H "Authorization: Bearer $service" \
         -H 'Content-Type: application/json' -d '{"id":"files","name":"files","public":false}' >/dev/null
       gateway "$sec" "$dbpw" "$anon" "$service"
-      nohup python3 proxy.py 54321 5000 >/dev/null 2>&1 &
+      nohup python3 proxy.py 15421 5000 >/dev/null 2>&1 &
       for _ in $(seq 20); do
         if [ "$(curl -s -o /dev/null -w '%{http_code}' $SB/storage/v1/status)" = 200 ]; then break; fi
         sleep 0.5
@@ -303,7 +307,7 @@ serveronly() {
   setrules s2 "$src"
   printf 'project_id = "server-only-app"\n' > "$src/supabase/config.toml"
   printf "insert into storage.buckets (id, name, public) values ('files', 'files', false);\n" > "$src/supabase/migrations/0.sql"
-  for run in "so-local http://127.0.0.1:54321 anon" "so-remote http://$addr:$GW pub" "so-other http://$addr:$GW other"; do
+  for run in "so-local http://127.0.0.1:15421 anon" "so-remote http://$addr:$GW pub" "so-other http://$addr:$GW other"; do
     read -r name url key <<< "$run"
     rep=$W/report-$name
     typed='write test files\n'
