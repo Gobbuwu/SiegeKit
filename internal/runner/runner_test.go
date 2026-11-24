@@ -3,6 +3,8 @@ package runner
 import (
 	"context"
 	"errors"
+	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -558,5 +560,116 @@ func TestRunGosecSkippedPackagesIncomplete(t *testing.T) {
 				t.Errorf("exit %d, want %d", got, wantExit)
 			}
 		})
+	}
+}
+
+func TestRunGosecGoModules(t *testing.T) {
+	for _, withCache := range []bool{false, true} {
+		t.Run(fmt.Sprintf("cache %v", withCache), func(t *testing.T) {
+			var scratch string
+			f := &fake{act: func(s sandbox.Spec) (*sandbox.Result, error) {
+				scratch = s.ScratchDir
+				for _, sub := range []string{"cache", "tmp"} {
+					st, err := os.Stat(filepath.Join(s.ScratchDir, sub))
+					if err != nil || st.Mode().Perm() != 0o777 {
+						t.Errorf("scratch %s: %v", sub, err)
+					}
+				}
+				write(t, s.OutDir, "gosec.sarif", gosecSARIF)
+				write(t, s.OutDir, s.StdoutFile, `{"Golang errors": {"/target/cmd/app/main.go": []}, "Issues": [], "Stats": {"files": 2}}`)
+				return &sandbox.Result{Status: sandbox.Completed}, nil
+			}}
+			o := opts(t)
+			o.DataRoot = filepath.Join(t.TempDir(), "data")
+			o.Notes = map[string]string{"gosec": "The Go module download was not done: you declined it."}
+			if withCache {
+				if err := os.MkdirAll(filepath.Join(o.DataRoot, "gomod", "cache"), 0o755); err != nil {
+					t.Fatal(err)
+				}
+				write(t, filepath.Join(o.DataRoot, "gomod", "cache"), "x.zip", strings.Repeat("x", 2048))
+			}
+			write(t, o.TargetDir, "main.go", "package main\n")
+			r, err := Run(context.Background(), f, []*manifest.Manifest{builtin(t, "gosec")}, o)
+			if err != nil {
+				t.Fatal(err)
+			}
+			s := f.specs[0]
+			if filepath.Dir(scratch) != filepath.Join(o.DataRoot, "scratch") || s.Network != "none" {
+				t.Errorf("scratch %q, network %q", scratch, s.Network)
+			}
+			if _, err := os.Stat(scratch); !os.IsNotExist(err) {
+				t.Errorf("scratch not deleted: %v", err)
+			}
+			want := map[string]string{"GOPATH": "/tmp/go", "GOCACHE": "/siegekit/scratch/cache", "GOTMPDIR": "/siegekit/scratch/tmp"}
+			if withCache {
+				want["GOMODCACHE"], want["GOPROXY"] = "/data/gomod", "off"
+				if s.DataDir != filepath.Join(o.DataRoot, "gomod") || s.DataMount != "/data/gomod" || s.DataWritable {
+					t.Errorf("cache mount %q %q %v", s.DataDir, s.DataMount, s.DataWritable)
+				}
+			} else if s.DataDir != "" {
+				t.Errorf("no cache, but %q mounted", s.DataDir)
+			}
+			if !maps.Equal(s.Env, want) {
+				t.Errorf("env %v, want %v", s.Env, want)
+			}
+			p := r.Plugins[0]
+			if p.Status != report.Failed || !strings.HasSuffix(p.Reason, "Findings in the other packages are kept. The Go module download was not done: you declined it.") {
+				t.Errorf("reason %q", p.Reason)
+			}
+			if withCache != strings.HasPrefix(p.Input, "Go modules from SiegeKit's shared module cache, read-only (2 KiB in ") {
+				t.Errorf("input %q", p.Input)
+			}
+		})
+	}
+}
+
+// TestRemoveScratch checks the cleanup container: rootless engines map
+// the container user to another host user, whose folders the caller
+// cannot empty.
+func TestRemoveScratch(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("root can delete any file")
+	}
+	parent := t.TempDir()
+	dir := filepath.Join(parent, "gosec-1")
+	locked := filepath.Join(dir, "cache", "00")
+	if err := os.MkdirAll(locked, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	write(t, locked, "x", "x")
+	os.Chmod(locked, 0o555)
+	defer os.Chmod(locked, 0o755)
+	f := &fake{act: func(s sandbox.Spec) (*sandbox.Result, error) {
+		if s.Entrypoint != "rm" || !slices.Equal(s.Args, []string{"-rf", "/siegekit/scratch/cache", "/siegekit/scratch/tmp"}) || s.ScratchDir != dir || s.Network != "none" {
+			t.Errorf("cleanup spec %+v", s)
+		}
+		os.Chmod(locked, 0o755) // what the tool's user can do
+		return &sandbox.Result{Status: sandbox.Completed}, nil
+	}}
+	if err := removeScratch(f, "img", dir); err != nil {
+		t.Fatal(err)
+	}
+	if len(f.specs) != 1 {
+		t.Errorf("%d cleanup runs", len(f.specs))
+	}
+	if _, err := os.Stat(dir); !os.IsNotExist(err) {
+		t.Errorf("not deleted: %v", err)
+	}
+	// Nothing to clean: no container.
+	f = &fake{act: func(sandbox.Spec) (*sandbox.Result, error) { t.Error("ran"); return nil, nil }}
+	if err := removeScratch(f, "img", t.TempDir()); err != nil || len(f.specs) != 0 {
+		t.Errorf("%v %d", err, len(f.specs))
+	}
+	// The cleanup fails: the folder is named.
+	if err := os.MkdirAll(locked, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	write(t, locked, "x", "x")
+	os.Chmod(locked, 0o555)
+	f = &fake{act: func(sandbox.Spec) (*sandbox.Result, error) {
+		return &sandbox.Result{Status: sandbox.Completed, ExitCode: 1, Stderr: "rm: denied"}, nil
+	}}
+	if err := removeScratch(f, "img", dir); err == nil || !strings.Contains(err.Error(), dir) || !strings.Contains(err.Error(), "rm: denied") {
+		t.Errorf("%v", err)
 	}
 }

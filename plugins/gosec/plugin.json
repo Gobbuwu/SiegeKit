@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "gosec",
   "name": "gosec Go code scan",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Finds common security mistakes in Go code, such as command and SQL injection, weak cryptography and unsafe file permissions.",
   "family": "sast",
   "mode": "passive",
@@ -52,7 +52,8 @@
     ],
     "env": {
       "GOPATH": "/tmp/go"
-    }
+    },
+    "goModules": true
   },
   "output": {
     "format": "sarif",

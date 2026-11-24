@@ -148,6 +148,10 @@ type Options struct {
 	// Unavailable records plugins that cannot run because a dependency is
 	// missing (ADR 0016), keyed by plugin ID. They are reported, not run.
 	Unavailable map[string]Unavailable
+	// Notes say, by plugin ID, why an input a plugin can use is missing,
+	// such as a declined Go module download (ADR 0066). A note is added to
+	// the plugin's reason when the plugin reports work it could not do.
+	Notes map[string]string
 }
 
 // Unavailable is the reported outcome of a plugin that was not run.
@@ -324,7 +328,7 @@ func Run(ctx context.Context, ex Executor, selected []*manifest.Manifest, opt Op
 	return run, nil
 }
 
-func runPlugin(ctx context.Context, ex Executor, m *manifest.Manifest, opt Options, work string) (report.PluginResult, []findings.Finding) {
+func runPlugin(ctx context.Context, ex Executor, m *manifest.Manifest, opt Options, work string) (result report.PluginResult, found []findings.Finding) {
 	pr := report.PluginResult{ID: m.ID, Family: m.Family, Tool: m.Tool.Name, Version: m.Tool.Version}
 	fail := func(status report.Status, format string, a ...any) (report.PluginResult, []findings.Finding) {
 		pr.Status = status
@@ -390,9 +394,26 @@ func runPlugin(ctx context.Context, ex Executor, m *manifest.Manifest, opt Optio
 			return fail(report.Failed, "%v", err)
 		}
 	}
+	var scratch string
+	if m.Run.GoModules {
+		var g goRun
+		g, err = goSetup(m, opt.DataRoot, work)
+		if err != nil {
+			return fail(report.Failed, "%v", err)
+		}
+		scratch, env, pr.Input = g.scratch, g.env, g.input
+		dataDir, dataMount = g.cache, g.cacheMount
+		// The scratch can hold gigabytes; it is deleted whatever the
+		// outcome, and a failure to delete it is reported.
+		defer func() {
+			if err := removeScratch(ex, image, scratch); err != nil {
+				result.Reason = strings.TrimSpace(result.Reason + " " + err.Error())
+			}
+		}()
+	}
 	res, err := ex.Run(ctx, sandbox.Spec{
 		Image: image, Args: args, Env: env, TargetDir: opt.TargetDir, OutDir: out, Network: m.Network,
-		DataDir: dataDir, DataMount: dataMount, Files: fileMounts, ConfigFile: configFile,
+		DataDir: dataDir, DataMount: dataMount, Files: fileMounts, ConfigFile: configFile, ScratchDir: scratch,
 		CPUs: cpus, MemoryMiB: m.Resources.MemoryMiB,
 		Timeout:    time.Duration(m.Resources.TimeoutSeconds) * time.Second,
 		StdoutFile: stdoutFile(m),
@@ -432,6 +453,9 @@ func runPlugin(ctx context.Context, ex Executor, m *manifest.Manifest, opt Optio
 			pr.Status, pr.Reason = report.Failed, err.Error()
 		} else if missed != "" {
 			pr.Status, pr.Reason = report.Failed, missed
+		}
+		if note := opt.Notes[m.ID]; note != "" && pr.Status == report.Failed {
+			pr.Reason += " " + note
 		}
 		if warning != "" && pr.Status == report.Failed {
 			pr.Reason += " " + warning

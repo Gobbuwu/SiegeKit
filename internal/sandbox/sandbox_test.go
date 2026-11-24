@@ -847,3 +847,131 @@ func TestDetectEngineEnv(t *testing.T) {
 		t.Errorf("Detect = %+v, %v", e, err)
 	}
 }
+
+func TestEgressSpec(t *testing.T) {
+	ca := filepath.Join(t.TempDir(), "ca.pem")
+	if err := os.WriteFile(ca, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	s := Spec{
+		Image: testImage, Args: []string{"mod", "download"}, OutDir: t.TempDir(), Network: "egress",
+		DataDir: t.TempDir(), DataMount: "/data/gomod", DataWritable: true, InputDir: t.TempDir(), Entrypoint: "go",
+		CPUs: 1, MemoryMiB: 128, Timeout: time.Minute,
+		Egress: Egress{CAFile: ca, Proxy: "http://proxy.example:3128"},
+	}
+	args, err := s.EngineArgs("n", 1000, 1000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	joined := strings.Join(args, " ")
+	for _, want := range []string{
+		"--env HTTPS_PROXY=http://proxy.example:3128", "--env HTTP_PROXY=http://proxy.example:3128",
+		"--env https_proxy=http://proxy.example:3128", "--env http_proxy=http://proxy.example:3128",
+		"source=" + ca + ",target=" + CAMount + ",readonly", "--env SSL_CERT_FILE=" + CAMount,
+		",target=" + InputMount + ",readonly", "--entrypoint go " + testImage + " mod download",
+	} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("missing %q in %s", want, joined)
+		}
+	}
+	if strings.Contains(joined, "--network") {
+		t.Errorf("egress uses the engine's default network: %s", joined)
+	}
+}
+
+func TestScratchSpec(t *testing.T) {
+	s := spec(t, "scan")
+	s.ScratchDir = t.TempDir()
+	args, err := s.EngineArgs("n", 1000, 1000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	joined := strings.Join(args, " ")
+	if !strings.Contains(joined, "source="+s.ScratchDir+",target="+ScratchMount+" ") || strings.Contains(joined, ScratchMount+",readonly") {
+		t.Errorf("scratch must be mounted read-write: %s", joined)
+	}
+}
+
+func TestEgressRejections(t *testing.T) {
+	ca := filepath.Join(t.TempDir(), "ca.pem")
+	if err := os.WriteFile(ca, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cases := map[string]func(s *Spec){
+		"proxy on a scan":      func(s *Spec) { s.Egress.Proxy = "http://p:1" },
+		"CA file on a scan":    func(s *Spec) { s.Egress.CAFile = ca },
+		"scratch with network": func(s *Spec) { s.TargetDir, s.Network, s.ScratchDir = "", "egress", s.OutDir },
+		"entrypoint path":      func(s *Spec) { s.Entrypoint = "/bin/sh" },
+		"entrypoint option":    func(s *Spec) { s.Entrypoint = "--privileged" },
+		"input comma":          func(s *Spec) { s.InputDir = s.TargetDir + ",readonly=false" },
+		"scratch not a dir":    func(s *Spec) { s.ScratchDir = filepath.Join(s.TargetDir, "app.txt") },
+	}
+	for name, mutate := range cases {
+		t.Run(name, func(t *testing.T) {
+			s := spec(t, "true")
+			s.DataDir, s.DataMount = t.TempDir(), "/data/gomod"
+			mutate(&s)
+			if s.Network == "egress" {
+				s.DataWritable = true
+			}
+			if _, err := s.EngineArgs("n", 1000, 1000); err == nil {
+				t.Fatal("expected rejection")
+			}
+		})
+	}
+	t.Run("egress CA file missing", func(t *testing.T) {
+		s := Spec{Image: testImage, Args: []string{"x"}, OutDir: t.TempDir(), Network: "egress", DataDir: t.TempDir(), DataMount: "/data/x",
+			DataWritable: true, CPUs: 1, MemoryMiB: 128, Timeout: time.Minute, Egress: Egress{CAFile: "/nonexistent/ca.pem"}}
+		if _, err := s.EngineArgs("n", 1000, 1000); err == nil {
+			t.Fatal("expected rejection")
+		}
+	})
+}
+
+func TestCheckProxy(t *testing.T) {
+	for _, ok := range []string{"http://proxy:3128", "https://proxy.example.com:8443", "http://10.0.0.1:3128/", "http://host.docker.internal:3128", "http://[::1]:3128"} {
+		if err := CheckProxy(ok); err != nil {
+			t.Errorf("%s: %v", ok, err)
+		}
+	}
+	for _, bad := range []string{"", "proxy:3128", "socks5://p:1", "http://user:pw@p:1", "http://user@p:1", "http://p:1/path", "http://p:1?x=1", "http://p:1#f", "http://", "http://p:1\n"} {
+		if err := CheckProxy(bad); err == nil {
+			t.Errorf("%q accepted", bad)
+		}
+	}
+	if err := CheckProxy("http://user:secret@p:1"); err == nil || strings.Contains(err.Error(), "secret") {
+		t.Errorf("the error must not repeat the password: %v", err)
+	}
+}
+
+func TestCheckEnvGoProxy(t *testing.T) {
+	for _, v := range []string{"off", GoProxy} {
+		if err := CheckEnv(map[string]string{"GOPROXY": v, "GONOPROXY": "corp.example"}); err != nil {
+			t.Errorf("GOPROXY=%s: %v", v, err)
+		}
+	}
+	for _, env := range []map[string]string{
+		{"GOPROXY": "https://evil.example"}, {"GOPROXY": GoProxy + ",direct"}, {"HTTPS_PROXY": "http://p:1"}, {"ALL_PROXY": "x"}, {"NO_PROXY": "x"},
+	} {
+		if err := CheckEnv(env); err == nil {
+			t.Errorf("%v accepted", env)
+		}
+	}
+}
+
+func TestTooManyPullsHint(t *testing.T) {
+	// Engine output seen on 2026-11-24 in the development sandbox.
+	hub := `Error response from daemon: unknown: failed to resolve reference "docker.io/library/registry:2": unexpected status from HEAD request to https://registry-1.docker.io/v2/library/registry/manifests/2: 429 Too Many Requests`
+	if h := TooManyPullsHint("docker.io/aquasec/trivy@sha256:x", hub); !strings.Contains(h, "docker login") || !strings.Contains(h, "mirror.gcr.io") {
+		t.Errorf("Docker Hub hint: %q", h)
+	}
+	if h := TooManyPullsHint("docker.io/x@sha256:x", "toomanyrequests: You have reached your unauthenticated pull rate limit."); h == "" {
+		t.Error("toomanyrequests not recognised")
+	}
+	if h := TooManyPullsHint("ghcr.io/x@sha256:x", hub); h == "" || strings.Contains(h, "docker login") {
+		t.Errorf("other registry: %q", h)
+	}
+	if h := TooManyPullsHint("docker.io/x@sha256:x", "manifest unknown"); h != "" {
+		t.Errorf("unrelated error: %q", h)
+	}
+}

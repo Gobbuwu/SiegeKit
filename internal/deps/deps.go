@@ -18,8 +18,10 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/Gobbuwu/SiegeKit/internal/files"
+	"github.com/Gobbuwu/SiegeKit/internal/gomod"
 	"github.com/Gobbuwu/SiegeKit/internal/manifest"
 	"github.com/Gobbuwu/SiegeKit/internal/report"
 	"github.com/Gobbuwu/SiegeKit/internal/runner"
@@ -42,6 +44,9 @@ const (
 	Image = "image"
 	Data  = "data"
 	File  = "file" // a pinned archive or binary (ADR 0024)
+	// GoModules are the scanned repository's Go modules, for plugins with
+	// run.goModules (ADR 0066).
+	GoModules = "go-modules"
 )
 
 // Roots are where downloaded data (ADR 0014) and pinned files (ADR 0024)
@@ -49,6 +54,12 @@ const (
 type Roots struct {
 	Data  string
 	Files string
+	// Target is the scanned directory, whose Go modules can be
+	// downloaded (ADR 0066); "" for none.
+	Target string
+	// Egress is the person's proxy and extra CA certificate for the
+	// containers that use the network (ADR 0066).
+	Egress sandbox.Egress
 }
 
 // FetchFile downloads one pinned file; a variable so tests can replace it.
@@ -70,6 +81,8 @@ type Dep struct {
 	// Users are all the plugins that need this image (Plugin is the first);
 	// one image is downloaded once even when several plugins use it.
 	Users []*manifest.Manifest
+	// Go is what was read of the target's Go modules (Kind GoModules).
+	Go *gomod.Tree
 }
 
 func (d Dep) users() []*manifest.Manifest {
@@ -113,6 +126,13 @@ func (d Dep) Name() string {
 	}
 	if d.Kind == File {
 		return fmt.Sprintf("%s %s file %s", d.Plugin.Tool.Name, d.Plugin.Tool.Version, path.Base(d.Artifact.Ref))
+	}
+	if d.Kind == GoModules {
+		noun := "modules"
+		if d.Go.Required == 1 {
+			noun = "module"
+		}
+		return fmt.Sprintf("Go modules for %s: %d %s named in your go.mod files, from proxy.golang.org, which sees their names and versions", d.NeededBy(), d.Go.Required, noun)
 	}
 	return fmt.Sprintf("%s %s container image", d.Plugin.Tool.Name, d.Plugin.Tool.Version)
 }
@@ -180,6 +200,52 @@ func Plan(ctx context.Context, eng Engine, ms []*manifest.Manifest, roots Roots)
 	return out, nil
 }
 
+// PlanGo adds the target's Go modules to deps, which Plan returned, for
+// the plugins in ms with run.goModules (ADR 0066). They count as installed
+// when the shared module cache already holds every module, which a check
+// with no network finds; that needs the plugin's image. A target with no
+// go.mod adds nothing. Module files that cannot be read are an error.
+func PlanGo(ctx context.Context, ex runner.Executor, deps []Dep, ms []*manifest.Manifest, roots Roots) ([]Dep, error) {
+	var users []*manifest.Manifest
+	for _, m := range ms {
+		if _, ok := runner.ImageFor(m); ok && m.Run.GoModules && roots.Target != "" {
+			users = append(users, m)
+		}
+	}
+	if len(users) == 0 {
+		return deps, nil
+	}
+	t, err := gomod.Find(ctx, roots.Target)
+	if err != nil {
+		return deps, fmt.Errorf("read the Go module files: %w", err)
+	}
+	if len(t.Dirs) == 0 {
+		return deps, nil
+	}
+	d := Dep{Kind: GoModules, Plugin: users[0], Users: users, Go: t, Size: -1}
+	// One check is enough: the cache is shared, and every such plugin
+	// downloads the same modules.
+	m := users[0]
+	image, _ := runner.ImageFor(m)
+	if slices.ContainsFunc(deps, func(x Dep) bool { return x.Kind == Image && x.Image == image && x.Installed }) && roots.Data != "" {
+		d.Installed, err = gomod.Present(ctx, ex, t, goJob(m, roots))
+		if err != nil {
+			return deps, fmt.Errorf("check the Go module cache: %w", err)
+		}
+	}
+	return append(deps, d), nil
+}
+
+// goJob is how m's image downloads modules into the cache under roots.
+func goJob(m *manifest.Manifest, roots Roots) gomod.Job {
+	image, _ := runner.ImageFor(m)
+	return gomod.Job{
+		Image: image, CPUs: min(m.Resources.CPUs, runtime.NumCPU()), MemoryMiB: m.Resources.MemoryMiB,
+		Timeout:  time.Duration(m.Resources.TimeoutSeconds) * time.Second,
+		DataRoot: roots.Data, Egress: roots.Egress, Private: gomod.PrivateEnv(os.Getenv),
+	}
+}
+
 func dataInstalled(root, id string) bool {
 	if root == "" {
 		return false
@@ -219,7 +285,10 @@ func Missing(deps []Dep) []Dep {
 func Describe(w io.Writer, deps []Dep) {
 	var have []string
 	for _, d := range deps {
-		if d.Installed {
+		switch {
+		case d.Installed && d.Kind == GoModules:
+			have = append(have, "Go modules for "+d.NeededBy()+" (in SiegeKit's module cache)")
+		case d.Installed:
 			have = append(have, d.Name())
 		}
 	}
@@ -298,11 +367,15 @@ func parseAnswer(a string, missing []Dep) ([]Dep, bool) {
 	return out, true
 }
 
-// Install downloads the chosen images, files and data. Data needs its
-// plugin's image, so data whose image or files are still missing is not
-// downloaded. It returns the plugins that cannot run, with the reason;
-// notChosen gives the outcome of a plugin whose dependency was not chosen.
-func Install(ctx context.Context, eng Engine, ex runner.Executor, deps, chosen []Dep, roots Roots, notChosen func(Dep) runner.Unavailable, out io.Writer) (map[string]runner.Unavailable, error) {
+// Install downloads the chosen images, files, data and Go modules. Data
+// and Go modules need their plugin's image, so they are not downloaded
+// while the image or files are still missing. It returns the plugins that
+// cannot run, with the reason, and notes for plugins that run without
+// their Go modules (runner.Options.Notes); notChosen gives the outcome of
+// a plugin whose dependency was not chosen. A plugin still runs without
+// its Go modules (ADR 0066): it then reports the packages it could not
+// load.
+func Install(ctx context.Context, eng Engine, ex runner.Executor, deps, chosen []Dep, roots Roots, notChosen func(Dep) runner.Unavailable, out io.Writer) (map[string]runner.Unavailable, map[string]string, error) {
 	pick := func(d Dep) bool {
 		return slices.ContainsFunc(chosen, func(c Dep) bool { return c.key() == d.key() })
 	}
@@ -325,7 +398,7 @@ func Install(ctx context.Context, eng Engine, ex runner.Executor, deps, chosen [
 			fmt.Fprintf(out, "Downloading %s...\n", d.Name())
 			if err := eng.Pull(ctx, d.Image); err != nil {
 				if ctx.Err() != nil {
-					return nil, ctx.Err()
+					return nil, nil, ctx.Err()
 				}
 				for _, m := range d.users() {
 					un[m.ID] = runner.Fail(report.CauseMissingDependency, fmt.Sprintf("could not install %s: %v", d.Name(), err))
@@ -354,12 +427,12 @@ func Install(ctx context.Context, eng Engine, ex runner.Executor, deps, chosen [
 			continue
 		}
 		if roots.Files == "" {
-			return nil, errors.New("cannot find a directory for downloaded files")
+			return nil, nil, errors.New("cannot find a directory for downloaded files")
 		}
 		fmt.Fprintf(out, "Downloading %s...\n", d.Name())
 		if err := FetchFile(ctx, roots.Files, d.Artifact); err != nil {
 			if ctx.Err() != nil {
-				return nil, ctx.Err()
+				return nil, nil, ctx.Err()
 			}
 			mark(d, runner.Fail(report.CauseMissingDependency, fmt.Sprintf("could not install %s: %v", d.Name(), err)))
 		}
@@ -380,12 +453,12 @@ func Install(ctx context.Context, eng Engine, ex runner.Executor, deps, chosen [
 	}
 	if len(update) > 0 {
 		if roots.Data == "" {
-			return nil, errors.New("cannot find a directory for downloaded data")
+			return nil, nil, errors.New("cannot find a directory for downloaded data")
 		}
 		fmt.Fprintln(out, "Downloading tool data (network access, none of your files).")
-		results, err := runner.Update(ctx, ex, update, roots.Data, "")
+		results, err := runner.Update(ctx, ex, update, roots.Data, "", roots.Egress)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		for _, r := range results {
 			if r.Err != nil {
@@ -393,7 +466,36 @@ func Install(ctx context.Context, eng Engine, ex runner.Executor, deps, chosen [
 			}
 		}
 	}
-	return un, nil
+	notes := map[string]string{}
+	for _, d := range deps {
+		if d.Kind != GoModules || d.Installed {
+			continue
+		}
+		note := ""
+		switch _, done := un[d.Plugin.ID]; {
+		case done:
+			continue // its image or a file is missing; already reported
+		case !pick(d):
+			note = "The Go module download was not done: " + notChosen(d).Reason + "."
+		case roots.Data == "":
+			return nil, nil, errors.New("cannot find a directory for downloaded data")
+		default:
+			fmt.Fprintf(out, "Downloading %s (network access, only copies of your go.mod, go.sum, go.work and go.work.sum files)...\n", d.Name())
+			if err := gomod.Download(ctx, ex, d.Go, goJob(d.Plugin, roots)); err != nil {
+				if ctx.Err() != nil {
+					return nil, nil, ctx.Err()
+				}
+				fmt.Fprintf(out, "Could not download every Go module: %v\n", err)
+				note = "The Go module download did not complete: " + err.Error() + "."
+			}
+		}
+		if note != "" {
+			for _, m := range d.users() {
+				notes[m.ID] = note
+			}
+		}
+	}
+	return un, notes, nil
 }
 
 // NoEngine marks every plugin as skipped because no container engine was

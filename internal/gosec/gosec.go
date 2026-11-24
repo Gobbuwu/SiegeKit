@@ -236,6 +236,6 @@ func Reason(dirs []string) string {
 	if len(dirs) == 1 {
 		noun = "package"
 	}
-	return fmt.Sprintf("gosec could not load %d Go %s, so their code was not checked: %s%s. Usually these import modules that are not in the repository (scans have no network; vendor the modules with 'go mod vendor' to check them). Findings in the other packages are kept",
+	return fmt.Sprintf("gosec could not load %d Go %s, so their code was not checked: %s%s. Usually these import modules that are neither in the repository nor in SiegeKit's Go module cache (scans have no network: allow the Go module download when SiegeKit asks, or pass --yes). Findings in the other packages are kept.",
 		len(dirs), noun, strings.Join(shown, ", "), more)
 }

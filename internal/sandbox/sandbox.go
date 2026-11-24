@@ -14,6 +14,7 @@ import (
 	"io"
 	"io/fs"
 	"maps"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -35,6 +36,10 @@ const (
 	TargetMount = "/target"
 	OutMount    = "/out"
 	WorkDir     = "/tmp/work"
+	// InputMount is where Spec.InputDir is mounted, read-only.
+	InputMount = "/siegekit/input"
+	// ScratchMount is where Spec.ScratchDir is mounted, read-write.
+	ScratchMount = "/siegekit/scratch"
 )
 
 // DefaultOutputLimit caps what a tool may write to its output directory
@@ -98,6 +103,36 @@ type Spec struct {
 	// the tool's standard output, which is then not mixed into Stderr
 	// (ADR 0040). It counts against OutputLimit.
 	StdoutFile string
+	// Entrypoint, if set, replaces the image's entrypoint with a program
+	// on the image's PATH, such as "go" for the Go module download
+	// (ADR 0066).
+	Entrypoint string
+	// InputDir is a directory SiegeKit prepared for the tool, such as
+	// copies of a repository's go.mod files, mounted read-only at
+	// InputMount; empty for none.
+	InputDir string
+	// ScratchDir is an empty directory in SiegeKit's private run
+	// directory, mounted read-write at ScratchMount, for a scan's build
+	// cache and compile scratch (ADR 0066); empty for none. Only for runs
+	// without network. The caller deletes it afterwards.
+	ScratchDir string
+	// Egress is how an "egress" run reaches the internet through a proxy
+	// or TLS inspection (ADR 0066).
+	Egress Egress
+}
+
+// Egress is the person's proxy and extra CA certificate for the containers
+// that use the network: data updates and the Go module download (ADR 0066,
+// Porchlet finding SK-8). Scan containers never get them.
+type Egress struct {
+	// CAFile is a PEM file of extra CA certificates, mounted read-only at
+	// CAMount and named by SSL_CERT_FILE. Go programs then still read the
+	// image's /etc/ssl/certs, so it adds to the image's roots (measured,
+	// ADR 0066).
+	CAFile string
+	// Proxy is an http or https URL with no user name or password, passed
+	// as HTTPS_PROXY and HTTP_PROXY.
+	Proxy string
 }
 
 // FileMount is a host directory mounted read-only at Mount, which must be
@@ -220,6 +255,25 @@ func (s *Spec) validate() error {
 	if s.Network != "target-only" && (s.Relay != "" || s.CAFile != "") {
 		return errors.New("relay and CA file are only for target-only runs")
 	}
+	if s.Egress != (Egress{}) && s.Network != "egress" {
+		return errors.New("a proxy or extra CA file is only for egress runs")
+	}
+	if s.Egress.CAFile != "" {
+		if err := checkMountFile("CA file", s.Egress.CAFile); err != nil {
+			return err
+		}
+	}
+	if s.Egress.Proxy != "" {
+		if err := CheckProxy(s.Egress.Proxy); err != nil {
+			return err
+		}
+	}
+	if s.Entrypoint != "" && !reEntrypoint.MatchString(s.Entrypoint) {
+		return fmt.Errorf("entrypoint %q must be a program name matching %s", s.Entrypoint, reEntrypoint)
+	}
+	if s.ScratchDir != "" && s.Network != "none" {
+		return errors.New("a scratch directory is only for runs without network")
+	}
 	if s.ConfigFile != "" {
 		if err := checkMountFile("config file", s.ConfigFile); err != nil {
 			return err
@@ -258,7 +312,7 @@ func (s *Spec) validate() error {
 	for _, d := range []struct {
 		name, path string
 		required   bool
-	}{{"target", s.TargetDir, false}, {"output", s.OutDir, true}, {"data", s.DataDir, false}} {
+	}{{"target", s.TargetDir, false}, {"output", s.OutDir, true}, {"data", s.DataDir, false}, {"input", s.InputDir, false}, {"scratch", s.ScratchDir, false}} {
 		if d.path == "" {
 			if d.required {
 				return fmt.Errorf("%s directory is required", d.name)
@@ -323,6 +377,16 @@ func (s *Spec) EngineArgs(name string, uid, gid int) ([]string, error) {
 	}
 	// "egress" uses the engine's default network, so no flag is passed.
 	switch s.Network {
+	case "egress":
+		if p := s.Egress.Proxy; p != "" {
+			for _, k := range []string{"HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"} {
+				args = append(args, "--env", k+"="+p)
+			}
+		}
+		if s.Egress.CAFile != "" {
+			args = append(args, "--mount", "type=bind,source="+s.Egress.CAFile+",target="+CAMount+",readonly",
+				"--env", "SSL_CERT_FILE="+CAMount)
+		}
 	case "none":
 		args = append(args, "--network", "none")
 	case "target-only":
@@ -388,6 +452,15 @@ func (s *Spec) EngineArgs(name string, uid, gid int) ([]string, error) {
 	for _, f := range s.Files {
 		args = append(args, "--mount", "type=bind,source="+f.Host+",target="+f.Mount+",readonly")
 	}
+	if s.InputDir != "" {
+		args = append(args, "--mount", "type=bind,source="+s.InputDir+",target="+InputMount+",readonly")
+	}
+	if s.ScratchDir != "" {
+		args = append(args, "--mount", "type=bind,source="+s.ScratchDir+",target="+ScratchMount)
+	}
+	if s.Entrypoint != "" {
+		args = append(args, "--entrypoint", s.Entrypoint)
+	}
 	args = append(args, s.Image)
 	args = append(args, s.Args...)
 	return args, nil
@@ -416,6 +489,15 @@ func (e *Engine) Run(ctx context.Context, s Spec) (*Result, error) {
 		return nil, err
 	}
 	defer os.Chmod(s.OutDir, 0o700) // #nosec G302 -- a directory, restored to owner-only after the run
+	if s.ScratchDir != "" {
+		// As for the output directory; the caller deletes it afterwards.
+		if err := requirePrivateParent(s.ScratchDir); err != nil {
+			return nil, err
+		}
+		if err := os.Chmod(s.ScratchDir, 0o777); err != nil { // #nosec G302 -- the container user may differ from the caller; the parent is checked to be private (0700) first
+			return nil, err
+		}
+	}
 	if s.DataWritable {
 		// Same reasoning for a data update; afterwards the data stays
 		// readable (not writable) so scans can use it as any container user.
@@ -603,9 +685,25 @@ func (e *Engine) Pull(ctx context.Context, image string) error {
 	var out tailBuffer
 	cmd.Stdout, cmd.Stderr = io.Discard, &out
 	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("download failed: %s", lastLine(out.String(), err))
+		msg := lastLine(out.String(), err)
+		return fmt.Errorf("download failed: %s%s", msg, TooManyPullsHint(image, out.String()))
 	}
 	return nil
+}
+
+// TooManyPullsHint explains a registry's pull limit when engine output
+// says the registry refused with 429 Too Many Requests, and is "" otherwise
+// (ADR 0066, 7A). SiegeKit's pull already uses a sign-in stored with
+// "docker login" or "podman login" (measured on both engines).
+func TooManyPullsHint(image, output string) string {
+	o := strings.ToLower(output)
+	if !strings.Contains(o, "toomanyrequests") && !strings.Contains(o, "429 too many requests") && !strings.Contains(o, "pull rate limit") {
+		return ""
+	}
+	if strings.HasPrefix(image, "docker.io/") {
+		return ". Docker Hub limits downloads per IP address (100 per hour without signing in, measured 2026-11-24), and a shared address (CI, a cloud machine) may have used them up. Sign in with 'docker login' or 'podman login' (200 per hour per account), or set a registry mirror for docker.io in your engine, such as https://mirror.gcr.io: Docker's registry-mirrors in daemon.json, Podman's registries.conf, or Colima's colima.yaml (see docs/network.md), then run SiegeKit again"
+	}
+	return ". The registry limits downloads: wait and run SiegeKit again, or set a mirror for it in your engine (see docs/network.md)"
 }
 
 // lastLine returns the last non-empty line of engine output, or err, without
@@ -848,6 +946,31 @@ func (e *Engine) StopRelay(name string) {
 
 var reEnvKey = regexp.MustCompile(`^[A-Z][A-Z0-9_]{0,63}$`)
 
+// reEntrypoint is a program name looked up on the image's PATH.
+var reEntrypoint = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,31}$`)
+
+// GoProxy is the only module proxy a tool may be pointed at: Go's own
+// (ADR 0066). GOPROXY=off is allowed too.
+const GoProxy = "https://proxy.golang.org"
+
+// CheckProxy checks a proxy URL for Egress: http or https, a host, no user
+// name or password (it would sit in the container's environment, ADR
+// 0066), and nothing after the host and port.
+func CheckProxy(p string) error {
+	u, err := url.Parse(p)
+	switch {
+	case err != nil:
+		return fmt.Errorf("proxy %q is not a URL", p)
+	case u.Scheme != "http" && u.Scheme != "https":
+		return fmt.Errorf("proxy %q must start with http:// or https://", p)
+	case u.User != nil:
+		return errors.New("a proxy URL with a user name or password is not supported: it would be visible in the container's environment")
+	case u.Hostname() == "" || u.Opaque != "" || (u.Path != "" && u.Path != "/") || u.RawQuery != "" || u.Fragment != "" || strings.ContainsAny(p, " \n\r\t\x00"):
+		return fmt.Errorf("proxy %q must be scheme://host[:port] and nothing more", p)
+	}
+	return nil
+}
+
 // CheckEnv checks tool environment variables. Names that change how
 // programs load code or reach the network, or that SiegeKit sets itself,
 // are refused.
@@ -860,8 +983,10 @@ func CheckEnv(env map[string]string) error {
 		switch {
 		case !reEnvKey.MatchString(k):
 			return fmt.Errorf("environment variable name %q must match %s", k, reEnvKey)
+		case k == "GOPROXY" && v != "off" && v != GoProxy:
+			return fmt.Errorf("environment variable GOPROXY must be off or %s", GoProxy)
 		case k == "PATH" || k == "HOME" || strings.HasPrefix(k, "LD_") || strings.HasPrefix(k, "DYLD_") ||
-			strings.Contains(k, "PROXY") || strings.HasPrefix(k, "SSL_") || strings.HasPrefix(k, "SIEGEKIT_") ||
+			strings.Contains(k, "PROXY") && k != "GOPROXY" && k != "GONOPROXY" || strings.HasPrefix(k, "SSL_") || strings.HasPrefix(k, "SIEGEKIT_") ||
 			k == "REQUESTS_CA_BUNDLE" || k == "CURL_CA_BUNDLE" || k == "NODE_EXTRA_CA_CERTS":
 			return fmt.Errorf("environment variable %s is not allowed", k)
 		case len(v) > 16<<10 || strings.ContainsRune(v, 0) || !utf8.ValidString(v):

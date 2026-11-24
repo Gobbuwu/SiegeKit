@@ -62,9 +62,10 @@ type UpdateResult struct {
 
 // Update downloads data for each selected plugin that declares a data
 // section (ADR 0014). Each update runs in its own container with network
-// access but no target or user files mounted. New data replaces the old only
+// access but no target or user files mounted, through egress when set
+// (ADR 0066). New data replaces the old only
 // after the update succeeds, so a failed update leaves the previous data.
-func Update(ctx context.Context, ex Executor, selected []*manifest.Manifest, root, workDir string) ([]UpdateResult, error) {
+func Update(ctx context.Context, ex Executor, selected []*manifest.Manifest, root, workDir string, egress sandbox.Egress) ([]UpdateResult, error) {
 	if !filepath.IsAbs(root) {
 		return nil, fmt.Errorf("data directory %q must be an absolute path", root)
 	}
@@ -89,12 +90,12 @@ func Update(ctx context.Context, ex Executor, selected []*manifest.Manifest, roo
 		if err := ctx.Err(); err != nil {
 			return out, err
 		}
-		out = append(out, UpdateResult{ID: m.ID, Err: updateOne(ctx, ex, m, root, work)})
+		out = append(out, UpdateResult{ID: m.ID, Err: updateOne(ctx, ex, m, root, work, egress)})
 	}
 	return out, ctx.Err()
 }
 
-func updateOne(ctx context.Context, ex Executor, m *manifest.Manifest, root, work string) error {
+func updateOne(ctx context.Context, ex Executor, m *manifest.Manifest, root, work string, egress sandbox.Egress) error {
 	if err := removeLeftovers(root, m.ID); err != nil {
 		return err
 	}
@@ -123,7 +124,7 @@ func updateOne(ctx context.Context, ex Executor, m *manifest.Manifest, root, wor
 		return err
 	}
 	res, err := ex.Run(ctx, sandbox.Spec{
-		Image: image, Args: args, OutDir: out, Network: "egress",
+		Image: image, Args: args, OutDir: out, Network: "egress", Egress: egress,
 		DataDir: fresh, DataMount: m.Data.Mount, DataWritable: true,
 		CPUs: cpus, MemoryMiB: m.Resources.MemoryMiB,
 		// Downloads are staged in /tmp (Trivy keeps two copies of its

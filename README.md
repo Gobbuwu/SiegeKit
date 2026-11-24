@@ -48,6 +48,7 @@ Only test systems you own or have written permission to test. Testing systems wi
 - [What SiegeKit checks](docs/coverage.md)
 - [Standards mapping (OWASP, CWE)](docs/standards-mapping.md)
 - [Pre-deploy checklist](docs/pre-deploy-checklist.md)
+- [Network: proxies, TLS inspection, registry limits, Go modules](docs/network.md)
 - [Third-party tools and licenses](THIRD_PARTY.md)
 - [Security policy](SECURITY.md)
 - [Contributing](CONTRIBUTING.md)

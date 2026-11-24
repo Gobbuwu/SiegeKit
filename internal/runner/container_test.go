@@ -87,7 +87,7 @@ func TestBuiltinPluginsFindPlantedIssues(t *testing.T) {
 	dataRoot := os.Getenv("SIEGEKIT_TEST_DATA_ROOT")
 	if dataRoot == "" {
 		dataRoot = filepath.Join(t.TempDir(), "data")
-		res, err := Update(context.Background(), e, all, dataRoot, "")
+		res, err := Update(context.Background(), e, all, dataRoot, "", sandbox.Egress{})
 		if err != nil {
 			t.Fatal(err)
 		}

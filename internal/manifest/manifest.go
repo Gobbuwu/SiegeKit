@@ -182,6 +182,15 @@ type Run struct {
 	// read-only at RecordedMount (ADR 0047). Only for destructive,
 	// local-only ZAP plugins.
 	Recorded bool `json:"recordedRequests,omitempty"`
+	// GoModules marks a tool that loads Go packages with the Go in its
+	// image, such as gosec (ADR 0066). SiegeKit gives each run an empty
+	// scratch folder on disk for Go's build cache and compile scratch
+	// (GOCACHE, GOTMPDIR), and mounts the shared Go module cache
+	// read-only (GOMODCACHE, GOPROXY=off) when it exists; the install
+	// question offers to download the target's modules into it. Only for
+	// passive plugins whose only target is repo, with no data section; the
+	// image must have go on its PATH.
+	GoModules bool `json:"goModules,omitempty"`
 }
 
 var reGitleaksRuleID = regexp.MustCompile(`(?m)^id = "([a-z0-9][a-z0-9-]{0,63})"$`)
@@ -398,6 +407,16 @@ func (m *Manifest) Validate() error {
 				add("run.recordedRequests is only for destructive plugins that run on local targets only")
 			case !spider:
 				add("run.recordedRequests needs a spider job in run.config.jobs")
+			}
+		}
+		if m.Run.GoModules {
+			for _, k := range []string{"GOCACHE", "GOTMPDIR", "GOMODCACHE", "GOPROXY", "GOFLAGS"} {
+				if _, ok := m.Run.Env[k]; ok {
+					add("run.env must not set %s with run.goModules", k)
+				}
+			}
+			if m.Mode != "passive" || !slices.Equal(m.Targets, []string{"repo"}) || m.Data != nil {
+				add("run.goModules is only for passive plugins whose only target is repo, with no data section")
 			}
 		}
 		if g := m.Run.GitleaksRules; g != "" {
