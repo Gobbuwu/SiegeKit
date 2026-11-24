@@ -77,6 +77,22 @@ CI run 45469559561 (round 2: SiegeKit scanning the 18 gate repositories and Juic
 - The Gitleaks history count on Juice Shop is 0.1% below the nearest count from git, so it is a backstop only.
 - A Kubernetes YAML file Checkov cannot parse leaves no trace, so YAML-based frameworks stay "not proven complete".
 
+## Build PR 1 (#85)
+
+Where the build differs from the decision above, or settles what it left open, and why:
+
+- **The waiter is embedded, not SiegeKit's own binary.** SiegeKit's own binary cannot be the waiter on macOS (a Mach-O program does not run in a Linux container) or when it is built with cgo (today's default `go build`, measured: dynamically linked), so the waiter is a separate static program (`cmd/siegekit-waiter`, 2.8 MB for amd64, 2.7 MB for arm64) embedded in SiegeKit (`internal/waiterbin`). `TestEmbeddedMatchesSource` builds it again from source with Go 1.27.4 in every CI job, macOS included, and fails if a byte differs; two builds from different folders and caches gave the same bytes. The owner's card on this choice is pending; the PR goes ahead with the recommended option.
+- **The tool's OOM score is raised before the tool starts.** The waiter starts itself again as a shim that writes 1000 to its own `oom_score_adj` and then becomes the tool, so no process of the tool is ever created with the engine's score.
+- **The waiter checks it reads its own cgroup.** It reads the counters of the cgroup whose `cgroup.procs` lists it (cgroup v2: the path in `/proc/self/cgroup`; v1: the `memory` and `pids` mounts), so a parent or host cgroup is never read.
+- **The status file is created before the tool starts**, and rewritten through the waiter's handle after the tool exits, so a tool cannot put one there first (a container test writes a forged one; its values are replaced). SiegeKit reads it without following links, at most 64 KiB, as strict JSON with nothing after it (fuzzed); any missing, unreadable or incomplete counter fails the check as `counters-unread`.
+- **Process counts include threads.** The kernel's process limit counts threads, so `usage.processPeak` does too. The waiter runs Go on one processor; with it, a container running `sh` and `sleep` peaked at 10.
+- **A stop is the sandbox's last output line**, so every caller that shows the last line (data updates, the module download) now says why, including the output limit that was hidden before (record item 14).
+- **Run stops typed in this PR:** `time-limit`, `memory-kill`, `process-limit`, `killed`, `output-limit`, `counters-unread`, `target-stopped` (SiegeKit's proxy) and `file-limit` (SiegeKit's own checks over 200,000 entries). The tools' own caps (ZAP, Nuclei) are typed in build PR 2.
+- **SiegeKit's own repository checks name their gaps:** text files over 1 MiB (`too-large`) and folders deeper than 40 levels (`too-deep`) for `backend-rules`, `weak-passwords`, `dotenv-gitignore` (including an ignore file too large to read) and the `--source` reader. A large file whose first 8,000 bytes hold a NUL byte (git's test for binary files) is not named: these checks look for text, and naming every large image would hide the files that matter. Dependency and version-control folders (`.git`, `node_modules`, `vendor`, `.venv`, `venv`, `__pycache__`) are left out by design and named in "Not tested by SiegeKit" instead of as gaps, so `--require-complete` stays usable on any JavaScript or Go repository. These checks are `complete` when they name no gap.
+- **`dotenv-gitignore` on a folder with no `.git` is skipped** (`no-files`), not reported as ran with nothing found.
+- **The root-only list of unreadable files** (PR #21) no longer drops its 200,000-entry cap silently: past it every check the list affects fails, as when the list cannot be made. The count of ignore comments past the cap is a gap.
+- **The caps of SiegeKit's URL checks get their own PR** right after this one (served-secrets, public-maps, backend-live, storage-write, access-control's 2 MiB answers, rate-limit, zap-active's recordings over 100; coordinator, 2026-11-24, as recommended), after its order with the Porchlet fix plan's PR C, which changes served-secrets, is agreed. Until then they are counted in each check's `result` as today, not typed.
+
 ## Alternatives considered
 
 - **Q1 B, every gap fails with exit 4.** It fails 6 of the 18 gate repositories and every URL scan (Nuclei's 262 templates) on every run. Rejected.

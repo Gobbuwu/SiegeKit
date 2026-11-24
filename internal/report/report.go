@@ -136,17 +136,14 @@ type Stop string
 
 // Run stops. A stopped check fails the run with exit code 4.
 const (
-	StopTimeLimit       Stop = "time-limit"
-	StopMemoryKill      Stop = "memory-kill"
-	StopProcessLimit    Stop = "process-limit"
-	StopKilled          Stop = "killed"
-	StopOutputLimit     Stop = "output-limit"
-	StopCountersUnread  Stop = "counters-unread"
-	StopTargetStopped   Stop = "target-stopped"   // SiegeKit's proxy stopped the run: the target kept failing
-	StopFileLimit       Stop = "file-limit"       // the tree has more files than a check reads
-	StopRequestLimit    Stop = "request-limit"    // a check reached its own request cap
-	StopAnswerTooLarge  Stop = "answer-too-large" // an answer the check compares was cut at its size limit
-	StopTargetUnreached Stop = "target-unreached" // a request the check needs got no answer
+	StopTimeLimit      Stop = "time-limit"
+	StopMemoryKill     Stop = "memory-kill"
+	StopProcessLimit   Stop = "process-limit"
+	StopKilled         Stop = "killed"
+	StopOutputLimit    Stop = "output-limit"
+	StopCountersUnread Stop = "counters-unread"
+	StopTargetStopped  Stop = "target-stopped" // SiegeKit's proxy stopped the run: the target kept failing
+	StopFileLimit      Stop = "file-limit"     // the tree has more files than a check reads
 )
 
 // Completeness says whether a check that ran showed it checked everything
