@@ -1,0 +1,77 @@
+name: Measure Podman mirror for ghcr.io (temporary)
+
+# Temporary measurement for PR #78, removed before merge. ADR 0066 left
+# unverified that Podman's registries.conf can mirror ghcr.io (docs/network.md).
+# A local registry holds a copy of gosec's pinned image with the same digest,
+# ghcr.io is blocked in /etc/hosts, and SiegeKit scans with --only gosec
+# --yes: the pull must come from the mirror, by the original name and digest.
+on:
+  pull_request:
+    paths:
+      - .github/workflows/zz-measure-mirror.yml
+
+permissions:
+  contents: read
+
+jobs:
+  measure:
+    name: Podman mirror (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, ubuntu-24.04-arm]
+    env:
+      SIEGEKIT_ENGINE: podman
+      IMG: ghcr.io/securego/gosec@sha256:7bcf1edbab3e80d8006a28d53e7031a9c9775be8eec30679e4adc1f51d272121
+      DIGEST: sha256:7bcf1edbab3e80d8006a28d53e7031a9c9775be8eec30679e4adc1f51d272121
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: "1.27.4"
+          cache: false
+      - name: Build
+        run: go build -o "$RUNNER_TEMP/siegekit" ./cmd/siegekit
+      - name: Docker Hub sign-in (for the registry image)
+        env:
+          U: ${{ secrets.DOCKERHUB_USERNAME }}
+          P: ${{ secrets.DOCKERHUB_TOKEN }}
+        run: printf '%s' "$P" | docker login -u "$U" --password-stdin > /dev/null
+      - name: Measure
+        run: |
+          set -u
+          T=$RUNNER_TEMP
+          echo "ARCH $(uname -m) $(podman --version) rootless=$(podman info --format '{{.Host.Security.Rootless}}')"
+          command -v skopeo > /dev/null || { sudo apt-get update -q > /dev/null && sudo apt-get install -y -q skopeo > /dev/null; }
+          echo "$(skopeo --version)"
+          # The mirror: a local registry holding the pinned image, digest kept.
+          docker run -d --name mirror -p 5000:5000 docker.io/library/registry:2 > /dev/null
+          sleep 3
+          skopeo copy --all --preserve-digests "docker://$IMG" docker://localhost:5000/securego/gosec:mirror --dest-tls-verify=false > /dev/null
+          echo "MIRROR_DIGEST $(skopeo inspect --raw --tls-verify=false docker://localhost:5000/securego/gosec:mirror | sha256sum | cut -c1-64)"
+          podman images --digests --format '{{.Repository}} {{.Digest}}' | grep gosec | sed 's/^/BEFORE /'
+          # Block ghcr.io and its blob host.
+          printf '0.0.0.0 ghcr.io\n0.0.0.0 pkg-containers.githubusercontent.com\n' | sudo tee -a /etc/hosts > /dev/null
+          # Control: with the block and no mirror, the pull fails.
+          podman pull --quiet "$IMG" > /dev/null 2> $T/ctl.err; echo "CONTROL_PULL exit=$? $(head -c 300 $T/ctl.err | tr '\n' ' ')"
+          # The documented Podman setting, mirror on localhost.
+          mkdir -p ~/.config/containers
+          printf '[[registry]]\nprefix = "ghcr.io"\nlocation = "ghcr.io"\n\n[[registry.mirror]]\nlocation = "localhost:5000"\ninsecure = true\n' > ~/.config/containers/registries.conf
+          # A small Go module to scan.
+          mkdir -p $T/target && cd $T/target
+          printf 'module example.com/m\n\ngo 1.22\n' > go.mod
+          printf 'package main\n\nimport (\n\t"crypto/md5"\n\t"fmt"\n)\n\nfunc main() { fmt.Println(md5.Sum([]byte("x"))) }\n' > main.go
+          cd - > /dev/null
+          export XDG_DATA_HOME=$T/xdg
+          "$T/siegekit" scan --only gosec --yes --no-save --report-dir $T/rep $T/target > $T/sk.log 2>&1
+          echo "SIEGEKIT exit=$?"
+          grep -v '^  ' $T/sk.log | head -12 | cut -c1-300
+          jq -c '.plugins[] | {id, status, findings, reason: (.reason // "" | .[0:300])}' $T/rep/report.json
+          jq -r '.findings[] | .sources[] | .ruleId' $T/rep/report.json | sort | uniq -c | sed 's/^/RULE /'
+          podman images --digests --format '{{.Repository}} {{.Digest}}' | grep gosec | sed 's/^/AFTER /'
+          echo "MIRROR_MANIFEST_GETS $(docker logs mirror 2>&1 | grep -c "GET /v2/securego/gosec/manifests/$DIGEST")"
+          echo "MIRROR_BLOB_GETS $(docker logs mirror 2>&1 | grep -c 'GET /v2/securego/gosec/blobs/sha256:')"
