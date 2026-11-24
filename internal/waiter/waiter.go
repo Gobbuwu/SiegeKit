@@ -278,16 +278,22 @@ type cgroup struct {
 // counters are read from: its cgroup.procs must list the waiter, so a host
 // or parent cgroup is never read by mistake.
 func findCgroup() cgroup {
-	if _, err := os.Stat("/sys/fs/cgroup/cgroup.controllers"); err == nil {
+	if _, err := os.Stat(cgroupRoot + "/cgroup.controllers"); err == nil {
 		rel, err := selfCgroup()
 		if err != nil {
 			return cgroup{version: "v2", err: err}
 		}
-		d := filepath.Join("/sys/fs/cgroup", rel)
+		d := filepath.Join(cgroupRoot, rel)
+		if d != cgroupRoot && !strings.HasPrefix(d, cgroupRoot+"/") {
+			return cgroup{version: "v2", err: fmt.Errorf("own cgroup %q is outside %s", rel, cgroupRoot)}
+		}
 		return checkOwn(cgroup{version: "v2", memory: d, pids: d})
 	}
-	return checkOwn(cgroup{version: "v1", memory: "/sys/fs/cgroup/memory", pids: "/sys/fs/cgroup/pids"})
+	return checkOwn(cgroup{version: "v1", memory: cgroupRoot + "/memory", pids: cgroupRoot + "/pids"})
 }
+
+// cgroupRoot holds every file the waiter reads its counters from.
+const cgroupRoot = "/sys/fs/cgroup"
 
 // selfCgroup returns the waiter's cgroup v2 path from /proc/self/cgroup.
 func selfCgroup() (string, error) {
@@ -307,7 +313,7 @@ func selfCgroup() (string, error) {
 func checkOwn(c cgroup) cgroup {
 	self := strconv.Itoa(os.Getpid())
 	for _, d := range []string{c.memory, c.pids} {
-		b, err := os.ReadFile(filepath.Join(d, "cgroup.procs"))
+		b, err := os.ReadFile(filepath.Join(d, "cgroup.procs")) // #nosec G304 -- d is under cgroupRoot (findCgroup)
 		if err != nil {
 			c.err = fmt.Errorf("read %s: %w", filepath.Join(d, "cgroup.procs"), err)
 			return c
@@ -385,7 +391,7 @@ func (c cgroup) final(st *Status) {
 
 // statValue reads the value of key from a "key value" per line file.
 func statValue(path, key string) (int64, error) {
-	f, err := os.Open(path) // #nosec G304 -- fixed cgroup files
+	f, err := os.Open(path) // #nosec G304 -- cgroup files under cgroupRoot (findCgroup)
 	if err != nil {
 		return 0, err
 	}
@@ -405,7 +411,7 @@ func statValue(path, key string) (int64, error) {
 
 // readInt reads a file holding one number.
 func readInt(path string) (int64, error) {
-	b, err := os.ReadFile(path) // #nosec G304 -- fixed cgroup files
+	b, err := os.ReadFile(path) // #nosec G304 -- cgroup files under cgroupRoot (findCgroup)
 	if err != nil {
 		return 0, err
 	}
