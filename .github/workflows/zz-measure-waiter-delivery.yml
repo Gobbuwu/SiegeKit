@@ -23,6 +23,8 @@ env:
 jobs:
   linux:
     name: Linux (${{ matrix.engine }}, ${{ matrix.os }})
+    # Round 1 only (run 45508679731); round 2 is macOS.
+    if: false
     runs-on: ${{ matrix.os }}
     timeout-minutes: 120
     strategy:
@@ -112,16 +114,16 @@ jobs:
           brew install colima docker > /dev/null 2>&1; echo "brew exit=$?"
           t0=$(date +%s); colima start --cpu 3 --memory 8 --disk 60 2>&1 | tail -3; echo "start s=$(( $(date +%s)-t0 ))"
           docker info --format 'server={{.ServerVersion}} cgroup={{.CgroupVersion}} arch={{.Architecture}}'
-      - name: Build the variants
+      - name: Build this branch and main
         run: |
           set -u
           T=$RUNNER_TEMP
           go build -o $T/sk-plain ./cmd/siegekit
-          file $T/sk-plain
-          mkdir $T/bin-save && mv internal/waiterbin/bin/* $T/bin-save/
-          set +e; go build -o $T/sk-c ./cmd/siegekit 2>&1 | tail -3; echo "C build exit=${PIPESTATUS[0]}"; set -e
-          mv $T/bin-save/* internal/waiterbin/bin/
-      - name: Scan a real repository with each variant
+          git fetch -q --depth 1 origin main && git worktree add -q $T/main FETCH_HEAD
+          (cd $T/main && git log -1 --format='main at %h %s' && go build -o $T/sk-main ./cmd/siegekit)
+          file $T/sk-plain $T/sk-main
+          echo "TMPDIR=$TMPDIR"; colima list; colima ssh -- sh -c "mount | grep -E 'virtiofs|9p|sshfs' | cut -c1-160"
+      - name: Scan a real repository with each variant (round 2)
         run: |
           set -u +e
           T=$RUNNER_TEMP
@@ -130,15 +132,17 @@ jobs:
           SHA="$(jq -r '.fixture | split("@")[1]' "$answers")"
           dir="$T/target"
           git init -q "$dir"; git -C "$dir" fetch -q --depth 1 "https://github.com/$REPO.git" "$SHA"; git -C "$dir" -c advice.detachedHead=false checkout -q FETCH_HEAD
-          for v in A: B:own-binary C:none; do
-            IFS=: read n e <<<"$v"
-            r="$T/report-$n"
+          mkdir -p "$HOME/sk-tmp"; chmod 700 "$HOME/sk-tmp"
+          for v in main:sk-main::default A:sk-plain::default main:sk-main::home A:sk-plain::home B:sk-plain:own-binary:home C:sk-plain:none:home; do
+            IFS=: read n b e tmp <<<"$v"
+            r="$T/report-$n-$tmp"
+            if [ "$tmp" = home ]; then td="$HOME/sk-tmp"; else td="$TMPDIR"; fi
             t0=$(date +%s)
-            SIEGEKIT_MEASURE_WAITER=$e $T/sk-plain scan --yes --update --no-save --report-dir "$r" "$dir" > "$r.log" 2>&1
+            TMPDIR="$td" SIEGEKIT_MEASURE_WAITER=$e $T/$b scan --yes --update --no-save --report-dir "$r" "$dir" > "$r.log" 2>&1
             code=$?
-            echo "RESULT $REPO $n exit=$code s=$(( $(date +%s)-t0 ))"
-            jq -r '.environment | "  env \(.os)/\(.arch) \(.engine.name) \(.engine.version) cgroup \(.engine.cgroup // "")"' "$r/report.json"
-            jq -r '.plugins[] | "  \(.id) \(.status) \(.stop // "") usage=\(if .usage then "\(.usage.memoryPeak)/\(.usage.processPeak)" else "none" end) \(.reason // "" | .[0:160])"' "$r/report.json"
+            echo "RESULT $REPO $n tmp=$tmp exit=$code s=$(( $(date +%s)-t0 ))"
+            jq -r '.plugins[] | "  \(.id) \(.status) \(.stop // "") usage=\(if .usage then "\(.usage.memoryPeak)/\(.usage.processPeak)" else "none" end) \(.reason // "" | .[0:200])"' "$r/report.json"
+            grep -m3 -E "docker: |Error|exec format" "$r.log" | cut -c1-300
             go run ./internal/knownanswers/check -answers "$answers" -report "$r/report.json" -observed "$r.observed.json" > "$r.ka" 2>&1
             echo "  known answers exit=$? $(tail -1 "$r.ka" | cut -c1-200)"
           done
