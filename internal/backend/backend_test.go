@@ -184,7 +184,7 @@ func TestCheckSupabase(t *testing.T) {
 	if s := r.Summary(); s != "6 tables tested: 2 readable, 1 empty or protected by row-level security, 1 refused (401 or 403), 1 not found (404), 1 other answers, 3 over the 200-name limit, not tested" {
 		t.Errorf("summary %q", s)
 	}
-	fs := Findings(b, r)
+	fs := Findings(b, r, "002-main.js")
 	if len(fs) != 2 || fs[1].RuleID != "supabase-table-readable" || fs[1].Location.URI != "https://abcdefghijklmnop.supabase.co/rest/v1/profiles" || fs[1].Severity != findings.High ||
 		!slices.Equal(fs[1].CWEs, []string{"CWE-284", "CWE-862"}) || !strings.Contains(fs[1].Message, "Columns: email, full_name, id.") || fs[1].Fingerprint == "" {
 		t.Errorf("findings %+v", fs)
@@ -226,14 +226,14 @@ func TestCheckFirebase(t *testing.T) {
 	if (*got)[0] != "/.json?shallow=true&ns=demo  " {
 		t.Errorf("root first, no key: %q", (*got)[0])
 	}
-	fs := Findings(b, r)
+	fs := Findings(b, r, "002-main.js")
 	if len(fs) != 3 || fs[0].RuleID != "firebase-rtdb-readable" || fs[0].Location.URI != "http://127.0.0.1:9000/public.json" || !strings.Contains(fs[0].Message, "2 key(s) at /public") {
 		t.Errorf("findings %+v", fs)
 	}
 	// An open root stops the check: everything under it is readable.
 	got = useSend(t, map[string]fakeAnswer{"/.json?shallow=true&ns=demo": {200, `{"users":true}`, nil}})
 	r, err = Check(context.Background(), config(b), b, Firebase, "", []string{"users", "x"}, 0)
-	if err != nil || !r.RootOpen || len(*got) != 1 || r.Summary() != "the database root is readable without signing in" || Findings(b, r)[0].Location.URI != "http://127.0.0.1:9000/.json" {
+	if err != nil || !r.RootOpen || len(*got) != 1 || r.Summary() != "the database root is readable without signing in" || Findings(b, r, "")[0].Location.URI != "http://127.0.0.1:9000/.json" {
 		t.Errorf("root: %+v %v %v", r, err, *got)
 	}
 }
@@ -399,7 +399,7 @@ func TestCheckOverHTTP(t *testing.T) {
 	if want := []string{"GET /.json?shallow=true&ns=demo", "GET /public.json?shallow=true&ns=demo", "GET /users.json?shallow=true&ns=demo"}; !slices.Equal(got, want) {
 		t.Errorf("requests %q", got)
 	}
-	for _, f := range Findings(b, r) {
+	for _, f := range Findings(b, r, "") {
 		if strings.Contains(f.Message, "room-") || f.Location.URI != rtdb.URL+"/public.json" {
 			t.Errorf("finding %+v", f)
 		}

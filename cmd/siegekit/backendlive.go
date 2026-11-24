@@ -209,7 +209,7 @@ func runBackend(ctx context.Context, p *backendPlan, c *collected, src *checks.S
 	if err != nil {
 		return failed("%v", err)
 	}
-	fs := backend.Findings(p.b, res)
+	fs := backend.Findings(p.b, res, key.from)
 	pr.Status, pr.Result, pr.Findings = report.Ran, res.Summary(), len(fs)
 	return pr, fs
 }

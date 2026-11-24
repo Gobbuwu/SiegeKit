@@ -135,3 +135,18 @@ func KeyAccepted(ctx context.Context, cfg egress.Config, key string) (int, error
 	}
 	return 1, nil
 }
+
+// keyReach says, for a finding, which Supabase public key a request used
+// and who else holds that key (ADR 0061). from is where the key came from,
+// as the report's Input line names it: a served file, or KeyEnv. A key in
+// the app's scripts is served to anyone who loads the app; a key from
+// KeyEnv is not served by this app, but a public key is not a secret.
+func keyReach(from string) (with, anyone string) {
+	switch from {
+	case "":
+		return "with the project's public key", "anyone who has that key, which is not a secret,"
+	case KeyEnv:
+		return "with the project's public key from " + KeyEnv, "anyone who has that key (the app does not serve it, but a public key is not a secret)"
+	}
+	return "with the public key in the app's scripts (" + from + ")", "anyone who loads the app, which serves that key,"
+}

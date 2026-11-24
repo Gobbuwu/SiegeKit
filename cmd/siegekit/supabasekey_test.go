@@ -109,6 +109,24 @@ func TestScanURLSupabaseKey(t *testing.T) {
 		t.Fatalf("no %s in %+v", id, r.Plugins)
 		return report.PluginResult{}
 	}
+	// messages is every finding's message in report.json, joined.
+	messages := func() string {
+		t.Helper()
+		b, err := os.ReadFile(filepath.Join("siegekit-report", "report.json"))
+		var r report.Run
+		if err != nil || json.Unmarshal(b, &r) != nil {
+			t.Fatalf("report %v", err)
+		}
+		var all string
+		for _, f := range r.Findings {
+			all += f.Message + "\n"
+		}
+		return all
+	}
+	// A finding names the key's real source, as the Input line does: a
+	// key from the environment is not one the app serves (ADR 0061).
+	envWith := "with the project's public key from " + backend.KeyEnv
+	envAnyone := "anyone who has that key (the app does not serve it, but a public key is not a secret)"
 	auditLog := func(data string) string {
 		b, _ := os.ReadFile(filepath.Join(data, "siegekit", "audit.log"))
 		return string(b)
@@ -139,9 +157,9 @@ func TestScanURLSupabaseKey(t *testing.T) {
 	// key is in no report, output or audit entry.
 	f := useActive(t)
 	data := useData(t)
-	calls, keys := useBackend(t, backend.Result{Tested: 2, Requests: 2, Empty: 2}), useKeyCheck(t, nil)
+	calls, keys := useBackend(t, backend.Result{Kind: backend.Supabase, Tested: 2, Requests: 2, Empty: 1, Readable: []backend.Readable{{Name: "notes", Columns: []string{"id"}}}}), useKeyCheck(t, nil)
 	code, out := scan(true, "abcdefghijklmnop.supabase.co\n", pub, f, "--backend-url", hostedBackend, "--source", repo, "--only", "backend-live", "http://localhost:3000/")
-	if code != report.ExitClean || len(*keys) != 1 || len(*calls) != 1 || !strings.Contains(out, "Type its host name (abcdefghijklmnop.supabase.co)") ||
+	if code != report.ExitFindings || len(*keys) != 1 || len(*calls) != 1 || !strings.Contains(out, "Type its host name (abcdefghijklmnop.supabase.co)") ||
 		!strings.Contains(out, "with the app's own public key ("+backend.KeyEnv+" when the app's scripts have none);") {
 		t.Fatalf("hosted, not named: exit %d %d %d\n%s", code, len(*keys), len(*calls), out)
 	}
@@ -151,9 +169,12 @@ func TestScanURLSupabaseKey(t *testing.T) {
 	if c := (*calls)[0]; c.key != pub || c.kind != backend.Supabase || !slices.Equal(c.names, []string{"notes", "profiles"}) {
 		t.Errorf("call %+v", c)
 	}
-	if p := plugin(backend.ID); p.Status != report.Ran || p.Requests != 5 ||
+	if p := plugin(backend.ID); p.Status != report.Ran || p.Requests != 5 || p.Findings != 1 ||
 		p.Input != "Supabase https://abcdefghijklmnop.supabase.co/; 0 name(s) from the app's scripts, 2 from --source; public key from "+backend.KeyEnv {
 		t.Errorf("plugin %+v", p)
+	}
+	if m := messages(); !strings.Contains(m, "GET /rest/v1/notes?select=*&limit=1 "+envWith+" returned a row, so "+envAnyone+" can read this table.") || strings.Contains(m, "scripts") || strings.Contains(m, "loads the app") {
+		t.Errorf("backend-live finding names the wrong key source: %s", m)
 	}
 	if strings.Contains(out+reportFiles()+auditLog(data), pub) {
 		t.Error("the key was written to the output, a report or the audit log")
@@ -229,11 +250,14 @@ func TestScanURLSupabaseKey(t *testing.T) {
 	f = useActive(t)
 	useData(t)
 	f.content = map[string]string{"002-main.js": `createClient("` + hostedBackend + `","` + anonJWT() + `");s.from("profiles")`}
-	calls, keys = useBackend(t, backend.Result{Tested: 2, Requests: 2, Empty: 2}), useKeyCheck(t, nil)
+	calls, keys = useBackend(t, backend.Result{Kind: backend.Supabase, Tested: 2, Requests: 2, Empty: 1, Readable: []backend.Readable{{Name: "profiles", Columns: []string{"id"}}}}), useKeyCheck(t, nil)
 	scan(true, "abcdefghijklmnop.supabase.co\n", pub, f, "--backend-url", hostedBackend, "--only", "backend-live", "http://localhost:3000/")
 	if p := plugin(backend.ID); len(*keys) != 0 || len(*calls) != 1 || (*calls)[0].key != anonJWT() ||
 		!strings.HasSuffix(p.Input, "public key from 002-main.js ("+backend.KeyEnv+" not used: the app's scripts have a key)") {
 		t.Errorf("scripts' key: %d %+v", len(*keys), p)
+	}
+	if m := messages(); !strings.Contains(m, "GET /rest/v1/profiles?select=*&limit=1 with the public key in the app's scripts (002-main.js) returned a row, so anyone who loads the app, which serves that key, can read this table.") || strings.Contains(m, backend.KeyEnv) {
+		t.Errorf("backend-live finding names the wrong key source: %s", m)
 	}
 
 	// storage-write: a hosted project the scripts do not name. The host and
@@ -250,6 +274,9 @@ func TestScanURLSupabaseKey(t *testing.T) {
 	if p := plugin(backend.StorageID); p.Status != report.Ran || p.Requests != 7 ||
 		p.Input != "Supabase Storage https://abcdefghijklmnop.supabase.co; 0 bucket(s) and 0 folder(s) from the app's scripts, 1 name(s) from --source; public key from "+backend.KeyEnv {
 		t.Errorf("storage plugin %+v", p)
+	}
+	if m := messages(); !strings.Contains(m, "to files/siegekit-write-test-") || !strings.Contains(m, ".txt "+envWith+", so "+envAnyone+" can store files here") || strings.Contains(m, "scripts") || strings.Contains(m, "loads the app") {
+		t.Errorf("storage-write finding names the wrong key source: %s", m)
 	}
 	if strings.Contains(out+reportFiles()+auditLog(data), pub) {
 		t.Error("the key was written to the output, a report or the audit log")

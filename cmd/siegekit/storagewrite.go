@@ -179,7 +179,7 @@ func (o *urlScan) runStorage(ctx context.Context, r storageRun, stdout io.Writer
 		}
 		return pr, nil, false
 	}
-	fs = backend.StorageFindings(p.s, res)
+	fs = backend.StorageFindings(p.s, res, key.from)
 	pr.Status, pr.Result, pr.Findings = report.Ran, res.Summary(), len(fs)
 	return pr, fs, false
 }

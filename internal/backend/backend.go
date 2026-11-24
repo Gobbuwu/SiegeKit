@@ -473,8 +473,9 @@ func empty(kind Kind, body []byte) bool {
 }
 
 // Findings turns readable tables and paths into findings: high, CWE-284
-// and CWE-862 (owner answer 3a), with names only.
-func Findings(b *Backend, r Result) []findings.Finding {
+// and CWE-862 (owner answer 3a), with names only. keyFrom is where the
+// Supabase key came from (a served file or KeyEnv); Firebase ignores it.
+func Findings(b *Backend, r Result, keyFrom string) []findings.Finding {
 	var out []findings.Finding
 	for _, rd := range r.Readable {
 		p, _, _ := strings.Cut(RequestPath(r.Kind, rd.Name, ""), "?")
@@ -489,8 +490,9 @@ func Findings(b *Backend, r Result) []findings.Finding {
 			if len(rd.Columns) > 0 {
 				cols = strings.Join(rd.Columns, ", ")
 			}
-			f.RuleID, f.Title = "supabase-table-readable", "Supabase table is readable with the app's public key"
-			f.Message = fmt.Sprintf("GET %s?select=*&limit=1 with the public key from the app's scripts returned a row. Anyone who loads the app has this key, so anyone can read this table. Columns: %s. Enable row-level security on %s and add policies that return only the rows a user may see (for example auth.uid() = user_id). If the table is meant to be public, such as a product list, check the columns above and ignore this. SiegeKit read one row and kept only the column names.", p, cols, rd.Name)
+			f.RuleID, f.Title = "supabase-table-readable", "Supabase table is readable with the project's public key"
+			with, anyone := keyReach(keyFrom)
+			f.Message = fmt.Sprintf("GET %s?select=*&limit=1 %s returned a row, so %s can read this table. Columns: %s. Enable row-level security on %s and add policies that return only the rows a user may see (for example auth.uid() = user_id). If the table is meant to be public, such as a product list, check the columns above and ignore this. SiegeKit read one row and kept only the column names.", p, with, anyone, cols, rd.Name)
 		} else {
 			name := "/" + rd.Name
 			f.RuleID, f.Title = "firebase-rtdb-readable", "Realtime Database data is readable without signing in"
