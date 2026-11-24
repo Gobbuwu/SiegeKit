@@ -119,7 +119,7 @@ func TestStorageGateSets(t *testing.T) {
 			files = map[string]string{"storage.rules": string(data)}
 		}
 		o, err := backendRules.Run(context.Background(), tree(t, files))
-	fs := o.Findings
+		fs := o.Findings
 		if err != nil {
 			t.Fatal(err)
 		}
