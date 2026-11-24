@@ -8,6 +8,8 @@
 package gosec
 
 import (
+	"bufio"
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -50,7 +52,30 @@ type Result struct {
 	Uncovered []string
 	// Files is the number of Go files gosec checked.
 	Files int
+	// NoSpace is set when gosec reported "no space left on device".
+	NoSpace bool
+	// GoNeeded and GoHave are set when Go refused the packages because
+	// the go.mod or go.work files ask for a newer Go than gosec's image
+	// has ("go.work requires go >= 1.27.4 (running go 1.27.3; ...)").
+	GoNeeded, GoHave string
+	// MissingModules is set when an error says a module is not in the
+	// module cache or not required by go.mod (missingModule).
+	MissingModules bool
 }
+
+// missingModule holds what Go's package loader says, with GOPROXY=off, when
+// a module the code imports is not available (measured with go 1.24.7 and
+// in gosec 2.30.0's reports, 2026-11-21 and 2026-11-24): not in the module
+// cache, not in go.sum, or not required by go.mod.
+var missingModule = []string{
+	"module lookup disabled by GOPROXY=off",
+	"missing go.sum entry",
+	"no required module provides package",
+}
+
+// reGoTooOld matches Go's refusal to load a module that needs a newer Go
+// while GOTOOLCHAIN=local forbids downloading one.
+var reGoTooOld = regexp.MustCompile(`requires go >= ([0-9][0-9a-z.]{0,30}) \(running go ([0-9][0-9a-z.]{0,30})[;)]`)
 
 // Read reads a gosec JSON report. Paths in it are under mount.
 func Read(r io.Reader, mount string) (Result, error) {
@@ -73,9 +98,30 @@ func Read(r io.Reader, mount string) (Result, error) {
 	if rep.Stats == nil || rep.Stats.Files == nil || *rep.Stats.Files < 0 {
 		return Result{}, errors.New("gosec JSON report has no file count")
 	}
-	res := Result{Files: *rep.Stats.Files}
-	for p := range *rep.Errors {
+	res := Result{Files: *rep.Stats.Files, NoSpace: bytes.Contains(b, noSpace)}
+	for p, raw := range *rep.Errors {
+		var errs []struct {
+			Error string `json:"error"`
+		}
+		if json.Unmarshal(raw, &errs) == nil {
+			for _, e := range errs {
+				if m := reGoTooOld.FindStringSubmatch(e.Error); m != nil && res.GoNeeded == "" {
+					res.GoNeeded, res.GoHave = m[1], m[2]
+				}
+				for _, w := range missingModule {
+					if strings.Contains(e.Error, w) {
+						res.MissingModules = true
+					}
+				}
+			}
+		}
 		d := dir(p, mount)
+		if p == "" {
+			// gosec 2.30.0 keys some errors by no file at all (a cgo
+			// package's compile errors, seen on containerd): not the top
+			// directory.
+			d = unnamed
+		}
 		if !slices.Contains(res.Uncovered, d) {
 			res.Uncovered = append(res.Uncovered, d)
 		}
@@ -186,13 +232,36 @@ func openRegular(p string) (io.ReadCloser, error) {
 // Check says what gosec did not check, "" if nothing: the packages it could
 // not load, or, when it names none, how many Go files it left out. root is
 // the scanned directory, mounted at mount in gosec's container.
-func Check(r io.Reader, root, mount string) (string, error) {
+func Check(r, logr io.Reader, root, mount string) (string, error) {
 	res, err := Read(r, mount)
 	if err != nil {
 		return "", err
 	}
+	lg, err := ReadLog(logr, mount)
+	if err != nil {
+		return "", err
+	}
+	var why []string
+	if res.NoSpace || lg.NoSpace {
+		why = append(why, "gosec ran out of disk space (no space left on device), so it may have left packages out without naming them. Free disk space where SiegeKit keeps its data (~/.local/share/siegekit) and scan again.")
+	}
+	if res.GoNeeded != "" {
+		why = append(why, fmt.Sprintf("Your go.mod or go.work files ask for Go %s or newer, and the Go in gosec's pinned image is %s, so Go refused to load packages; SiegeKit never downloads another Go into the image. A SiegeKit release with a newer gosec image fixes this.", res.GoNeeded, res.GoHave))
+	}
 	if len(res.Uncovered) > 0 {
-		return Reason(res.Uncovered), nil
+		why = append(why, Reason(res.Uncovered, res.MissingModules))
+	}
+	var skipped []string
+	for _, d := range lg.SSASkipped {
+		if !slices.Contains(res.Uncovered, d) {
+			skipped = append(skipped, d)
+		}
+	}
+	if len(skipped) > 0 {
+		why = append(why, SSAReason(skipped))
+	}
+	if len(why) > 0 {
+		return strings.Join(why, " "), nil
 	}
 	want, err := Expected(root, mount)
 	if err != nil {
@@ -202,6 +271,98 @@ func Check(r io.Reader, root, mount string) (string, error) {
 		return fmt.Sprintf("gosec checked %d of the %d Go files it should have and reported no error for the others, so their code was not checked. Findings in the files it checked are kept", res.Files, want), nil
 	}
 	return "", nil
+}
+
+// unnamed stands for errors gosec gives no file or directory for.
+const unnamed = "(errors gosec named no folder for)"
+
+// noSpace is how Go and gosec report a full disk.
+var noSpace = []byte("no space left on device")
+
+// Log is what gosec's log (its standard error) says about the work it did.
+type Log struct {
+	// SSASkipped lists the package directories, relative to the mount and
+	// sorted, whose SSA-based rules gosec skipped.
+	SSASkipped []string
+	// NoSpace is set when the log says "no space left on device".
+	NoSpace bool
+}
+
+// Log lines of gosec 2.30.0 (analyzer.go). With -concurrency 1 one worker
+// loads each directory ("Import directory: DIR") and then checks its
+// packages, building each one's SSA form, before it loads the next, so a
+// skipped SSA build belongs to the directory last imported. The message
+// names only the package ("main"), which cannot tell two directories apart
+// (ADR 0045, 0066).
+const (
+	logImport  = "Import directory: "
+	logSSAFail = "Error building the SSA representation of the package "
+)
+
+// logStamp is the time log.LstdFlags puts after gosec's "[gosec] " prefix.
+var logStamp = regexp.MustCompile(`^\d{4}/\d{2}/\d{2} \d{2}:\d{2}:\d{2} `)
+
+// MaxLogLine is the longest log line read; a longer one is an error.
+const MaxLogLine = 1 << 20
+
+// ReadLog reads gosec's log, run with -concurrency 1, with the scanned
+// directory mounted at mount. The log is untrusted input (threat model
+// T7): it is only matched against fixed text.
+func ReadLog(r io.Reader, mount string) (Log, error) {
+	var lg Log
+	sc := bufio.NewScanner(r)
+	sc.Buffer(make([]byte, 0, 64<<10), MaxLogLine)
+	cur := ""
+	for sc.Scan() {
+		line := sc.Bytes()
+		if bytes.Contains(line, noSpace) {
+			lg.NoSpace = true
+		}
+		// Only gosec's own log lines count, so a file name with these words
+		// in a "Checking file:" line is not read as one.
+		msg, ok := bytes.CutPrefix(line, []byte("[gosec] "))
+		if !ok || !logStamp.Match(msg) {
+			continue
+		}
+		msg = msg[len("2006/01/02 15:04:05 "):]
+		if after, ok := bytes.CutPrefix(msg, []byte(logImport)); ok {
+			cur = dir(string(after), mount)
+			continue
+		}
+		if after, ok := bytes.CutPrefix(msg, []byte(logSSAFail)); ok {
+			d := cur
+			if d == "" {
+				// No directory imported yet: not what gosec 2.30.0
+				// writes. Name the package rather than drop it.
+				name, _, _ := bytes.Cut(after, []byte(":"))
+				d = "package " + strings.ToValidUTF8(string(name), "?")
+			}
+			if !slices.Contains(lg.SSASkipped, d) {
+				lg.SSASkipped = append(lg.SSASkipped, d)
+			}
+		}
+	}
+	if err := sc.Err(); err != nil {
+		return Log{}, fmt.Errorf("read gosec's log: %w", err)
+	}
+	slices.Sort(lg.SSASkipped)
+	return lg, nil
+}
+
+// SSAReason says in which packages gosec skipped its SSA-based rules, for
+// the plugin's reason in reports. dirs must not be empty.
+func SSAReason(dirs []string) string {
+	shown, more := dirs, ""
+	if len(shown) > MaxListed {
+		shown = shown[:MaxListed]
+		more = fmt.Sprintf(" and %d more", len(dirs)-MaxListed)
+	}
+	noun := "packages"
+	if len(dirs) == 1 {
+		noun = "package"
+	}
+	return fmt.Sprintf("gosec skipped its SSA-based rules (G115, G407, G602, the G7xx data-flow rules and others) in %d Go %s, because they did not type-check, for example because they import a package gosec could not load: %s%s. Its other rules checked them.",
+		len(dirs), noun, strings.Join(shown, ", "), more)
 }
 
 // dir turns a file or directory path from the report into a package
@@ -224,8 +385,10 @@ func dir(p, mount string) string {
 }
 
 // Reason says which packages were not checked, for the plugin's reason in
-// reports. dirs is the list from Uncovered and must not be empty.
-func Reason(dirs []string) string {
+// reports. dirs is the list from Uncovered and must not be empty; missing
+// says whether gosec's errors name a missing module, the only cause the Go
+// module download fixes.
+func Reason(dirs []string, missing bool) string {
 	shown := dirs
 	more := ""
 	if len(shown) > MaxListed {
@@ -236,6 +399,10 @@ func Reason(dirs []string) string {
 	if len(dirs) == 1 {
 		noun = "package"
 	}
-	return fmt.Sprintf("gosec could not load %d Go %s, so their code was not checked: %s%s. Usually these import modules that are not in the repository (scans have no network; vendor the modules with 'go mod vendor' to check them). Findings in the other packages are kept",
-		len(dirs), noun, strings.Join(shown, ", "), more)
+	hint := "gosec's errors for them name no missing Go module, so the Go module download does not help: the code does not compile as gosec checks it, for example test fixtures broken on purpose, files a build step makes outside the repository, or cgo code that needs C headers gosec's image lacks."
+	if missing {
+		hint = "Some import modules that are neither in the repository nor in SiegeKit's Go module cache (scans have no network: allow the Go module download when SiegeKit asks, or pass --yes)."
+	}
+	return fmt.Sprintf("gosec could not load %d Go %s, so their code was not checked: %s%s. %s Findings in the other packages are kept.",
+		len(dirs), noun, strings.Join(shown, ", "), more, hint)
 }
