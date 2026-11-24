@@ -36,7 +36,13 @@ func caFile(t *testing.T) string {
 	if err := os.WriteFile(p, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	return p
+	// The path egressFrom returns has no links; on macOS the temporary
+	// folder is under /var, a link to /private/var (CI, 2026-11-24).
+	real, err := filepath.EvalSymlinks(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return real
 }
 
 func TestEgressFrom(t *testing.T) {
@@ -46,6 +52,14 @@ func TestEgressFrom(t *testing.T) {
 	e, err := egressFrom(ca, "http://proxy.example:3128")
 	if err != nil || e.CAFile != ca || e.Proxy != "http://proxy.example:3128" {
 		t.Fatalf("%+v %v", e, err)
+	}
+	// A link is resolved: the engine mounts the file itself.
+	link := filepath.Join(t.TempDir(), "link.pem")
+	if err := os.Symlink(ca, link); err != nil {
+		t.Fatal(err)
+	}
+	if e, err := egressFrom(link, ""); err != nil || e.CAFile != ca {
+		t.Errorf("link: %+v %v", e, err)
 	}
 	// The environment stands in for missing flags; a flag wins.
 	t.Setenv(caFileEnv, ca)

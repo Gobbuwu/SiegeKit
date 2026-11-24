@@ -165,22 +165,31 @@ func Requires(gomod []byte) []string {
 // 0755 and files 0644, so that a container user other than the caller can
 // read them. dir's parent should be private to the caller.
 func (t *Tree) Stage(dir string) error {
+	// Inside an os.Root nothing written can follow a link out of dir.
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		return err
+	}
+	defer root.Close()
 	for _, rel := range slices.Sorted(maps.Keys(t.files)) {
-		p := filepath.Join(dir, filepath.FromSlash(rel))
-		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil { // #nosec G301 -- read by the container user; the parent is private
+		name := filepath.FromSlash(rel)
+		if err := root.MkdirAll(filepath.Dir(name), 0o755); err != nil {
 			return err
 		}
-		if err := os.WriteFile(p, t.files[rel], 0o644); err != nil { // #nosec G306 -- read by the container user; the parent is private
+		if err := root.WriteFile(name, t.files[rel], 0o644); err != nil {
 			return err
+		}
+		// Modes are subject to the umask; set them as said above.
+		if err := root.Chmod(name, 0o644); err != nil {
+			return err
+		}
+		for d := filepath.Dir(name); d != "."; d = filepath.Dir(d) {
+			if err := root.Chmod(d, 0o755); err != nil {
+				return err
+			}
 		}
 	}
-	// Directories MkdirAll made are subject to the umask.
-	return filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
-		if err != nil || !d.IsDir() {
-			return err
-		}
-		return os.Chmod(p, 0o755) // #nosec G302 -- as above
-	})
+	return nil
 }
 
 // CacheDir is the shared module cache under SiegeKit's data root (ADR 0066,
@@ -363,12 +372,12 @@ func lock(p string) (func(), error) {
 		return nil, err
 	}
 	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX); err != nil { // #nosec G115 -- a file descriptor fits in an int
-		f.Close()
+		_ = f.Close() // the lock error is the one returned
 		return nil, err
 	}
 	return func() {
 		_ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN) // #nosec G115 -- as above
-		f.Close()
+		_ = f.Close()                                   // closing also releases the lock
 	}, nil
 }
 

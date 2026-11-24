@@ -61,14 +61,14 @@ func checkCAFile(p string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	st, err := os.Stat(real)
+	st, err := os.Stat(real) // #nosec G703 -- the CA file the person named
 	if err != nil {
 		return "", err
 	}
 	if !st.Mode().IsRegular() || st.Size() > maxCAFile {
 		return "", fmt.Errorf("%s must be a PEM file of at most %d bytes", p, maxCAFile)
 	}
-	b, err := os.ReadFile(real) // #nosec G304 -- the CA file the person named
+	b, err := os.ReadFile(real) // #nosec G304 G703 -- the CA file the person named
 	if err != nil {
 		return "", err
 	}
