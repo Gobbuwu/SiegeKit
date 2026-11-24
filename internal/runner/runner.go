@@ -394,6 +394,30 @@ func runPlugin(ctx context.Context, ex Executor, m *manifest.Manifest, opt Optio
 			return fail(report.Failed, "%v", err)
 		}
 	}
+	protoWD, protoIn := "", ""
+	if q := os.Getenv("SK_PROTO_Q1"); q == "A" && (m.ID == "gitleaks" || m.ID == "bandit") {
+		for i, a := range args {
+			if a == sandbox.TargetMount {
+				args[i] = "."
+			}
+		}
+		protoWD = sandbox.TargetMount
+	} else if q == "B" && m.ID == "gitleaks" {
+		if b, err := os.ReadFile(filepath.Join(opt.TargetDir, ".gitleaksignore")); err == nil {
+			var lines []string
+			for _, l := range strings.Split(string(b), "\n") {
+				if t := strings.TrimSpace(l); t != "" && !strings.HasPrefix(t, "#") && !strings.HasPrefix(t, "/") {
+					l = sandbox.TargetMount + "/" + t
+				}
+				lines = append(lines, l)
+			}
+			protoIn = filepath.Join(work, "proto-in")
+			_ = os.Mkdir(protoIn, 0o755)
+			if err := os.WriteFile(filepath.Join(protoIn, ".gitleaksignore"), []byte(strings.Join(lines, "\n")), 0o644); err == nil {
+				args = append(args, "--gitleaks-ignore-path", sandbox.InputMount+"/.gitleaksignore")
+			}
+		}
+	}
 	var scratch string
 	if m.Run.GoModules {
 		var g goRun
@@ -418,6 +442,8 @@ func runPlugin(ctx context.Context, ex Executor, m *manifest.Manifest, opt Optio
 		Timeout:    time.Duration(m.Resources.TimeoutSeconds) * time.Second,
 		StdoutFile: stdoutFile(m),
 		StderrFile: stderrFile(m),
+		WorkDirIn:  protoWD,
+		InputDir:   protoIn,
 	})
 	switch {
 	case err != nil:
@@ -435,6 +461,24 @@ func runPlugin(ctx context.Context, ex Executor, m *manifest.Manifest, opt Optio
 	fs, err := readReport(filepath.Join(out, m.Output.File), m, &suppressed, reportContext{})
 	if err != nil {
 		return fail(report.Failed, "%v", err)
+	}
+	if n1 := os.Getenv("SK_PROTO_N1"); n1 != "" && m.ID == "gitleaks" { // PROTO
+		var kept []findings.Finding
+		for _, f := range fs {
+			if checks.ProtoIgnored(opt.TargetDir, f.Location.URI) {
+				fmt.Fprintf(os.Stderr, "PROTO-N1 ignored %s\n", f.Location.URI)
+				switch n1 {
+				case "info":
+					f.Severity = findings.Info
+				case "drop":
+					continue
+				case "note":
+					f.Message += " This file is git-ignored: not committed."
+				}
+			}
+			kept = append(kept, f)
+		}
+		fs = kept
 	}
 	pr.Suppressed = suppressed
 	if err := repoIgnores(ctx, &pr, m, opt.TargetDir); err != nil {

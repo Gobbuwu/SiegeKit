@@ -266,6 +266,9 @@ func RelURI(uri, mount string) string {
 	if mount == "" {
 		return uri
 	}
+	if rest, ok := strings.CutPrefix(uri, "./"); ok && rest != "" { // PROTO
+		return rest
+	}
 	for _, p := range []string{"file:///" + mount + "/", "/" + mount + "/", mount + "/"} {
 		if rest, ok := strings.CutPrefix(uri, p); ok && rest != "" {
 			return rest

@@ -1,0 +1,85 @@
+# TEMPORARY measurement workflow for the Porchlet R1 fix plan, round 2
+# (issue #82 options and note N1). Removed before any merge.
+name: zz-measure-r1
+on:
+  push:
+    branches: [claude/project-thread-dmrccq]
+permissions:
+  contents: read
+env:
+  GO_VERSION: "1.27.4"
+jobs:
+  q1:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest, engine: podman }
+          - { os: ubuntu-latest, engine: docker }
+          - { os: ubuntu-24.04-arm, engine: podman }
+          - { os: ubuntu-24.04-arm, engine: docker }
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    env:
+      SIEGEKIT_ENGINE: ${{ matrix.engine }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: false
+      - name: Build
+        run: CGO_ENABLED=0 go build -o "$RUNNER_TEMP/sk" ./cmd/siegekit
+      - name: Fixtures and repositories
+        run: |
+          set -euo pipefail
+          W="$RUNNER_TEMP/w"; mkdir -p "$W"; cd "$W"
+          # gitleaks: allowlist forms and a .gitleaksignore fingerprint; g/six is the control.
+          mkdir -p q1fx/{a,b,c,d,e,g}
+          T=ghp_$(python3 -c "import random,string;random.seed(7);print(''.join(random.choice(string.ascii_letters+string.digits) for _ in range(36)))")
+          for f in a/one b/two c/three d/four e/five g/six; do echo "token = \"$T\"" > q1fx/$f.txt; done
+          printf '%s\n' '[extend]' 'useDefault = true' '[[allowlists]]' "paths = ['''^a/one\\.txt\$''', '''b/two\\.txt\$''', '''(^|/)c/three\\.txt\$''', '''(?i)^d/four\\.txt\$''']" > q1fx/.gitleaks.toml
+          echo "e/five.txt:github-pat:1" > q1fx/.gitleaksignore
+          cat q1fx/.gitleaks.toml
+          # Bandit: the three exclude forms, each in its own repository.
+          i=0
+          for ex in ./app/vendor app/vendor /app/vendor; do i=$((i+1)); mkdir -p bt$i/app/vendor bt$i/app/core
+            printf 'import subprocess\nsubprocess.call("ls", shell=True)\n' > bt$i/app/vendor/x.py; cp bt$i/app/vendor/x.py bt$i/app/core/y.py
+            printf '[bandit]\nexclude = %s\n' "$ex" > bt$i/.bandit; done
+          for r in "OWASP/NodeGoat c5cb68a7084e4ae7dcc60e6a98768720a81841e8" "bridgecrewio/terragoat 729f8da62c6a85ce4af5ad3d123de97776d954c4" "docker/awesome-compose 503c0dcef31b07fb77b2d4c5556bfafdf86f4f1a" "firebase/quickstart-js 474e779bc3f0af1c620fb9dfa53e933e6aa3edd7" "juice-shop/juice-shop c9f99228d9d56afb5f5ca7925376292f7fa44b13" "vercel/nextjs-subscription-payments bdd0813206e47e6b218d42f15a7976c8a0d3c3eb" "pallets/flask main" "psf/black main"; do
+            set -- $r; d=${1//\//__}; git init -q $d; git -C $d fetch -q --depth 1 https://github.com/$1 $2; git -C $d checkout -q FETCH_HEAD; echo "$d $(git -C $d rev-parse HEAD)"; done
+      - name: Run main, A and B
+        run: |
+          set -uo pipefail
+          W="$RUNNER_TEMP/w"; cd "$W"
+          for t in q1fx bt1 bt2 bt3 OWASP__NodeGoat bridgecrewio__terragoat docker__awesome-compose firebase__quickstart-js juice-shop__juice-shop vercel__nextjs-subscription-payments pallets__flask psf__black; do
+            for m in main A B; do
+              rm -rf r; SK_PROTO_Q1=$([ $m = main ] && echo off || echo $m) "$RUNNER_TEMP/sk" scan --only gitleaks,bandit --yes --report-dir r "$W/$t" > out.txt 2>&1 || true
+              python3 - "$t" "$m" <<'EOF'
+          import json, sys
+          r = json.load(open('r/report.json'))
+          st = {p['id']: p['status'] + ('' if p['status'] == 'ran' else ' (' + p.get('reason', '')[:120] + ')') for p in r['plugins']}
+          by = {}
+          for f in r['findings']:
+              for s in f['sources']:
+                  by.setdefault(s['plugin'], set()).add(f['location']['uri'] + ':' + str(f['location'].get('startLine')))
+          line = {'target': sys.argv[1], 'mode': sys.argv[2], 'status': st, 'gitleaks': sorted(by.get('gitleaks', [])), 'bandit': sorted(by.get('bandit', []))}
+          open('results.jsonl', 'a').write(json.dumps(line) + '\n')
+          print(sys.argv[1], sys.argv[2], st, 'gitleaks', len(line['gitleaks']), 'bandit', len(line['bandit']), line['gitleaks'] if len(line['gitleaks']) < 8 else '', line['bandit'] if len(line['bandit']) < 8 else '')
+          EOF
+            done
+          done
+          python3 - <<'EOF'
+          import json
+          rows = [json.loads(l) for l in open('results.jsonl')]
+          base = {(r['target']): r for r in rows if r['mode'] == 'main'}
+          for r in rows:
+              if r['mode'] == 'main': continue
+              b = base[r['target']]
+              for tool in ('gitleaks', 'bandit'):
+                  a, c = set(b[tool]), set(r[tool])
+                  if a != c:
+                      print('DIFF', r['target'], r['mode'], tool, 'only main:', sorted(a - c)[:10], 'only', r['mode'] + ':', sorted(c - a)[:10])
+          EOF

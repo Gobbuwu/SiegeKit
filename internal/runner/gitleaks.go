@@ -57,6 +57,9 @@ func gitleaksConfig(m *manifest.Manifest, target, work string) (env map[string]s
 			}
 		}
 		base, from = string(repo), "the rules in the repository's "+gitleaksRepoConfig
+		if os.Getenv("SK_PROTO_Q1") == "B" {
+			base = protoRewrite(base)
+		}
 	}
 	file = filepath.Join(work, m.ID+"-config.toml")
 	cfg := base + "\n\n" + m.Run.GitleaksRules
@@ -104,4 +107,25 @@ func readRepoConfig(p string) ([]byte, error) {
 		return nil, fmt.Errorf("the repository's %s is not UTF-8 text", gitleaksRepoConfig)
 	}
 	return b, nil
+}
+
+// protoRewrite (PROTO, option B): anchored path regexes in allowlists are
+// made to match /target/... paths.
+func protoRewrite(s string) string {
+	var out []string
+	inPaths := false
+	for _, l := range strings.Split(s, "\n") {
+		t := strings.TrimSpace(l)
+		if strings.HasPrefix(t, "paths") {
+			inPaths = true
+		}
+		if inPaths {
+			l = strings.NewReplacer("'''^", "'''^/target/", `"^`, `"^/target/`, "'^", "'^/target/").Replace(l)
+			if strings.Contains(l, "]") {
+				inPaths = false
+			}
+		}
+		out = append(out, l)
+	}
+	return strings.Join(out, "\n")
 }

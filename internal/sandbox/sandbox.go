@@ -5,6 +5,7 @@ package sandbox
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"crypto/rand"
 	"debug/elf"
@@ -95,7 +96,8 @@ type Spec struct {
 	Timeout     time.Duration
 	OutputLimit int64 // bytes; 0 means DefaultOutputLimit
 	// Env is extra environment for the tool; see CheckEnv.
-	Env map[string]string
+	Env       map[string]string
+	WorkDirIn string // PROTO: container working directory; "" means /tmp
 	// TmpMiB is the size of the in-memory /tmp; 0 means 256. Its pages count
 	// against MemoryMiB, so it cannot exceed the memory limit.
 	TmpMiB int
@@ -427,7 +429,7 @@ func (s *Spec) EngineArgs(name string, uid, gid int) ([]string, error) {
 		"--memory-swap", fmt.Sprintf("%dm", s.MemoryMiB),
 		"--cpus", strconv.Itoa(s.CPUs),
 		"--env", "HOME=/tmp",
-		"--workdir", "/tmp",
+		"--workdir", cmp.Or(s.WorkDirIn, "/tmp"),
 	)
 	keys := make([]string, 0, len(s.Env))
 	for k := range s.Env {
