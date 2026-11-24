@@ -21,7 +21,7 @@ func TestRecordedToolOutput(t *testing.T) {
 		"gitleaks":         "gitleaks.sarif",
 		"gitleaks-history": "gitleaks-history.sarif",
 		"gosec":            "gosec.sarif",
-		"trivy":            "trivy.sarif",
+		"trivy":            "trivy.json",
 		// Both ZAP plugins write zap.json.
 		"zap":        "zap/zap.json",
 		"zap-active": "zap-active/zap.json",

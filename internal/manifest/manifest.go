@@ -17,6 +17,7 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/Gobbuwu/SiegeKit/internal/sandbox"
 	"github.com/Gobbuwu/SiegeKit/internal/wordlists"
@@ -41,7 +42,7 @@ var (
 	Placeholds = []string{"target", "target-base", "target-origin", "outdir", "workdir", "threads", "ratelimit", "data", "config", "wordlist", "openapi"}
 	// ConfigPlaceholds are the placeholders allowed in run.config strings.
 	ConfigPlaceholds = []string{"target", "target-regex"}
-	Parsers          = []string{"sarif", "sarif-gitleaks", "sarif-checkov", "sarif-zap", "bandit-json", "nuclei-jsonl", "ffuf-json", "schemathesis-json"}
+	Parsers          = []string{"sarif", "sarif-gitleaks", "sarif-checkov", "sarif-zap", "bandit-json", "nuclei-jsonl", "ffuf-json", "schemathesis-json", "trivy-json"}
 	// StdoutParsers read a tool's standard output for work it did not do
 	// (ADR 0040).
 	StdoutParsers = []string{"gosec-errors"}
@@ -169,11 +170,30 @@ type Run struct {
 	// says it ran and found issues, such as Schemathesis's 1 (ADR 0028).
 	// The report is still read and checked.
 	FindingsExitCodes []int `json:"findingsExitCodes,omitempty"`
+	// GitleaksRules are SiegeKit's own Gitleaks rules, as TOML [[rules]]
+	// tables. SiegeKit appends them to the scanned repository's
+	// .gitleaks.toml, or to Gitleaks' default rules when there is none,
+	// mounts the result at sandbox.ConfigMountTOML and points
+	// GITLEAKS_CONFIG at it, so the repository's own rules apply as well
+	// (ADR 0063). Only for Gitleaks plugins that scan repositories.
+	GitleaksRules string `json:"gitleaksRules,omitempty"`
 	// Recorded makes SiegeKit add a ZAP "import" job, before the first
 	// spider job, for the requests of the person's HAR file, mounted
 	// read-only at RecordedMount (ADR 0047). Only for destructive,
 	// local-only ZAP plugins.
 	Recorded bool `json:"recordedRequests,omitempty"`
+}
+
+var reGitleaksRuleID = regexp.MustCompile(`(?m)^id = "([a-z0-9][a-z0-9-]{0,63})"$`)
+
+// GitleaksRuleIDs lists the IDs of the rules in GitleaksRules, in order.
+// Each rule's id must be written as `id = "name"` on its own line.
+func (r *Run) GitleaksRuleIDs() []string {
+	var ids []string
+	for _, m := range reGitleaksRuleID.FindAllStringSubmatch(r.GitleaksRules, -1) {
+		ids = append(ids, m[1])
+	}
+	return ids
 }
 
 // RecordedMount is where SiegeKit mounts the recorded requests for
@@ -380,6 +400,28 @@ func (m *Manifest) Validate() error {
 				add("run.recordedRequests needs a spider job in run.config.jobs")
 			}
 		}
+		if g := m.Run.GitleaksRules; g != "" {
+			ids := m.Run.GitleaksRuleIDs()
+			_, setsConfig := m.Run.Env["GITLEAKS_CONFIG"]
+			_, setsTOML := m.Run.Env["GITLEAKS_CONFIG_TOML"]
+			switch {
+			case m.Tool.Name != "gitleaks" || !slices.Equal(m.Targets, []string{"repo"}):
+				add("run.gitleaksRules is only for Gitleaks plugins whose only target is repo")
+			case len(g) > 16<<10 || !utf8.ValidString(g) || strings.ContainsRune(g, 0):
+				add("run.gitleaksRules must be UTF-8 text up to 16 KiB")
+			case len(ids) == 0 || len(ids) != strings.Count(g, "[[rules]]"):
+				add("run.gitleaksRules must write each rule's id as `id = \"name\"` on its own line")
+			case setsConfig || setsTOML:
+				add("run.env must not set GITLEAKS_CONFIG or GITLEAKS_CONFIG_TOML with run.gitleaksRules")
+			case m.RepoIgnores == nil || !slices.Contains(m.RepoIgnores.Files, ".gitleaks.toml"):
+				add("run.gitleaksRules needs .gitleaks.toml in repoIgnores.files, so reports say the repository's rules apply")
+			}
+			for i, id := range ids {
+				if slices.Index(ids, id) != i {
+					add("run.gitleaksRules defines rule %q twice", id)
+				}
+			}
+		}
 		if len(m.Run.FindingsExitCodes) > 4 {
 			add("run.findingsExitCodes has more than 4 entries")
 		}
@@ -438,6 +480,9 @@ func (m *Manifest) Validate() error {
 		}
 		if m.Output.Parser == "schemathesis-json" && m.Output.Format != "json" {
 			add("output.parser \"schemathesis-json\" needs output.format \"json\"")
+		}
+		if m.Output.Parser == "trivy-json" && m.Output.Format != "json" {
+			add("output.parser \"trivy-json\" needs output.format \"json\"")
 		}
 		if o := m.Output.Stdout; o != nil {
 			checkEnum(&p, "output.stdout.parser", o.Parser, StdoutParsers)

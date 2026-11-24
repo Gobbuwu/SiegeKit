@@ -331,3 +331,59 @@ func TestRecordedRequestsRules(t *testing.T) {
 		t.Errorf("no spider: %v", err)
 	}
 }
+
+// TestGitleaksRulesRules checks where run.gitleaksRules is allowed and how
+// it must be written (ADR 0063), starting from the built-in history scan.
+func TestGitleaksRulesRules(t *testing.T) {
+	b, err := os.ReadFile("../../plugins/gitleaks-history/plugin.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	load := func() map[string]any {
+		var m map[string]any
+		if err := json.Unmarshal(b, &m); err != nil {
+			t.Fatal(err)
+		}
+		return m
+	}
+	parsed, err := Parse(b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ids := parsed.Run.GitleaksRuleIDs(); !slices.Equal(ids, []string{"env-file-committed", "siegekit-supabase-secret-key", "siegekit-supabase-publishable-key"}) {
+		t.Errorf("rule ids %v", ids)
+	}
+	run := func(m map[string]any) map[string]any { return m["run"].(map[string]any) }
+	for _, c := range []struct {
+		name   string
+		mutate func(m map[string]any)
+		want   string
+	}{
+		{"not gitleaks", func(m map[string]any) { m["tool"].(map[string]any)["name"] = "trufflehog" }, "only for Gitleaks plugins whose only target is repo"},
+		{"url target", func(m map[string]any) { m["targets"] = []string{"repo", "url"} }, "only for Gitleaks plugins whose only target is repo"},
+		{"id not on its own line", func(m map[string]any) {
+			run(m)["gitleaksRules"] = "[[rules]]\nid=\"x-y\"\nregex = '''x'''\n"
+		}, "must write each rule's id"},
+		{"a rule without a readable id", func(m map[string]any) {
+			run(m)["gitleaksRules"] = run(m)["gitleaksRules"].(string) + "\n[[rules]]\nregex = '''x'''\n"
+		}, "must write each rule's id"},
+		{"duplicate id", func(m map[string]any) {
+			run(m)["gitleaksRules"] = "[[rules]]\nid = \"a-b\"\nregex = '''x'''\n[[rules]]\nid = \"a-b\"\nregex = '''y'''\n"
+		}, "defines rule \"a-b\" twice"},
+		{"too large", func(m map[string]any) {
+			run(m)["gitleaksRules"] = "[[rules]]\nid = \"a-b\"\nregex = '''x'''\n#" + strings.Repeat("x", 16<<10)
+		}, "UTF-8 text up to 16 KiB"},
+		{"env sets the config", func(m map[string]any) {
+			run(m)["env"].(map[string]any)["GITLEAKS_CONFIG_TOML"] = "x"
+		}, "must not set GITLEAKS_CONFIG"},
+		{"repository config not listed", func(m map[string]any) {
+			m["repoIgnores"].(map[string]any)["files"] = []string{".gitleaksignore"}
+		}, "needs .gitleaks.toml in repoIgnores.files"},
+	} {
+		m := load()
+		c.mutate(m)
+		if _, err := Parse(mustMarshal(t, m)); err == nil || !strings.Contains(err.Error(), c.want) {
+			t.Errorf("%s: %v, want %q", c.name, err, c.want)
+		}
+	}
+}

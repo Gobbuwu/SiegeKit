@@ -9,6 +9,7 @@ name: Real-repo gate
 # code pages on Juice Shop from a Chromium recording. ADR 0059: the storage
 # write test on the Firebase Storage emulator and a local Supabase Storage.
 # ADR 0060: every job also runs on GitHub's ARM Linux runner (ubuntu-24.04-arm).
+# ADR 0063: the planted secrets of the owner's Porchlet run.
 on:
   workflow_dispatch:
   schedule:
@@ -132,6 +133,68 @@ jobs:
         # Every check must find what it is known to find on this commit, and
         # nothing new (ADR 0039). The run's own answer is printed, for review
         # when a pin changes.
+        run: |
+          set +e
+          go run ./internal/knownanswers/check -answers "$ANSWERS" -report "$RUNNER_TEMP/report/report.json" -observed "$RUNNER_TEMP/observed.json"
+          code=$?
+          set -e
+          echo "::group::Answer of this run"
+          cat "$RUNNER_TEMP/observed.json"
+          echo "::endgroup::"
+          exit $code
+
+  planted:
+    # ADR 0063: the secret and dependency cases of the owner's Porchlet run,
+    # in a repository .github/gate/planted/make.sh builds at run time, so
+    # that no key is stored in SiegeKit's repository: a Supabase secret key
+    # in the tree and one committed then deleted, a token only the
+    # repository's .gitleaks.toml knows, a service_role JWT, publishable
+    # keys, a committed .env, an ignored .env.local, and lodash (production)
+    # and minimist (development) in package-lock.json.
+    name: Planted secrets (${{ matrix.engine }}${{ matrix.os == 'ubuntu-24.04-arm' && ', arm64' || '' }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    env:
+      SIEGEKIT_ENGINE: ${{ matrix.engine }}
+      EXPECT_ENGINE: ${{ matrix.engine == 'podman' && 'podman rootless' || 'docker rootful' }}
+      ANSWERS: testdata/known-answers/planted-secrets.json
+    strategy:
+      fail-fast: false
+      matrix:
+        engine: [podman, docker]
+        # GitHub's ARM Linux runner too (ADR 0060, owner 2026-11-23).
+        os: [ubuntu-latest, ubuntu-24.04-arm]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Platform
+        run: test "$(uname -m)" = "${{ matrix.os == 'ubuntu-24.04-arm' && 'aarch64' || 'x86_64' }}"
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: false
+      - name: Build
+        run: go build -o "$RUNNER_TEMP/siegekit" ./cmd/siegekit
+      - name: Build the planted repository
+        run: .github/gate/planted/make.sh "$RUNNER_TEMP/target"
+      - name: Scan
+        # Findings are planted, so exit 3 is the only right code.
+        run: |
+          set +e
+          "$RUNNER_TEMP/siegekit" scan --yes --update --no-save --only gitleaks,gitleaks-history,dotenv-gitignore,trivy --report-dir "$RUNNER_TEMP/report" "$RUNNER_TEMP/target"
+          code=$?
+          set -e
+          echo "exit code $code"
+          test "$code" -eq 3
+          r="$RUNNER_TEMP/report/report.json"
+          jq -e --arg e "$EXPECT_ENGINE" '.environment.engine | (.name + (if .rootless then " rootless" else " rootful" end)) == $e' "$r"
+          # Both Gitleaks scans name the repository's rules as their input (SK-1).
+          jq -e '[.plugins[] | select(.id == "gitleaks" or .id == "gitleaks-history") | .input | startswith("the rules in the repository'"'"'s .gitleaks.toml and SiegeKit'"'"'s rules ")] == [true, true]' "$r"
+          # Only the development dependency's finding says it is one (SK-3).
+          jq -e '[.findings[] | select(.message | contains("This is a development dependency")) | .ruleId] | unique == ["CVE-2021-44906"]' "$r"
+      - name: Known answers
+        if: ${{ !cancelled() }}
         run: |
           set +e
           go run ./internal/knownanswers/check -answers "$ANSWERS" -report "$RUNNER_TEMP/report/report.json" -observed "$RUNNER_TEMP/observed.json"

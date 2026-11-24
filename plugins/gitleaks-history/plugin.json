@@ -2,8 +2,8 @@
   "schemaVersion": 1,
   "id": "gitleaks-history",
   "name": "Gitleaks git history scan",
-  "version": "1.0.0",
-  "description": "Finds secrets anywhere in the git history, including ones deleted later, and any committed environment file (.env, .env.local and similar; templates such as .env.example are allowed). Secret values are redacted by the tool and masked again by SiegeKit.",
+  "version": "1.1.0",
+  "description": "Finds secrets anywhere in the git history, including ones deleted later, and any committed environment file (.env, .env.local and similar; templates such as .env.example are allowed). Uses the same rules as the current-files scan: Gitleaks' rules or the repository's own .gitleaks.toml, plus SiegeKit's. Secret values are redacted by the tool and masked again by SiegeKit.",
   "family": "secrets",
   "mode": "passive",
   "destructive": false,
@@ -48,11 +48,11 @@
       "{outdir}/gitleaks-history.sarif"
     ],
     "env": {
-      "GITLEAKS_CONFIG_TOML": "[extend]\nuseDefault = true\n\n[[rules]]\nid = \"env-file-committed\"\ndescription = \"Environment file (.env) committed to git\"\npath = '''(^|/)\\.env(\\.[^/]*)?$'''\n[[rules.allowlists]]\npaths = ['''(^|/)\\.env\\.(example|sample|template|dist)$''']\n",
       "GIT_CONFIG_COUNT": "1",
       "GIT_CONFIG_KEY_0": "safe.directory",
       "GIT_CONFIG_VALUE_0": "/target"
-    }
+    },
+    "gitleaksRules": "[[rules]]\nid = \"env-file-committed\"\ndescription = \"Environment file (.env) committed to git\"\npath = '''(^|/)\\.env(\\.[^/]*)?$'''\n[[rules.allowlists]]\npaths = ['''(^|/)\\.env\\.(example|sample|template|dist)$''']\n\n[[rules]]\nid = \"siegekit-supabase-secret-key\"\ndescription = \"Supabase secret key (sb_secret_)\"\nregex = '''\\b(sb_secret_[A-Za-z0-9_-]{20,})'''\nentropy = 3\nkeywords = [\"sb_secret_\"]\n# The Supabase CLI's fixed key for local stacks (supabase/cli,\n# packages/stack/src/Defaults.ts) is public, so it is not a leak.\n# Written as a pattern so that the key itself is not in this file,\n# with the class early so that the rule does not match its own\n# pattern (SiegeKit's self-scan, ADR 0063).\n# Gitleaks' generic-api-key rule still reports it on a line such as\n# SUPABASE_SECRET_KEY=..., as it did before this rule (ADR 0063).\n# The CLI's publishable key is not left out: it is reported as info\n# like any publishable key, and leaving it out would let Gitleaks'\n# generic-api-key rule report it as a high leak instead (ADR 0063).\n[[rules.allowlists]]\nregexTarget = \"match\"\nregexes = ['''sb_secret_N7UND0Ug[j]KTVK-Uodkm0Hg_xSvEMPvz''']\n\n[[rules]]\nid = \"siegekit-supabase-publishable-key\"\ndescription = \"Supabase publishable key (sb_publishable_)\"\nregex = '''\\b(sb_publishable_[A-Za-z0-9_-]{20,})'''\nentropy = 3\nkeywords = [\"sb_publishable_\"]\n"
   },
   "output": {
     "format": "sarif",
@@ -61,6 +61,7 @@
   },
   "repoIgnores": {
     "files": [
+      ".gitleaks.toml",
       ".gitleaksignore"
     ],
     "marker": "gitleaks:allow"
