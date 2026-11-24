@@ -11,7 +11,7 @@ import (
 )
 
 func read(p string) string {
-	b, err := os.ReadFile(p)
+	b, err := os.ReadFile(p) // #nosec G304 -- temporary measurement: fixed /proc and cgroup paths
 	if err != nil {
 		return "ERR " + err.Error()
 	}
@@ -19,7 +19,7 @@ func read(p string) string {
 }
 
 func main() {
-	cmd := exec.Command(os.Args[1], os.Args[2:]...)
+	cmd := exec.Command(os.Args[1], os.Args[2:]...) // #nosec G702 G204 -- temporary measurement: runs the command it is given, by design
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
 	code := 0
 	if err := cmd.Start(); err != nil {
@@ -64,9 +64,9 @@ func main() {
 	}
 	b, _ := json.MarshalIndent(m, "", " ")
 	if p := os.Getenv("COUNTERS_OUT"); p != "" {
-		_ = os.WriteFile(p, b, 0o644)
+		_ = os.WriteFile(p, b, 0o600) // #nosec G703 -- temporary measurement: path set by the workflow
 	} else {
-		os.Stdout.Write(b)
+		_, _ = os.Stdout.Write(b)
 	}
 	os.Exit(code)
 }
