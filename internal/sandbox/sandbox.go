@@ -554,13 +554,6 @@ func (e *Engine) Run(ctx context.Context, s Spec) (*Result, error) {
 	if args, err = withWaiter(args, s, entry, wdir); err != nil {
 		return nil, err
 	}
-	// TEMP (removed before merge): option D of the waiter-delivery
-	// measurement, a derived image with the waiter copied in.
-	if os.Getenv("SIEGEKIT_MEASURE_WAITER") == "derived" {
-		if args, err = e.measureDerived(ctx, args, s.Image, wdir); err != nil {
-			return nil, err
-		}
-	}
 	args = e.sameOnEveryEngine(args)
 	if err := os.Chmod(s.OutDir, 0o777); err != nil { // #nosec G302 -- the container user may differ from the caller; the parent is checked to be private (0700) first
 		return nil, err
@@ -754,41 +747,6 @@ func withWaiter(args []string, s Spec, entry []string, dir string) ([]string, er
 		}
 	}
 	return append(out, s.Args...), nil
-}
-
-// measureDerived is TEMP (removed before merge): it builds an image FROM
-// image with the waiter at WaiterMount and runs that instead of mounting.
-func (e *Engine) measureDerived(ctx context.Context, args []string, image, wdir string) ([]string, error) {
-	cf := filepath.Join(wdir, "Containerfile")
-	if err := os.WriteFile(cf, []byte("FROM "+image+"\nCOPY "+waiterFile+" "+WaiterMount+"/"+waiterFile+"\n"), 0o644); err != nil { // #nosec G306 -- TEMP measurement
-		return nil, err
-	}
-	t0 := time.Now()
-	cmd := e.command(ctx, "build", "-q", "-f", cf, wdir)
-	var out, errOut tailBuffer
-	cmd.Stdout, cmd.Stderr = &out, &errOut
-	if err := cmd.Run(); err != nil {
-		return nil, fmt.Errorf("derived image: %s", lastLine(errOut.String(), err))
-	}
-	f := strings.Fields(out.String())
-	if len(f) == 0 {
-		return nil, errors.New("derived image: build printed no image ID")
-	}
-	id := f[len(f)-1]
-	fmt.Fprintf(os.Stderr, "MEASURE-D build %s ms=%d id=%s\n", image, time.Since(t0).Milliseconds(), id)
-	mount := "type=bind,source=" + wdir + ",target=" + WaiterMount + ",readonly"
-	var res []string
-	for i := 0; i < len(args); i++ {
-		switch {
-		case args[i] == "--mount" && i+1 < len(args) && args[i+1] == mount:
-			i++
-		case args[i] == image:
-			res = append(res, id)
-		default:
-			res = append(res, args[i])
-		}
-	}
-	return res, nil
 }
 
 // entrypoint reads image's entrypoint, which the waiter starts.
