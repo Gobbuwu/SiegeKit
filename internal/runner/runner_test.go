@@ -16,6 +16,7 @@ import (
 	"github.com/Gobbuwu/SiegeKit/internal/manifest"
 	"github.com/Gobbuwu/SiegeKit/internal/report"
 	"github.com/Gobbuwu/SiegeKit/internal/sandbox"
+	"github.com/Gobbuwu/SiegeKit/internal/waiter"
 	"github.com/Gobbuwu/SiegeKit/plugins"
 )
 
@@ -84,8 +85,8 @@ func TestRunConvertsReport(t *testing.T) {
 	if got.Severity != findings.High || got.Location.URI != "config.py" || strings.Contains(got.Snippet, "0123456789") {
 		t.Errorf("finding %+v", got)
 	}
-	if r.ExitCode(findings.High) != report.ExitFindings {
-		t.Errorf("exit code %d", r.ExitCode(findings.High))
+	if r.ExitCode(findings.High, false) != report.ExitFindings {
+		t.Errorf("exit code %d", r.ExitCode(findings.High, false))
 	}
 	// The private work directory is removed after the run.
 	if entries, _ := os.ReadDir(o.WorkDir); len(entries) != 0 {
@@ -100,7 +101,7 @@ func TestRunRecordsFailures(t *testing.T) {
 		reason string
 	}{
 		"timeout": {func(sandbox.Spec) (*sandbox.Result, error) {
-			return &sandbox.Result{Status: sandbox.TimedOut, ExitCode: -1}, nil
+			return &sandbox.Result{Status: sandbox.TimedOut, ExitCode: -1, Stop: sandbox.StopTimeLimit, StopReason: "stopped after 30 seconds, its time limit"}, nil
 		}, report.TimedOut, "stopped after"},
 		"engine failure": {func(sandbox.Spec) (*sandbox.Result, error) {
 			return &sandbox.Result{Status: sandbox.Failed, ExitCode: 125, Stderr: "pull failed\nno such image\n"}, nil
@@ -146,7 +147,7 @@ func TestRunRecordsFailures(t *testing.T) {
 			if strings.ContainsRune(p.Reason, 0x1b) {
 				t.Errorf("escape character kept in reason %q", p.Reason)
 			}
-			if r.Complete() || r.ExitCode(findings.High) != report.ExitIncomplete {
+			if r.Complete() || r.ExitCode(findings.High, false) != report.ExitIncomplete {
 				t.Error("a failed plugin must make the run incomplete")
 			}
 		})
@@ -156,7 +157,7 @@ func TestRunRecordsFailures(t *testing.T) {
 func TestRunContinuesAfterFailure(t *testing.T) {
 	f := &fake{act: func(s sandbox.Spec) (*sandbox.Result, error) {
 		if strings.Contains(s.Image, "checkov") {
-			return &sandbox.Result{Status: sandbox.TimedOut, ExitCode: -1}, nil
+			return &sandbox.Result{Status: sandbox.TimedOut, ExitCode: -1, Stop: sandbox.StopTimeLimit, StopReason: "stopped after 30 seconds, its time limit"}, nil
 		}
 		write(t, s.OutDir, "gitleaks.sarif", gitleaksSARIF)
 		return &sandbox.Result{Status: sandbox.Completed}, nil
@@ -326,11 +327,11 @@ func TestSelectAndRunBuiltinChecks(t *testing.T) {
 	o := opts(t)
 	os.WriteFile(filepath.Join(o.TargetDir, "database.rules.json"), []byte(`{"rules":{".read":true}}`), 0o644)
 	o.Checks = cs
-	failing := checks.Check{ID: "broken", Family: "iac", Run: func(context.Context, string) ([]findings.Finding, string, error) {
-		return nil, "", errors.New("boom")
+	failing := checks.Check{ID: "broken", Family: "iac", Run: func(context.Context, string) (checks.Outcome, error) {
+		return checks.Outcome{}, errors.New("boom")
 	}}
-	saying := checks.Check{ID: "saying", Family: "secrets", Run: func(context.Context, string) ([]findings.Finding, string, error) {
-		return nil, "nothing seen", nil
+	saying := checks.Check{ID: "saying", Family: "secrets", Run: func(context.Context, string) (checks.Outcome, error) {
+		return checks.Outcome{Result: "nothing seen"}, nil
 	}}
 	o.Checks = append(o.Checks, failing, saying)
 	r, err := Run(context.Background(), &fake{}, nil, o)
@@ -595,7 +596,7 @@ func TestRunGosecSkippedPackagesIncomplete(t *testing.T) {
 			if c.status == report.Failed {
 				wantExit = report.ExitIncomplete
 			}
-			if got := r.ExitCode(findings.Critical); got != wantExit {
+			if got := r.ExitCode(findings.Critical, false); got != wantExit {
 				t.Errorf("exit %d, want %d", got, wantExit)
 			}
 		})
@@ -711,5 +712,39 @@ func TestRemoveScratch(t *testing.T) {
 	}}
 	if err := removeScratch(f, "img", dir); err == nil || !strings.Contains(err.Error(), dir) || !strings.Contains(err.Error(), "rm: denied") {
 		t.Errorf("%v", err)
+	}
+}
+
+// A run cut short fails with its typed stop and keeps the findings the tool
+// wrote before the stop (ADR 0067, decision 1).
+func TestStoppedRunKeepsFindings(t *testing.T) {
+	f := &fake{act: func(s sandbox.Spec) (*sandbox.Result, error) {
+		write(t, s.OutDir, "gitleaks.sarif", gitleaksSARIF)
+		return &sandbox.Result{Status: sandbox.Failed, Stop: sandbox.StopMemoryKill, StopReason: "the kernel killed 1 process(es) of the tool",
+			Usage: &waiter.Status{MemoryPeak: 900 << 20, ProcessesPeak: 12, MemoryKills: 1}}, nil
+	}}
+	r, err := Run(context.Background(), f, []*manifest.Manifest{builtin(t, "gitleaks")}, opts(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := r.Plugins[0]
+	if p.Status != report.Failed || p.Stop != report.StopMemoryKill || p.Findings != 1 || len(r.Findings) != 1 || !strings.Contains(p.Reason, "1 finding(s) reported before the stop are kept") {
+		t.Fatalf("got %+v", p)
+	}
+	if p.Usage == nil || p.Usage.MemoryPeak != 900<<20 || p.Usage.MemoryLimit == 0 || p.Usage.ProcessLimit != 256 {
+		t.Fatalf("usage %+v", p.Usage)
+	}
+	if r.ExitCode(findings.Critical, false) != report.ExitIncomplete {
+		t.Error("a stopped check must make the run incomplete")
+	}
+}
+
+// Every stop the sandbox reports is a stop the report knows.
+func TestSandboxStopsAreReportStops(t *testing.T) {
+	known := []report.Stop{report.StopTimeLimit, report.StopMemoryKill, report.StopProcessLimit, report.StopKilled, report.StopOutputLimit, report.StopCountersUnread}
+	for _, s := range []sandbox.Stop{sandbox.StopTimeLimit, sandbox.StopMemoryKill, sandbox.StopProcessLimit, sandbox.StopKilled, sandbox.StopOutputLimit, sandbox.StopCountersUnread} {
+		if !slices.Contains(known, report.Stop(s)) {
+			t.Errorf("sandbox stop %q has no report stop", s)
+		}
 	}
 }

@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/Gobbuwu/SiegeKit/internal/findings"
+	"github.com/Gobbuwu/SiegeKit/internal/report"
 )
 
 // dotenv warns when environment files (.env) are not excluded from git, so
@@ -36,12 +37,12 @@ func IsEnvFile(base string) bool {
 	return ok && rest != "" && !envTemplates[strings.ToLower(rest)]
 }
 
-func runDotenv(ctx context.Context, root string) ([]findings.Finding, error) {
+func runDotenv(ctx context.Context, root string, g *gaps) ([]findings.Finding, error) {
 	if st, err := os.Lstat(filepath.Join(root, ".git")); err != nil || !st.IsDir() {
-		return nil, nil
+		return nil, NotApplicable{"not a git repository (no .git directory at the top level), so nothing can be committed by mistake"}
 	}
 	var envFiles []string
-	err := walkTree(ctx, root, func(_, rel string) error {
+	err := walkTree(ctx, root, g, func(_, rel string) error {
 		if IsEnvFile(path.Base(rel)) {
 			envFiles = append(envFiles, rel)
 		}
@@ -50,7 +51,7 @@ func runDotenv(ctx context.Context, root string) ([]findings.Finding, error) {
 	if err != nil {
 		return nil, err
 	}
-	ig := &ignores{root: root, cache: map[string][]ignoreRule{}}
+	ig := &ignores{root: root, cache: map[string][]ignoreRule{}, g: g}
 	var out []findings.Finding
 	for _, rel := range envFiles {
 		if ig.ignored(rel) {
@@ -99,6 +100,7 @@ type ignoreRule struct {
 type ignores struct {
 	root  string
 	cache map[string][]ignoreRule // by directory, "" for the root
+	g     *gaps                   // ignore files too large to read
 }
 
 func (g *ignores) rules(dir string) []ignoreRule {
@@ -112,6 +114,10 @@ func (g *ignores) rules(dir string) []ignoreRule {
 	}
 	for _, f := range files {
 		data, err := readFile(f)
+		if err == nil && data == nil {
+			rel, _ := filepath.Rel(g.root, f)
+			g.g.add(report.GapTooLarge, filepath.ToSlash(rel), "an ignore file over 1 MiB, or not a regular file; its rules were not read, so an environment file it excludes may be reported")
+		}
 		if err != nil || data == nil {
 			continue
 		}

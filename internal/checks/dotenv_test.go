@@ -2,6 +2,7 @@ package checks
 
 import (
 	"context"
+	"errors"
 	"path"
 	"slices"
 	"strings"
@@ -27,7 +28,6 @@ func TestDotenv(t *testing.T) {
 		files map[string]string
 		want  []result
 	}{
-		{"not a git repository", map[string]string{".env": "A=1"}, nil},
 		{"ignored", map[string]string{".git/HEAD": "", ".gitignore": "node_modules\n.env\n", ".env": "A=1"}, nil},
 		{"ignored by glob", map[string]string{".git/HEAD": "", ".gitignore": ".env*\n", ".env.local": "A=1", "app/.env": "B"}, nil},
 		{"ignored by info/exclude", map[string]string{".git/HEAD": "", ".git/info/exclude": "/.env\n", ".env": "A=1"}, nil},
@@ -48,7 +48,7 @@ func TestDotenv(t *testing.T) {
 		{"CRLF and **/", map[string]string{".git/HEAD": "", ".gitignore": "**/.env\r\n", "a/b/.env": "A", ".env": "B"}, nil},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			fs, err := runDotenv(context.Background(), tree(t, tc.files))
+			fs, err := runDotenv(context.Background(), tree(t, tc.files), nil)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -63,6 +63,16 @@ func TestDotenv(t *testing.T) {
 				t.Errorf("got %v, want %v", got, tc.want)
 			}
 		})
+	}
+}
+
+// A folder that is not a git repository has nothing to commit by mistake:
+// the check is skipped, not reported as ran with nothing found (ADR 0067).
+func TestDotenvNotAGitRepository(t *testing.T) {
+	_, err := runDotenv(context.Background(), tree(t, map[string]string{".env": "A=1"}), nil)
+	var na NotApplicable
+	if !errors.As(err, &na) || !strings.Contains(na.Reason, "not a git repository") {
+		t.Fatalf("got %v", err)
 	}
 }
 
