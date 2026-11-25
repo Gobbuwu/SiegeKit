@@ -10,6 +10,8 @@ name: Measure waiter delivery (temporary)
 #      (SIEGEKIT_MEASURE_WAITER=none), and the build with the files removed
 #   D  (outside SiegeKit) a derived image per tool with the waiter baked in
 on:
+  # Dispatch too: the push of round 2 (2b2abdf) started no workflow at all.
+  workflow_dispatch:
   pull_request:
     paths:
       - .github/workflows/zz-measure-waiter-delivery.yml
