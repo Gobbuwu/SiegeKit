@@ -98,7 +98,7 @@ func serveSignup(t *testing.T, h http.Handler) (*target.URL, egress.Config) {
 	return tu, egress.Config{Target: tu, Addrs: []netip.Addr{netip.MustParseAddr("127.0.0.1")}, Version: "test"}
 }
 
-const signupFields = "email={new}%40example.com&password=Abcdef123456"
+const signupFields = "email={new}%40example.com&password=pw"
 
 func TestParsePageForm(t *testing.T) {
 	tu := mustTarget(t, "http://127.0.0.1:3100/")
@@ -109,7 +109,7 @@ func TestParsePageForm(t *testing.T) {
 	if !e.Form || e.From != "--signup-page" || e.URL != "http://127.0.0.1:3100/signup?next=%2F" || e.Path != "/signup?next=%2F" || len(e.fields) != 2 || e.fields[0].Value != "{new}@example.com" {
 		t.Errorf("%+v", e)
 	}
-	if b := string(e.formBody("w", "siegekit-new-x")); b != "email=siegekit-new-x%40example.com&password=Abcdef123456" {
+	if b := string(e.formBody("w", "siegekit-new-x")); b != "email=siegekit-new-x%40example.com&password=pw" {
 		t.Error(b)
 	}
 	for _, c := range []struct {
