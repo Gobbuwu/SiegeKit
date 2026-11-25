@@ -319,7 +319,7 @@ func SendHeader(ctx context.Context, cfg Config, method, path string, header htt
 	a := &Answer{Status: resp.StatusCode, Header: resp.Header}
 	b, err := io.ReadAll(io.LimitReader(resp.Body, max+1))
 	a.Took = time.Since(start)
-	shape := Shape{Status: a.Status, Type: mediaType(a.Header), Len: int64(len(b))}
+	shape := Shape{Status: a.Status, Type: mediaType(a.Header), Len: int64(len(b)), Enc: encoding(a.Header)}
 	if err != nil || shape.Len > maxShapeBody {
 		shape.Len = -1
 	}
@@ -328,7 +328,7 @@ func SendHeader(ctx context.Context, cfg Config, method, path string, header htt
 		return a, err
 	}
 	if int64(len(b)) > max {
-		cfg.Watch.answer(ctx, Shape{Status: a.Status, Type: shape.Type, Len: -1})
+		cfg.Watch.answer(ctx, Shape{Status: a.Status, Type: shape.Type, Len: -1, Enc: shape.Enc})
 		return a, fmt.Errorf("%w %d bytes", ErrTooLarge, max)
 	}
 	a.Body = b
@@ -541,7 +541,9 @@ func (p *Proxy) forward(w http.ResponseWriter, r *http.Request) {
 			// fetch, so their lengths can be compared (ADR 0071): a
 			// compressed block page never matched the start page, and Go's
 			// client, in ffuf and Nuclei, asks for gzip by itself.
-			pr.Out.Header.Del("Accept-Encoding")
+			if !matchEncoding {
+				pr.Out.Header.Del("Accept-Encoding")
+			}
 		},
 		Transport: p.transport,
 		ModifyResponse: func(resp *http.Response) error {
@@ -554,7 +556,7 @@ func (p *Proxy) forward(w http.ResponseWriter, r *http.Request) {
 			if p.cfg.Watch != nil && resp.StatusCode != http.StatusSwitchingProtocols {
 				// The answer's shape is known once its body was copied to
 				// the tool (an upgraded connection has no answer to measure).
-				shape := Shape{Status: resp.StatusCode, Type: mediaType(resp.Header)}
+				shape := Shape{Status: resp.StatusCode, Type: mediaType(resp.Header), Enc: encoding(resp.Header)}
 				resp.Body = &countingBody{ReadCloser: resp.Body, done: func(n int64, complete bool) {
 					shape.Len = n
 					if !complete || n > maxShapeBody {

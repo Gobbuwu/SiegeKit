@@ -111,17 +111,18 @@ func (a *blockApp) config(t *testing.T) Config {
 }
 
 func TestShapeLike(t *testing.T) {
-	page := Shape{403, "text/html", 25124}
+	page := Shape{Status: 403, Type: "text/html", Len: 25124}
 	for _, c := range []struct {
 		s    Shape
 		want bool
 	}{
-		{Shape{403, "text/html", 25134}, true},  // Vercel's checkpoint, 10 bytes apart
-		{Shape{403, "text/html", 23868}, true},  // 5% of the longer
-		{Shape{403, "text/html", 23867}, false}, // more than 5%
-		{Shape{404, "text/html", 25124}, false},
-		{Shape{403, "application/json", 25124}, false},
-		{Shape{403, "text/html", -1}, false},
+		{Shape{Status: 403, Type: "text/html", Len: 25134}, true},  // Vercel's checkpoint, 10 bytes apart
+		{Shape{Status: 403, Type: "text/html", Len: 23868}, true},  // 5% of the longer
+		{Shape{Status: 403, Type: "text/html", Len: 23867}, false}, // more than 5%
+		{Shape{Status: 404, Type: "text/html", Len: 25124}, false},
+		{Shape{Status: 403, Type: "application/json", Len: 25124}, false},
+		{Shape{Status: 403, Type: "text/html", Len: -1}, false},
+		{Shape{Status: 403, Type: "text/html", Len: 25124, Enc: "gzip"}, false}, // measured in another encoding
 	} {
 		if got := page.Like(c.s); got != c.want {
 			t.Errorf("%v like %v = %v", page, c.s, got)

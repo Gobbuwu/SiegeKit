@@ -571,7 +571,7 @@ jobs:
     # detector and must meet their known answers.
     name: Scan Juice Shop while its host starts blocking (${{ matrix.engine }}${{ matrix.os == 'ubuntu-24.04-arm' && ', arm64' || '' }})
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 40
+    timeout-minutes: 70
     strategy:
       fail-fast: false
       matrix:
@@ -720,6 +720,48 @@ jobs:
         run: |
           docker logs juice-shop 2>&1 | tail -50
           tail -n 20 "$RUNNER_TEMP"/*.out "$RUNNER_TEMP"/*.log || true
+      - name: "Measure (#92 review): compressed block page, strip vs match"
+        # Prototype measurement, removed before merge: the same block as A on
+        # a host that gzips its answers, once with tools' Accept-Encoding
+        # removed (strip) and once kept, with the start page fetched in the
+        # answers' encoding (match). Prints the results; asserts nothing.
+        if: success() || failure()
+        run: |
+          set -uo pipefail
+          for mode in strip match; do
+            log="$RUNNER_TEMP/d-$mode.log"
+            nohup "$RUNNER_TEMP/block-gate" -addr 127.0.0.1:3000 -app http://127.0.0.1:3001 -ua 'Fuzz Faster U Fool' -after 1000 -gzip -log "$log" > /dev/null 2>&1 &
+            pid=$!
+            sleep 1
+            t0=$(date +%s)
+            SIEGEKIT_PROTO_ENCODING=$mode "$RUNNER_TEMP/siegekit" scan --yes --authorized-host 127.0.0.1 --no-save --report-dir "$RUNNER_TEMP/d-$mode" --only ffuf,nuclei http://127.0.0.1:3000/ > "$RUNNER_TEMP/d-$mode.out" 2>&1
+            code=$?
+            t1=$(date +%s)
+            kill $pid
+            r="$RUNNER_TEMP/d-$mode/report.json"
+            echo "MEASURE D mode=$mode exit=$code seconds=$((t1-t0)) block_pages=$(grep -c 'page=no blocked=yes' "$log") start_page_fetches=$(grep -c 'page=yes' "$log") plugins=$(jq -c '[.plugins[] | {id, status, stop, requests, findings}]' "$r") block_findings=$(jq '[.findings[] | select((.title + " " + .message + " " + (.snippet // "")) | test("(?i)astro|checkpoint|answered 403"))] | length' "$r")"
+          done
+      - name: "Measure (#92 review): no block on a compressing host, strip vs match"
+        # Prototype measurement, removed before merge: ffuf, Nuclei and ZAP
+        # on Juice Shop behind a host that gzips, no block. Compares bytes
+        # on the wire, start-page fetches, requests, findings and time.
+        if: success() || failure()
+        run: |
+          set -uo pipefail
+          for mode in strip match; do
+            log="$RUNNER_TEMP/e-$mode.log"
+            nohup "$RUNNER_TEMP/block-gate" -addr 127.0.0.1:3000 -app http://127.0.0.1:3001 -after 0 -gzip -log "$log" > /dev/null 2>&1 &
+            pid=$!
+            sleep 1
+            t0=$(date +%s)
+            SIEGEKIT_PROTO_ENCODING=$mode "$RUNNER_TEMP/siegekit" scan --yes --authorized-host 127.0.0.1 --no-save --report-dir "$RUNNER_TEMP/e-$mode" --only ffuf,nuclei,zap http://127.0.0.1:3000/ > "$RUNNER_TEMP/e-$mode.out" 2>&1
+            code=$?
+            t1=$(date +%s)
+            kill $pid
+            r="$RUNNER_TEMP/e-$mode/report.json"
+            bytes=$(grep 'page=no' "$log" | sed -n 's/.* bytes=\([0-9]*\)$/\1/p' | awk '{s+=$1} END {print s+0}')
+            echo "MEASURE E mode=$mode exit=$code seconds=$((t1-t0)) answers=$(grep -c 'page=no' "$log") bytes=$bytes start_page_fetches=$(grep -c 'page=yes' "$log") plugins=$(jq -c '[.plugins[] | {id, status, stop, requests, findings}]' "$r") rules=$(jq -c '[.findings[] | .ruleId] | group_by(.) | map({(.[0]): length}) | add' "$r")"
+          done
 
   writes:
     # ADR 0054: access-control-write (ADR 0049) on real apps, from a real
