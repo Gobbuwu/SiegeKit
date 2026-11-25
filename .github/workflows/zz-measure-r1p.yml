@@ -28,7 +28,7 @@ jobs:
       matrix:
         engine: [podman, docker]
         os: [ubuntu-latest, ubuntu-24.04-arm]
-        part: [a, b]
+        part: [c]
     env:
       SIEGEKIT_ENGINE: ${{ matrix.engine }}
       OUT: ${{ github.workspace }}/zz-out
@@ -148,6 +148,23 @@ jobs:
           Cookie: refused=1
           Authorization: Bearer refused"
             run H2-vercel "$H" $FULL $S SIEGEKIT_ZZ_VERCEL=s3cr3t-zz
+          elif [ "$PART" = c ]; then
+            # Round 4: D1 and D3 together (D3 mid-check, D1 at each check's end), each F as code.
+            XARGS="--har $RUNNER_TEMP/a.har --har-user gate-a@siegekit.test"
+            for ff in f1 f2 f3; do
+              run O-E-d13-$ff-ac "$J -after 60" $OWN $S SIEGEKIT_ZZ_ENFORCE=d1,d3 SIEGEKIT_ZZ_F=$ff
+              run O-E-d13-$ff-ac40 "$J -after 40" $OWN $S SIEGEKIT_ZZ_ENFORCE=d1,d3 SIEGEKIT_ZZ_F=$ff
+            done
+            XARGS=""
+            for ff in f1 f2 f3; do
+              run E-d13-$ff-ffuf "-after 1000" ffuf $S SIEGEKIT_ZZ_ENFORCE=d1,d3 SIEGEKIT_ZZ_F=$ff
+              run E-d13-$ff-nuclei "-after 2000" nuclei $S SIEGEKIT_ZZ_ENFORCE=d1,d3 SIEGEKIT_ZZ_F=$ff
+              run E-d13-$ff-zap "$J -after 40" zap $S SIEGEKIT_ZZ_ENFORCE=d1,d3 SIEGEKIT_ZZ_F=$ff
+              # Block only for the last few requests (fewer than D3's 10).
+              run E-d13-$ff-ffuf-tail "-after 4752" ffuf $S SIEGEKIT_ZZ_ENFORCE=d1,d3 SIEGEKIT_ZZ_F=$ff
+              run E-d13-$ff-nuclei-tail "-after 11445" nuclei $S SIEGEKIT_ZZ_ENFORCE=d1,d3 SIEGEKIT_ZZ_F=$ff
+            done
+            run B4-d13-juice-ffuf-transient "$J -after 1000 -until 1500" ffuf $S SIEGEKIT_ZZ_ENFORCE=d1,d3 SIEGEKIT_ZZ_F=f2
           else
             # Each detector enforced, with each way of handling findings.
             for dd in d1 d2 d3 d4; do for ff in f1 f2 f3; do
@@ -190,6 +207,7 @@ jobs:
     # with the headers. TMPDIR is under the home folder, which sidesteps the
     # known macOS temp-folder bug (Colima shares only the home folder).
     name: macOS Intel with Colima
+    if: false # measured in run 45537954705
     runs-on: macos-15-intel
     timeout-minutes: 90
     env:

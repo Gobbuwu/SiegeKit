@@ -150,10 +150,10 @@ func (z *zzDetector) fire(d, why string) {
 	fwd := z.fwd
 	z.mu.Unlock()
 	zzLog(map[string]any{"ev": "would-stop", "detector": d, "own": key, "forwarded": fwd, "why": why})
-	if z.enforce == d && z.own {
+	if z.enforces(d) && z.own {
 		zzRecordOwnStop("the host stopped serving the app (" + d + "): " + why)
 	}
-	if z.enforce == d {
+	if z.enforces(d) {
 		z.p.mu.Lock()
 		if z.p.stopReason == "" {
 			z.p.stopReason = "the host stopped serving the app (" + d + "): " + why
@@ -161,6 +161,16 @@ func (z *zzDetector) fire(d, why string) {
 		}
 		z.p.mu.Unlock()
 	}
+}
+
+// enforces says whether SIEGEKIT_ZZ_ENFORCE (a comma list) names d.
+func (z *zzDetector) enforces(d string) bool {
+	for _, e := range strings.Split(z.enforce, ",") {
+		if e == d {
+			return true
+		}
+	}
+	return false
 }
 
 // answer is called for every forwarded answer, with its shape.
@@ -241,7 +251,7 @@ func (z *zzDetector) final() {
 	}
 	c, err := z.canary("d1")
 	if z.baseErr == nil && (err != nil || c.Status != z.base.Status) {
-		z.fire("d1", fmt.Sprintf("the start page answered %d after the check, %d before; err=%v", c.Status, z.base.Status, err))
+		z.fire("d1", fmt.Sprintf("the start page answered %d (%s, %d bytes) after the check, %d before; err=%v", c.Status, c.Type, c.Len, z.base.Status, err))
 	}
 	z.mu.Lock()
 	defer z.mu.Unlock()
