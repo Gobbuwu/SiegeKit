@@ -46,6 +46,7 @@ Measured through SiegeKit on 2026-11-25 (Go 1.27.4, Docker 29.9.3 rootful, cgrou
 - R1's false findings on Server Action pages are gone, and those pages can now be tested with the page flag.
 - A sign-up or reset that answers like its page (the `useActionState` form, Gitea's 200s) gives no finding without a mail catcher: a missed finding, never a false one. The result names the way to test it.
 - A reset that answers every request with 401 (a wrong security answer) is no longer proof without a mail catcher.
+- The guard's GET goes to the URL the check posts to, which may be an API route with no page: Juice Shop answers `GET /rest/user/reset-password` with a 500 and logs it (CI, 2026-11-25). The page checks run on local targets only (ADR 0055).
 - Each request costs one or two more: the guard's GET (21 for a body sent as is), and in page mode a page read per request and the redirect followed (Gitea: 40; the fixture's sign-up: 33).
 - Not tested: forms built only by JavaScript, a form that is not the first with the named fields, pages behind a login, and code pages (no `--code-page`, no guard: a code page whose posts the app ignores can still give a false `code-not-limited`).
 - A raw post that an app ignores but answers with a different redirect or a new cookie (an app that redirects every unknown post to its login page with a new session) would read as reached. None was seen in the five apps measured.

@@ -746,11 +746,15 @@ jobs:
           r="$RUNNER_TEMP/report/report.json"
           jq '.plugins[] | {id, status, cause, reason, input, result, requests, findings}' "$r"
           # Measured (ADR 0057): the reset and code pages answer the first
-          # request with X-RateLimit-Limit 100; 20 sign-ups answer 201.
-          for page in reset-limit:/rest/user/reset-password code-limit:/rest/2fa/verify; do
-            jq -e --arg id "${page%%:*}" --arg in "POST $BASE${page#*:} (recorded in a.har)" '[.plugins[] | select(.id == $id and .input == $in and .requests == 1 and (.result | startswith("limit seen after 1 of 20 requests: answered with a X-Ratelimit-Limit header, already at the first request (limit 100 per ")))] | length == 1' "$r"
+          # request with X-RateLimit-Limit 100; 20 sign-ups answer 201. The
+          # reset and sign-up checks first GET their URL to compare its
+          # answer with theirs (ADR 0069), one request more; the code page
+          # has no such GET.
+          for page in reset-limit:2:/rest/user/reset-password code-limit:1:/rest/2fa/verify; do
+            id=${page%%:*} rest=${page#*:}
+            jq -e --arg id "$id" --argjson n "${rest%%:*}" --arg in "POST $BASE${rest#*:} (recorded in a.har)" '[.plugins[] | select(.id == $id and .input == $in and .requests == $n and (.result | startswith("limit seen after 1 of 20 requests: answered with a X-Ratelimit-Limit header, already at the first request (limit 100 per ")))] | length == 1' "$r"
           done
-          jq -e --arg in "POST $BASE/api/Users/ (recorded in a.har)" '[.plugins[] | select(.id == "signup-limit" and .input == $in and .requests == 20 and .result == "no limit seen in 20 requests, all answered 201 with no rate-limit header; 20 answered below 400, so up to 20 accounts were made, named siegekit-new-...")] | length == 1' "$r"
+          jq -e --arg in "POST $BASE/api/Users/ (recorded in a.har)" '[.plugins[] | select(.id == "signup-limit" and .input == $in and .requests == 21 and .result == "no limit seen in 20 requests, all answered 201 with no rate-limit header; 20 answered below 400, so up to 20 accounts may have been made, named siegekit-new-...")] | length == 1' "$r"
           jq -e '[.findings[] | select(.ruleId == "code-limit-high" and .severity == "low")] | length == 1' "$r"
           jq -e '[.findings[] | select(.ruleId == "signup-not-limited" and .severity == "low")] | length == 1' "$r"
           # The app again, read by the gate itself: 20 new accounts, and the
