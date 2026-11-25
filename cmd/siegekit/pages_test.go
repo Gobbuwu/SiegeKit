@@ -87,6 +87,13 @@ func TestScanURLPages(t *testing.T) {
 		{[]string{"--code-url", "http://localhost:3000/c", "http://localhost:3000/"}, exitInvalid, "--code-url needs --code-body"},
 		{[]string{"--signup-url", "http://localhost:3001/s", "--signup-body", "u={new}", "http://localhost:3000/"}, exitInvalid, "not on the target's origin"},
 		{[]string{"--signup-url", "http://localhost:3000/s", "--signup-body", "u=me", "http://localhost:3000/"}, exitInvalid, "must contain {new}"},
+		// The page flags (ADR 0069).
+		{[]string{"--signup-url", "http://localhost:3000/s", "--signup-page", "http://localhost:3000/s", "--signup-body", "u={new}", "http://localhost:3000/"}, exitUsage, "--signup-url and --signup-page cannot be used together"},
+		{[]string{"--signup-body", "u={new}", "http://localhost:3000/"}, exitUsage, "--signup-body needs --signup-url or --signup-page"},
+		{[]string{"--code-body", "c={wrong}", "http://localhost:3000/"}, exitUsage, "--code-body needs --code-url\n"},
+		{[]string{"--code-page", "http://localhost:3000/c", "http://localhost:3000/"}, exitUsage, "flag provided but not defined: -code-page"},
+		{[]string{"--signup-page", "http://localhost:3000/s", "--signup-body", `{"u":"{new}"}`, "http://localhost:3000/"}, exitInvalid, "with --signup-page, --signup-body names the form's fields as a form body"},
+		{[]string{"--reset-page", "http://localhost:3001/f", "--reset-body", "email=a", "http://localhost:3000/"}, exitInvalid, "--reset-page http://localhost:3001/f is not on the target's origin"},
 	} {
 		f := useActive(t)
 		data := useData(t)
@@ -103,7 +110,7 @@ func TestScanURLPages(t *testing.T) {
 	// Pages from flags; the side effects are named before the typed yes.
 	useActive(t)
 	data := useData(t)
-	calls := useRateLimit(t, ratelimit.Result{Requests: 20, Baseline: 201, Accepted: 20}, nil)
+	calls := useRateLimit(t, ratelimit.Result{Requests: 20, Baseline: 201, Accepted: 20, Reached: "an answer (answered 201) differed from the page's own answer to a GET (answered 401)"}, nil)
 	code, out := scan(true, "yes\n", append(slices.Clone(pageArgs), "--fail-on", "low", "http://localhost:3000/")...)
 	for _, want := range []string{
 		"reset-limit          siegekit 0.0.0-dev: up to 20 requests POST http://localhost:3000/rest/user/reset-password (from --reset-url), with wrong answers, one per second",
@@ -132,7 +139,7 @@ func TestScanURLPages(t *testing.T) {
 	}
 	r := readReport()
 	if p := plugin(r, "signup-limit"); p.Status != report.Ran || p.Input != "POST http://localhost:3000/api/Users (from --signup-url)" ||
-		p.Result != "no limit seen in 20 requests, all answered 201 with no rate-limit header; 20 answered below 400, so up to 20 accounts were made, named siegekit-new-..." {
+		p.Result != "no limit seen in 20 requests, all answered 201 with no rate-limit header; 20 answered below 400, so up to 20 accounts may have been made, named siegekit-new-..." {
 		t.Errorf("sign-up %+v", p)
 	}
 	if p := plugin(r, "reset-limit"); !strings.HasSuffix(p.Result, "so the app may have sent up to 20 emails or texts") {
@@ -199,6 +206,23 @@ func TestScanURLPages(t *testing.T) {
 		t.Errorf("sign-up %+v", p)
 	}
 
+	// Pages given as their forms (ADR 0069): the plan and the report name
+	// the form, and the report counts the page reads.
+	useActive(t)
+	useData(t)
+	calls = useRateLimit(t, ratelimit.Result{Requests: 11, Reads: 22, Accepted: 11, Limited: true, Signal: "redirected to /signup?error=too-many-attempts instead of /signup?notice=check-email",
+		Form: `sent to http://localhost:3000/signup as multipart/form-data, button "Sign up"`}, nil)
+	code, out = scan(true, "yes\n", "--signup-page", "http://localhost:3000/signup", "--signup-body", "email={new}@example.com&password=p",
+		"--reset-page", "http://localhost:3000/forgot", "--reset-body", "email=tester@shop.test", "--only", "reset-limit,signup-limit", "http://localhost:3000/")
+	if code != exitOK || len(*calls) != 2 || !(*calls)[0].e.Form || (*calls)[0].e.From != "--reset-page" || (*calls)[1].e.From != "--signup-page" ||
+		!strings.Contains(out, "signup-limit         siegekit 0.0.0-dev: up to 20 requests POST of the form on http://localhost:3000/signup (from --signup-page), each with a new user name") {
+		t.Fatalf("pages: exit %d, %d checks\n%s", code, len(*calls), out)
+	}
+	if p := plugin(readReport(), "signup-limit"); p.Requests != 33 || p.Findings != 0 ||
+		p.Input != `POST of the form on http://localhost:3000/signup (from --signup-page), sent to http://localhost:3000/signup as multipart/form-data, button "Sign up"` {
+		t.Errorf("pages: %+v", p)
+	}
+
 	// A failed page check makes the run incomplete and still says what
 	// it may have made.
 	useActive(t)
@@ -207,7 +231,7 @@ func TestScanURLPages(t *testing.T) {
 	if code, _ := scan(false, "", append(slices.Clone(pageArgs), "--authorized-host", "localhost", "http://localhost:3000/")...); code != report.ExitIncomplete {
 		t.Errorf("failed: exit %d", code)
 	}
-	if p := plugin(readReport(), "signup-limit"); p.Status != report.Failed || !strings.HasSuffix(p.Reason, "so up to 3 accounts were made, named siegekit-new-...") {
+	if p := plugin(readReport(), "signup-limit"); p.Status != report.Failed || !strings.HasSuffix(p.Reason, "so up to 3 accounts may have been made, named siegekit-new-...") {
 		t.Errorf("failed: %+v", p)
 	}
 

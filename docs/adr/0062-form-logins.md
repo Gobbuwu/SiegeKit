@@ -2,6 +2,7 @@
 
 - Status: Accepted (owner 2026-11-23 21:54 UTC, Porchlet fix plan PR B, decision D2 as recommended)
 - Date: 2026-11-23
+- Amended by: [0069](0069-reset-and-signup-page-forms.md) (the form reader moves to `internal/webform`, shared with the reset and sign-up pages)
 - Amends: [0030](0030-login-throttling.md) (item 1: how the login is given; item 3: one login with the right password; item 4: a changed redirect is a limit; item 6: the finding needs the guard, says only what was seen, and needs 20 attempts), [0055](0055-rate-limit-pages.md) (item 6: what spraying's first answer may be; items 5 and 6: the "not limited" findings' wording), [0036](0036-rate-limit-check.md) (item 6: what `rate-not-limited` claims, and 20 requests)
 
 ## Context

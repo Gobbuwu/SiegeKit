@@ -104,10 +104,10 @@ func (f *fake) install(t *testing.T, e *Endpoint, answer func(i int) (*egress.An
 	t.Cleanup(func() { send, sleep, now = oldSend, oldSleep, oldNow })
 	start := time.Now()
 	now = func() time.Time { return start }
-	send = func(ctx context.Context, cfg egress.Config, method, path, ct string, body []byte, max int64) (*egress.Answer, error) {
+	send = func(ctx context.Context, cfg egress.Config, method, path string, h http.Header, body []byte, max int64) (*egress.Answer, error) {
 		f.mu.Lock()
 		defer f.mu.Unlock()
-		if method != e.Method || path != e.Path || ct != e.ContentType() || string(body) != string(e.body) || max != MaxAnswer {
+		if ct := h.Get("Content-Type"); method != e.Method || path != e.Path || ct != e.ContentType() || string(body) != string(e.body) || max != MaxAnswer {
 			t.Errorf("sent %s %s %q %q max %d", method, path, ct, body, max)
 		}
 		f.sent++

@@ -108,21 +108,10 @@ func ParsePage(p Page, rawURL, body string, t *target.URL) (*Endpoint, error) {
 	if err != nil {
 		return nil, err
 	}
-	switch {
-	case body == "":
-		return nil, fmt.Errorf("%s needs %s", flag, bodyFlag)
-	case len(body) > maxBody:
-		return nil, fmt.Errorf("%s is longer than %d bytes", bodyFlag, maxBody)
-	case p == Code && !strings.Contains(body, wrongPH):
-		return nil, fmt.Errorf(`%s must contain {wrong} where the code goes, for example '{"code":"{wrong}"}'`, bodyFlag)
-	case p == SignUp && !strings.Contains(body, newPH):
-		return nil, fmt.Errorf(`%s must contain {new} in the user name or email address, for example '{"email":"{new}@example.com","password":"..."}', so each request makes a new account`, bodyFlag)
-	case p != SignUp && strings.Contains(body, newPH):
-		return nil, fmt.Errorf("%s may contain {wrong} but not {new}", bodyFlag)
-	case p == SignUp && strings.Contains(body, wrongPH):
-		return nil, fmt.Errorf("%s may contain {new} but not {wrong}", bodyFlag)
+	if err := checkTemplate(p, flag, body); err != nil {
+		return nil, err
 	}
-	e := &Endpoint{URL: u.String(), Path: u.Path, Method: http.MethodPost, Page: p, From: flag, body: []byte(body)}
+	e := &Endpoint{URL: u.String(), Path: u.Path, Method: http.MethodPost, Page: p, From: flag, body: []byte(body), target: t}
 	if query != "" {
 		e.URL += "?" + query
 		e.Path += "?" + query
@@ -138,6 +127,27 @@ func ParsePage(p Page, rawURL, body string, t *target.URL) (*Endpoint, error) {
 		}
 	}
 	return e, nil
+}
+
+// checkTemplate checks a page's body flag for flag: given, not too long,
+// with the placeholders its page needs and no others.
+func checkTemplate(p Page, flag, body string) error {
+	bodyFlag := "--" + string(p) + "-body"
+	switch {
+	case body == "":
+		return fmt.Errorf("%s needs %s", flag, bodyFlag)
+	case len(body) > maxBody:
+		return fmt.Errorf("%s is longer than %d bytes", bodyFlag, maxBody)
+	case p == Code && !strings.Contains(body, wrongPH):
+		return fmt.Errorf(`%s must contain {wrong} where the code goes, for example '{"code":"{wrong}"}'`, bodyFlag)
+	case p == SignUp && !strings.Contains(body, newPH):
+		return fmt.Errorf(`%s must contain {new} in the user name or email address, for example '{"email":"{new}@example.com","password":"..."}', so each request makes a new account`, bodyFlag)
+	case p != SignUp && strings.Contains(body, newPH):
+		return fmt.Errorf("%s may contain {wrong} but not {new}", bodyFlag)
+	case p == SignUp && strings.Contains(body, wrongPH):
+		return fmt.Errorf("%s may contain {new} but not {wrong}", bodyFlag)
+	}
+	return nil
 }
 
 func startsJSON(body string) bool {
@@ -156,13 +166,13 @@ func (e *Endpoint) source() string {
 	return fmt.Sprintf("the %s request recorded in %s, or give %s and --%s-body", e.Page.What(), e.From, e.Page.Flag(), e.Page)
 }
 
-// next is the body of the next request: as given for --rate-limit-url,
-// with {wrong} and {new} filled in anew for a page.
-func (e *Endpoint) next() []byte {
+// bodyFor is a request's body: as given for --rate-limit-url, with wrong
+// and name as the values of {wrong} and {new} on a page.
+func (e *Endpoint) bodyFor(wrong, name string) []byte {
 	if e.Page == "" || e.body == nil {
 		return e.body
 	}
-	return e.render(wrongGuess(), newName())
+	return e.render(wrong, name)
 }
 
 // render fills in the placeholders, escaped for JSON strings or forms.
@@ -322,7 +332,7 @@ func PagesFromHAR(data []byte, t *target.URL, name string) (HARPages, error) {
 			out.More[p]++
 			continue
 		}
-		e := &Endpoint{URL: u.String(), Path: path, Method: http.MethodPost, Page: p, From: name}
+		e := &Endpoint{URL: u.String(), Path: path, Method: http.MethodPost, Page: p, From: name, target: t}
 		if query != "" {
 			e.URL += "?" + query
 		}
@@ -711,12 +721,25 @@ func pageFindings(e *Endpoint, r Result, planned int) []findings.Finding {
 	if r.Requests < planned || r.Changed > 0 || planned < DefaultRequests {
 		return nil
 	}
+	// A reset or sign-up needs a sign that its requests reached the app's
+	// code (ADR 0069, guard G1): a post that the app ignores (a Next.js
+	// Server Action page sent as a plain form) answers the same each time.
+	reached := ""
+	switch {
+	case e.Page != Reset && e.Page != SignUp:
+	case r.Reached != "":
+		reached = " SiegeKit knows they reached the app: " + r.Reached + "."
+	case r.mailed():
+		reached = " SiegeKit knows they reached the app: emails arrived for them at the mail catcher."
+	default:
+		return nil
+	}
 	switch e.Page {
 	case Reset:
 		if r.MailLimited() {
 			return nil
 		}
-		head := fmt.Sprintf("%d password-reset requests to this page, one per second, with wrong answers where the page asks for one, all answered %d, with no 429 or 503 answer and no rate-limit header.", r.Requests, r.Baseline)
+		head := fmt.Sprintf("%d password-reset requests to this page, one per second, with wrong answers where the page asks for one, all answered %d, with no 429 or 503 answer and no rate-limit header.", r.Requests, r.Baseline) + reached
 		title := fmt.Sprintf("No limit seen in %d password-reset requests", r.Requests)
 		tail := fmt.Sprintf(" If there is no limit, limit reset requests per account and per client. SiegeKit does not see a limit set above %d requests or one per IP address.", planned)
 		if m := r.Mail; m != nil && m.Settled && m.Emails > 0 {
@@ -733,7 +756,7 @@ func pageFindings(e *Endpoint, r Result, planned int) []findings.Finding {
 			findings.Low, "CWE-799")
 	case SignUp:
 		return mk("signup-not-limited", fmt.Sprintf("No limit seen in %d sign-ups", r.Requests),
-			fmt.Sprintf("%d sign-ups to this page, one per second, each with a new user name, all answered %d, with no 429 or 503 answer and no rate-limit header: up to %d accounts were made, named siegekit-new-..., which you can delete. So anyone can make at least %d accounts in a row (spam, fake reviews, free-tier abuse) and, if the app confirms by email, send that many emails. If there is no limit, limit sign-ups per client, or add a CAPTCHA. SiegeKit does not see a limit set above %d requests or one per IP address.", r.Requests, r.Baseline, r.Accepted, r.Requests, planned),
+			fmt.Sprintf("%d sign-ups to this page, one per second, each with a new user name, all answered %d, with no 429 or 503 answer and no rate-limit header:"+reached+" Up to %d accounts may have been made, named siegekit-new-..., which you can delete. So anyone can make at least %d accounts in a row (spam, fake reviews, free-tier abuse) and, if the app confirms by email, send that many emails. If there is no limit, limit sign-ups per client, or add a CAPTCHA. SiegeKit does not see a limit set above %d requests or one per IP address.", r.Requests, r.Baseline, r.Accepted, r.Requests, planned),
 			findings.Low, "CWE-799")
 	}
 	return mk("code-not-limited", fmt.Sprintf("No limit seen in %d wrong verification codes", r.Requests),
