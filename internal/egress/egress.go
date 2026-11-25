@@ -52,6 +52,11 @@ type Config struct {
 	// get it on deployed targets, so a tool default that submits forms
 	// cannot change data there (owner decision 2026-11-19, ADR 0023).
 	ReadOnly bool
+	// Header is sent on every request to the target, replacing a header of
+	// the same name (ADR 0070): SIEGEKIT_EXTRA_HEADERS, checked by
+	// ParseExtraHeaders. It is set only for the target's own origin, never
+	// for another host such as a backend or a mail catcher.
+	Header http.Header
 
 	// Dial and RootCAs replace the network and system roots in tests.
 	Dial    func(ctx context.Context, network, addr string) (net.Conn, error)
@@ -203,6 +208,7 @@ func Reachable(ctx context.Context, cfg Config) error {
 		return err
 	}
 	req.Header.Set("User-Agent", "SiegeKit/"+cfg.Version)
+	addExtra(req.Header, cfg.Header)
 	resp, err := tr.RoundTrip(req)
 	if err != nil {
 		return fmt.Errorf("the target did not answer: %w", err)
@@ -253,6 +259,7 @@ func Send(ctx context.Context, cfg Config, method, path, contentType string, bod
 // SendHeader is Send with request headers, such as a session cookie for
 // the access-control check (ADR 0035). User-Agent is always SiegeKit's own,
 // and Host, the connection, transfer and proxy headers cannot be set.
+// cfg.Header is added last.
 func SendHeader(ctx context.Context, cfg Config, method, path string, header http.Header, body []byte, max int64) (*Answer, error) {
 	// A backstop: the flags' URLs are checked by target.OnOrigin (ADR 0042).
 	if !target.SendablePath(path) {
@@ -282,6 +289,7 @@ func SendHeader(ctx context.Context, cfg Config, method, path string, header htt
 		}
 	}
 	req.Header.Set("User-Agent", "SiegeKit/"+cfg.Version)
+	addExtra(req.Header, cfg.Header)
 	start := time.Now()
 	resp, err := tr.RoundTrip(req)
 	if err != nil {
@@ -481,6 +489,7 @@ func (p *Proxy) forward(w http.ResponseWriter, r *http.Request) {
 			pr.Out.Host = p.authority
 			ua := strings.TrimSpace(pr.In.Header.Get("User-Agent") + " SiegeKit/" + p.cfg.Version)
 			pr.Out.Header.Set("User-Agent", ua)
+			addExtra(pr.Out.Header, p.cfg.Header)
 		},
 		Transport: p.transport,
 		ModifyResponse: func(resp *http.Response) error {

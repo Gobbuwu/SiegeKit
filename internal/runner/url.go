@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"net/http"
 	"net/netip"
 	"os"
 	"path/filepath"
@@ -69,6 +70,9 @@ type URLOptions struct {
 	// plugins with run.recordedRequests (ADR 0047); RecordedFrom names the file.
 	Recorded     []authz.RecordedRequest
 	RecordedFrom string
+	// Header is added to every request the plugins send to the target, by
+	// the host-side proxy, so it never enters a tool container (ADR 0070).
+	Header http.Header
 }
 
 // RunURL runs each selected active plugin against the target in turn, each
@@ -222,7 +226,7 @@ func runActive(ctx context.Context, run ActiveRunner, m *manifest.Manifest, opt 
 	cfg := egress.Config{
 		Target: opt.Target, Addrs: opt.Addrs, VerifyTLS: opt.Deployed,
 		Rate: opt.Limits.Rate, Burst: opt.Limits.Burst, MaxConns: opt.Limits.MaxConns,
-		MaxServerErrors: opt.Limits.MaxServerErrors, Version: opt.Version,
+		MaxServerErrors: opt.Limits.MaxServerErrors, Version: opt.Version, Header: opt.Header,
 		// Deployed targets get read-only requests from plugins that are not
 		// destructive, whatever the tool's own settings (ADR 0023).
 		ReadOnly: opt.Deployed && !*m.Destructive,

@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net/http"
 	"net/netip"
 	"os"
 	"path/filepath"
@@ -35,10 +36,12 @@ import (
 type fakeProver struct {
 	published map[string]string
 	calls     [][]netip.Addr
+	headers   []http.Header
 }
 
-func (f *fakeProver) Check(_ context.Context, u *target.URL, addrs []netip.Addr, token string) (string, error) {
+func (f *fakeProver) Check(_ context.Context, u *target.URL, addrs []netip.Addr, token string, header http.Header) (string, error) {
 	f.calls = append(f.calls, addrs)
+	f.headers = append(f.headers, header)
 	if f.published[u.Host] == verify.Value(token) {
 		return "well-known file", nil
 	}

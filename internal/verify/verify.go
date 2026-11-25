@@ -120,10 +120,11 @@ type Checker struct {
 // Check returns the method that proved control ("well-known file" or
 // "DNS TXT record"), or an error saying what was found. The well-known file
 // is fetched only from the pinned addresses, without following redirects or
-// using any proxy.
-func (c *Checker) Check(ctx context.Context, u *target.URL, addrs []netip.Addr, token string) (string, error) {
+// using any proxy, with header added (SIEGEKIT_EXTRA_HEADERS, ADR 0070), so
+// a preview behind its host's login can serve it.
+func (c *Checker) Check(ctx context.Context, u *target.URL, addrs []netip.Addr, token string, header http.Header) (string, error) {
 	want := Value(token)
-	webErr := c.checkWellKnown(ctx, u, addrs, want)
+	webErr := c.checkWellKnown(ctx, u, addrs, want, header)
 	if webErr == nil {
 		return "well-known file", nil
 	}
@@ -141,7 +142,7 @@ func (c *Checker) timeout() time.Duration {
 	return 10 * time.Second
 }
 
-func (c *Checker) checkWellKnown(ctx context.Context, u *target.URL, addrs []netip.Addr, want string) error {
+func (c *Checker) checkWellKnown(ctx context.Context, u *target.URL, addrs []netip.Addr, want string, header http.Header) error {
 	ctx, cancel := context.WithTimeout(ctx, c.timeout())
 	defer cancel()
 	dial := c.Dial
@@ -180,6 +181,9 @@ func (c *Checker) checkWellKnown(ctx context.Context, u *target.URL, addrs []net
 		return err
 	}
 	req.Header.Set("User-Agent", "SiegeKit-verify")
+	for k, vs := range header {
+		req.Header[k] = append([]string(nil), vs...)
+	}
 	resp, err := client.Do(req)
 	if err != nil {
 		return err

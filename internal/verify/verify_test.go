@@ -85,10 +85,10 @@ func TestWellKnown(t *testing.T) {
 	// httptest's certificate is valid for example.com; the name never
 	// resolves here, so success proves the pinned address was used.
 	c, u, addrs := server(t, "example.com", ok)
-	if m, err := c.Check(context.Background(), u, addrs, tok); err != nil || m != "well-known file" {
+	if m, err := c.Check(context.Background(), u, addrs, tok, nil); err != nil || m != "well-known file" {
 		t.Fatalf("%q %v", m, err)
 	}
-	if _, err := c.Check(context.Background(), u, addrs, strings.Repeat("f", 32)); err == nil {
+	if _, err := c.Check(context.Background(), u, addrs, strings.Repeat("f", 32), nil); err == nil {
 		t.Error("wrong token accepted")
 	}
 
@@ -105,27 +105,52 @@ func TestWellKnown(t *testing.T) {
 		},
 	} {
 		c, u, addrs := server(t, "example.com", h)
-		if _, err := c.Check(context.Background(), u, addrs, tok); err == nil {
+		if _, err := c.Check(context.Background(), u, addrs, tok, nil); err == nil {
 			t.Errorf("%s: accepted", name)
 		}
 	}
 
 	// A certificate for another name fails, even with the right file.
 	c, u, addrs = server(t, "other.example", ok)
-	if _, err := c.Check(context.Background(), u, addrs, tok); err == nil || !strings.Contains(err.Error(), "certificate") {
+	if _, err := c.Check(context.Background(), u, addrs, tok, nil); err == nil || !strings.Contains(err.Error(), "certificate") {
 		t.Errorf("certificate for another host accepted: %v", err)
+	}
+}
+
+// A preview behind its host's login serves the file only with the bypass
+// header (ADR 0070): the header reaches the proof fetch, and without it the
+// login redirect is refused.
+func TestWellKnownExtraHeader(t *testing.T) {
+	const secret = "s3cr3t-bypass-value-0123456789ab"
+	c, u, addrs := server(t, "example.com", func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("X-Vercel-Protection-Bypass") != secret || r.Header.Get("User-Agent") != "SiegeKit-verify" {
+			http.Redirect(w, r, "https://vercel.com/sso-api", http.StatusFound)
+			return
+		}
+		fmt.Fprintf(w, "%s\n", Value(tok))
+	})
+	if _, err := c.Check(context.Background(), u, addrs, tok, nil); err == nil || !strings.Contains(err.Error(), "302") {
+		t.Errorf("no header: %v", err)
+	}
+	h := http.Header{"X-Vercel-Protection-Bypass": {secret}}
+	m, err := c.Check(context.Background(), u, addrs, tok, h)
+	if err != nil || m != "well-known file" {
+		t.Fatalf("with header: %q %v", m, err)
+	}
+	if strings.Contains(fmt.Sprint(err), secret) {
+		t.Error("secret in the error")
 	}
 }
 
 func TestTXT(t *testing.T) {
 	c, u, _ := server(t, "example.com", http.NotFound)
 	c.TXT = txt{"_siegekit-verify.example.com": {"v=spf1 -all", Value(tok)}}
-	if m, err := c.Check(context.Background(), u, nil, tok); err != nil || m != "DNS TXT record" {
+	if m, err := c.Check(context.Background(), u, nil, tok, nil); err != nil || m != "DNS TXT record" {
 		t.Fatalf("%q %v", m, err)
 	}
 	// A record on a parent or sibling name does not count.
 	c.TXT = txt{"_siegekit-verify.com": {Value(tok)}, "_siegekit-verify.www.example.com": {Value(tok)}}
-	if _, err := c.Check(context.Background(), u, nil, tok); err == nil {
+	if _, err := c.Check(context.Background(), u, nil, tok, nil); err == nil {
 		t.Error("record on another name accepted")
 	}
 	ip, _ := target.Parse("https://93.184.215.14/")

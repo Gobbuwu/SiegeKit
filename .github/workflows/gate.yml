@@ -12,6 +12,8 @@ name: Real-repo gate
 # ADR 0062: login checks on a Next.js app whose logins are Server Action
 # forms calling Supabase Auth on the server.
 # ADR 0063: the planted secrets of the owner's Porchlet run.
+# ADR 0070: the Juice Shop URL scan behind a preview login, with the bypass
+# header in SIEGEKIT_EXTRA_HEADERS.
 on:
   workflow_dispatch:
   schedule:
@@ -388,6 +390,165 @@ jobs:
       - name: Juice Shop log
         if: failure()
         run: docker logs juice-shop 2>&1 | tail -50
+
+  headers:
+    # ADR 0070 (issue #87): the same scan as the web job, with Juice Shop
+    # behind a stand-in for Vercel Authentication (.github/gate/headers):
+    # a request without the bypass header gets a 302 to a login page. With
+    # the header in SIEGEKIT_EXTRA_HEADERS, every check must reach the app
+    # and meet the web job's known answers, no request may reach the
+    # stand-in without the header, and the secret must be in no output,
+    # report, saved run or audit log.
+    name: Scan Juice Shop behind a preview login (${{ matrix.engine }}${{ matrix.os == 'ubuntu-24.04-arm' && ', arm64' || '' }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        engine: [podman, docker]
+        os: [ubuntu-latest, ubuntu-24.04-arm]
+    env:
+      SIEGEKIT_ENGINE: ${{ matrix.engine }}
+      EXPECT_ENGINE: ${{ matrix.engine == 'podman' && 'podman rootless' || 'docker rootful' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Platform
+        # The runner is the matrix's architecture (ADR 0060).
+        run: test "$(uname -m)" = "${{ matrix.os == 'ubuntu-24.04-arm' && 'aarch64' || 'x86_64' }}"
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: false
+      - name: Build
+        run: |
+          CGO_ENABLED=0 go build -o "$RUNNER_TEMP/siegekit" ./cmd/siegekit
+          go build -o "$RUNNER_TEMP/login-gate" ./.github/gate/headers
+      - name: Start Juice Shop behind the login stand-in
+        # Juice Shop on 3001; the stand-in on 3000, so the report's URLs are
+        # the web job's. The secret is new each run and masked in the log;
+        # no step that runs curl reads it (Checkov CKV_GHA_3).
+        run: |
+          docker run -d --name juice-shop -p 127.0.0.1:3001:3000 \
+            docker.io/bkimminich/juice-shop@sha256:9bbaecc41791f00b002bc65931cc5ff355fbdb941fa72b06558c18dace43197b
+          secret=$(openssl rand -hex 16)
+          echo "::add-mask::$secret"
+          printf '%s' "$secret" > "$RUNNER_TEMP/secret"
+          GATE_BYPASS_SECRET="$secret" nohup "$RUNNER_TEMP/login-gate" -addr 127.0.0.1:3000 -app http://127.0.0.1:3001 -log "$RUNNER_TEMP/gate-requests.log" > "$RUNNER_TEMP/login-gate.out" 2>&1 &
+      - name: Wait for Juice Shop
+        run: |
+          for i in $(seq 1 60); do
+            curl -sf -o /dev/null http://127.0.0.1:3001/ && break
+            sleep 2
+          done
+          curl -sf -o /dev/null http://127.0.0.1:3001/
+          # Without the header the stand-in answers the login redirect.
+          test "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:3000/)" = 302
+          : > "$RUNNER_TEMP/gate-requests.log"
+      - name: Accounts for the access-control check
+        # As in the web job; made on the app directly, recorded at 3000.
+        run: |
+          set -euo pipefail
+          app=http://127.0.0.1:3001
+          base=http://127.0.0.1:3000
+          pw='Gate-access-control-1'
+          for who in a b c; do
+            curl -sf -o /dev/null -H 'Content-Type: application/json' \
+              -d "{\"email\":\"gate-$who@siegekit.test\",\"password\":\"$pw\",\"passwordRepeat\":\"$pw\",\"securityQuestion\":{\"id\":1},\"securityAnswer\":\"x\"}" "$app/api/Users"
+          done
+          login() { curl -sf -H 'Content-Type: application/json' -d "{\"email\":\"gate-$1@siegekit.test\",\"password\":\"$pw\"}" "$app/rest/user/login"; }
+          la=$(login a); lb=$(login b); lc=$(login c)
+          ta=$(jq -r .authentication.token <<<"$la"); bid=$(jq -r .authentication.bid <<<"$la"); tb=$(jq -r .authentication.token <<<"$lb"); tc=$(jq -r .authentication.token <<<"$lc")
+          uid=$(curl -sf -H "Cookie: token=$ta" "$app/rest/user/whoami" | jq -r .user.id)
+          jq -n --arg base "$base" --arg t "$ta" --arg bid "$bid" --arg uid "$uid" --arg pw "$pw" '{log: {entries: (([
+            "/rest/basket/\($bid)", "/api/Users/\($uid)", "/api/Users", "/api/Complaints", "/api/Cards", "/api/Addresss",
+            "/rest/order-history", "/rest/wallet/balance", "/api/Products", "/rest/user/whoami", "/rest/memories/",
+            "/rest/products/search?q=apple"
+            ] | map({request: {method: "GET", url: ($base + .), headers: [{name: "Authorization", value: "Bearer \($t)"}, {name: "Cookie", value: "token=\($t)"}]}}))
+            + [{request: {method: "POST", url: ($base + "/rest/user/login"), headers: [{name: "Content-Type", value: "application/json"}],
+                postData: {mimeType: "application/json", text: ({email: "gate-a@siegekit.test", password: $pw} | tojson)}}}])}}' > "$RUNNER_TEMP/a.har"
+          printf 'Authorization: Bearer %s\nCookie: token=%s\n' "$tb" "$tb" > "$RUNNER_TEMP/session-b"
+          printf 'Authorization: Bearer %s\nCookie: token=%s\n' "$tc" "$tc" > "$RUNNER_TEMP/session-c"
+          echo "A_USER=$uid" >> "$GITHUB_ENV"
+          echo "A_BASKET=$bid" >> "$GITHUB_ENV"
+      - name: Scan
+        # The web job's command (without --no-save, so the saved run is
+        # searched too) and its checks that every check ran and reached the
+        # app; its findings are checked against the same known answers below.
+        run: |
+          cat > "$RUNNER_TEMP/gate-scan.sh" <<'SH'
+          #!/bin/bash
+          exec "$RUNNER_TEMP/siegekit" scan --yes --authorized-host 127.0.0.1 --report-dir "$RUNNER_TEMP/report" \
+            --login-url http://127.0.0.1:3000/rest/user/login --login-user jim@juice-sh.op \
+            --login-body '{"email":"{user}","password":"{password}"}' \
+            --har "$RUNNER_TEMP/a.har" --har-user gate-a@siegekit.test \
+            --rate-limit-url 'http://127.0.0.1:3000/rest/products/search?q=apple' http://127.0.0.1:3000/
+          SH
+          chmod +x "$RUNNER_TEMP/gate-scan.sh"
+          SIEGEKIT_SESSION_B="$(cat "$RUNNER_TEMP/session-b")"
+          SIEGEKIT_SESSION_C="$(cat "$RUNNER_TEMP/session-c")"
+          SIEGEKIT_LOGIN_PASSWORD="$(docker cp juice-shop:/juice-shop/data/static/users.yml - | tar -xO | sed -n "/^ *email: jim$/{n;s/^ *password: '\(.*\)'$/\1/p;q}")"
+          test -n "$SIEGEKIT_LOGIN_PASSWORD"
+          SIEGEKIT_EXTRA_HEADERS="X-Vercel-Protection-Bypass: $(cat "$RUNNER_TEMP/secret")"
+          export SIEGEKIT_SESSION_B SIEGEKIT_SESSION_C SIEGEKIT_LOGIN_PASSWORD SIEGEKIT_EXTRA_HEADERS
+          set +e
+          printf 'test accounts\n' | script -qec "$RUNNER_TEMP/gate-scan.sh" "$RUNNER_TEMP/scan.log"
+          code=$?
+          set -e
+          echo "exit code $code"
+          if [ "$code" -ne 0 ] && [ "$code" -ne 3 ]; then exit 1; fi
+          grep -q 'Every request to http://127.0.0.1:3000 carries X-Vercel-Protection-Bypass from SIEGEKIT_EXTRA_HEADERS (values hidden' "$RUNNER_TEMP/scan.log"
+          r="$RUNNER_TEMP/report/report.json"
+          jq -e --arg e "$EXPECT_ENGINE" '.environment.engine | (.name + (if .rootless then " rootless" else " rootful" end)) == $e' "$r"
+          jq '.plugins[] | {id, status, cause, reason, input, result, requests, refused, findings}' "$r"
+          jq -e '[.plugins[] | select(.status == "ran" and .requests > 0) | .id] | sort == ["access-control", "ffuf", "login-throttle", "nuclei", "nuclei-default-login", "nuclei-intrusive", "public-maps", "rate-limit", "schemathesis", "served-secrets", "zap", "zap-active"]' "$r"
+          jq -e '[.plugins[] | select(.id == "login-throttle" and .requests == 21 and .result == "no limit seen in 20 attempts, all answered 401; the right password answered 200")] | length == 1' "$r"
+          jq -e '[.plugins[] | select(.id == "access-control" and .requests == 48 and (.result | contains(": 4 readable by account C or B, 0 only by account B (low),")))] | length == 1' "$r"
+          jq -e '[.plugins[] | select(.id == "zap-active" and .input == "13 recorded request(s) from a.har")] | length == 1' "$r"
+      - name: Every request carried the header
+        # Each check's requests, the reachability GET and the spec probes
+        # all reached the stand-in with the header; none without it.
+        run: |
+          yes=$(grep -c ' header=yes$' "$RUNNER_TEMP/gate-requests.log" || true)
+          no=$(grep -c ' header=no$' "$RUNNER_TEMP/gate-requests.log" || true)
+          sent=$(jq '[.plugins[].requests // 0] | add' "$RUNNER_TEMP/report/report.json")
+          echo "requests at the stand-in: $yes with the header, $no without; the report counts $sent"
+          test "$no" -eq 0
+          test "$yes" -ge "$sent"
+          test "$sent" -gt 1000
+      - name: The secret is in no output
+        # The reports, the terminal output and SiegeKit's data folder (audit
+        # log, saved runs, tool data). Only SiegeKit's own folder: rootless
+        # Podman keeps its image store beside it, with files grep cannot read.
+        run: |
+          d="$HOME/.local/share/siegekit"
+          set +e
+          grep -rlF -f "$RUNNER_TEMP/secret" "$RUNNER_TEMP/report" "$RUNNER_TEMP/scan.log" "$d"
+          code=$?
+          set -e
+          test -s "$d/audit.log"
+          jq -e 'select(.extraHeaders == ["X-Vercel-Protection-Bypass"])' "$d/audit.log"
+          ls "$d"/runs/*.json
+          # grep exits 1 when no file holds it.
+          test "$code" -eq 1
+      - name: Known answers
+        if: ${{ !cancelled() }}
+        # The web job's answers: the header changes nothing the checks find.
+        run: |
+          set +e
+          go run ./internal/knownanswers/check -answers testdata/known-answers/juice-shop-url.json -report "$RUNNER_TEMP/report/report.json" -observed "$RUNNER_TEMP/observed.json"
+          code=$?
+          set -e
+          echo "::group::Answer of this run"
+          cat "$RUNNER_TEMP/observed.json"
+          echo "::endgroup::"
+          exit $code
+      - name: Logs
+        if: failure()
+        run: |
+          docker logs juice-shop 2>&1 | tail -50
+          tail -n 20 "$RUNNER_TEMP/login-gate.out" "$RUNNER_TEMP/gate-requests.log"
 
   writes:
     # ADR 0054: access-control-write (ADR 0049) on real apps, from a real

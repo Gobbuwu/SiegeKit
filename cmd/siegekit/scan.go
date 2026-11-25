@@ -70,6 +70,16 @@ the host name must then be typed in a terminal (--authorized-host is only
 for private addresses), so a script or AI assistant cannot confirm a live
 system on its own.
 
+For a preview behind its host's login (such as Vercel Authentication),
+set SIEGEKIT_EXTRA_HEADERS to the host's bypass header, one "Name: value"
+per line, such as "x-vercel-protection-bypass: SECRET". SiegeKit sends it
+on every request to the target, the proof-of-control fetch included, and
+never to another host. Values are hidden in the reports and never printed.
+It refuses, before any request, an empty value or one under 8 characters,
+Host, User-Agent, Content-Type and the connection headers, Cookie,
+Authorization and other login headers, and plain http with --deployed.
+See docs/protected-previews.md.
+
 Flags:
   --only a,b        run only these plugins or families (sast, sca,
                     secrets, iac, dast), for example --only secrets,trivy
