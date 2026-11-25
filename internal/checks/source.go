@@ -26,7 +26,16 @@ type Source struct {
 	SupabaseFolders []string
 	// Gaps names files and folders not read (ADR 0067).
 	Gaps []report.Gap
+	// Which backend the repository is set up for, for a backend or storage
+	// the app's scripts do not name (ADR 0061): Supabase when it has a
+	// supabase/ directory with config.toml or a .sql file (supabase start
+	// needs config.toml), Firebase when it has firebase.json (the emulators
+	// need it) or a database, Firestore or Storage rules file.
+	Supabase, Firebase bool
 }
+
+// firebaseFiles are the file names that show a Firebase project.
+var firebaseFiles = map[string]bool{"firebase.json": true, "database.rules.json": true, "firestore.rules": true, "storage.rules": true}
 
 // SourceFile is a file read from the repository.
 type SourceFile struct {
@@ -49,12 +58,17 @@ func ReadSource(ctx context.Context, root string) (Source, error) {
 		if reSpecName.MatchString(base) {
 			return true // a spec in a test folder is still a spec candidate; the shortest path wins
 		}
-		// Rules and migrations in test folders are never deployed
-		// (testpath, ADR 0064 item 1), as in backend-rules.
-		return !testpath.IsTest(rel) && (base == "database.rules.json" || strings.HasSuffix(base, ".rules") ||
-			strings.HasSuffix(base, ".sql") && isSupabasePath(rel))
+		// Rules, migrations and project files in test folders are never
+		// deployed (testpath, ADR 0064 item 1), as in backend-rules, so
+		// they tell neither tables nor the backend's kind (ADR 0061).
+		return !testpath.IsTest(rel) && (firebaseFiles[base] || strings.HasSuffix(base, ".rules") ||
+			(strings.HasSuffix(base, ".sql") || base == "config.toml") && isSupabasePath(rel))
 	}, func(rel string, data []byte) error {
-		switch base := path.Base(rel); {
+		base := path.Base(rel)
+		s.Firebase = s.Firebase || firebaseFiles[base]
+		s.Supabase = s.Supabase || isSupabasePath(rel) && (base == "config.toml" || strings.HasSuffix(base, ".sql"))
+		switch {
+		case base == "config.toml" || base == "firebase.json":
 		case base == "database.rules.json":
 			for _, p := range rulesPaths(data) {
 				paths[p] = true

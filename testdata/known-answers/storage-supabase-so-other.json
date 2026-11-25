@@ -1,0 +1,12 @@
+{
+  "fixture": "Supabase Storage behind Supabase's self-hosted API gateway with Supabase Auth, as in storage-supabase-so-remote.json (same images, config and app), with SIEGEKIT_SUPABASE_KEY = a publishable key the gateway does not know (another project's) (gate.yml job storage, ADR 0061)",
+  "measured": "3 fresh local runs per engine on 2026-11-23, Docker 29.9.3 rootful and rootless Podman 4.9.3, cgroup v1, linux/amd64: failed with the gateway's 401 and 2 requests on every run, no object written",
+  "checks": {
+    "storage-write": {
+      "status": "failed",
+      "reason": "refused the key in SIEGEKIT_SUPABASE_KEY (GET /auth/v1/settings answered 401)",
+      "minRequests": 1,
+      "why": "the gateway refused the key at the one check, so nothing was uploaded: 1 page fetch + 1 key check"
+    }
+  }
+}

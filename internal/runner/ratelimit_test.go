@@ -26,7 +26,7 @@ func TestRateLimitFindsPlantedIssue(t *testing.T) {
 		t.Fatal(err)
 	}
 	cfg := egress.Config{Target: tu, Addrs: []netip.Addr{netip.MustParseAddr("127.0.0.1")}, Version: "test"}
-	const n = 5
+	const n = ratelimit.DefaultRequests // fewer give no "not limited" finding (ADR 0062 item 7)
 	e, err := ratelimit.Parse(srv.URL+"/api/suggest?q=apple", "", tu)
 	if err != nil {
 		t.Fatal(err)

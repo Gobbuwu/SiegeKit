@@ -3,6 +3,7 @@
 - Status: Accepted (ADR 0058 item 9, from the design's build plan approved by the owner on 2026-11-21; item 6's fixture names: the owner chose the rename on 2026-11-23, on the condition that bandit, gosec and trivy are confirmed on this PR's CI before merge)
 - Date: 2026-11-23
 - Amends: [0058](0058-storage-write-test.md) (item 9: this is its PR 2)
+- Amended by: [0061](0061-backends-the-scripts-do-not-name.md) (three server-only app runs in the Supabase jobs, behind Supabase's self-hosted gateway)
 
 ## Context
 

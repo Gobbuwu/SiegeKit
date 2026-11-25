@@ -98,6 +98,7 @@ type urlScan struct {
 	openAPI         string // --openapi: a file or a URL on the target's origin
 	profile         string // --profile: full or quick
 	login           loginFlags
+	loginPassword   string // SIEGEKIT_LOGIN_PASSWORD (ADR 0062)
 	har, harUser    string // --har and --har-user (ADR 0035)
 	replayWrites    bool   // --replay-writes (ADR 0049)
 	rateLimit       rateLimitFlags
@@ -126,6 +127,9 @@ type urlScan struct {
 	backend *backend.Backend
 	storage *backend.Storage
 	repo    *checks.Source
+	// Read from SIEGEKIT_SUPABASE_KEY before any request, for an app whose
+	// scripts have no Supabase key (ADR 0061).
+	supabaseKey string
 	// Read from --source on local targets: the routes of the app's
 	// server code, for the route sweep (ADR 0053).
 	code    *coderoutes.Result
@@ -204,28 +208,38 @@ var sprayCheck = login.Spray
 // loginFlags are the --login flags of the login throttling check
 // (ADR 0030).
 type loginFlags struct {
-	url, user, body string
-	attempts        int
+	url, page, user, body string
+	attempts              int
 }
 
-// check accepts all three of --login-url, --login-user and --login-body or
-// none, and --login-attempts only with them.
+// check accepts all three of --login-url (or --login-page), --login-user
+// and --login-body or none, and --login-attempts only with them.
 func (f loginFlags) check(attemptsSet bool) error {
 	n := 0
-	for _, v := range []string{f.url, f.user, f.body} {
+	for _, v := range []string{f.url + f.page, f.user, f.body} {
 		if v != "" {
 			n++
 		}
 	}
 	switch {
+	case f.url != "" && f.page != "":
+		return errors.New("--login-url and --login-page cannot be used together: --login-page reads the URL from the page's form")
 	case n != 0 && n != 3:
-		return errors.New("--login-url, --login-user and --login-body are needed together")
+		return errors.New("--login-url (or --login-page), --login-user and --login-body are needed together")
 	case attemptsSet && n == 0:
-		return errors.New("--login-attempts needs --login-url, --login-user and --login-body")
+		return errors.New("--login-attempts needs --login-url (or --login-page), --login-user and --login-body")
 	case f.attempts < login.MinAttempts || f.attempts > login.MaxAttempts:
 		return fmt.Errorf("--login-attempts must be from %d to %d", login.MinAttempts, login.MaxAttempts)
 	}
 	return nil
+}
+
+// loginTarget says where the logins go, for plans and reports.
+func loginTarget(lg *login.Login) string {
+	if lg.Page {
+		return "the form on " + lg.URL
+	}
+	return "POST " + lg.URL
 }
 
 // loginCheck runs the login throttling check; tests replace it.
@@ -263,9 +277,23 @@ func scanURL(raw string, o urlScan, stdout, stderr io.Writer) int {
 	// The login is checked now too, so a mistake is reported before any
 	// request.
 	var lg *login.Login
-	if o.login.url != "" {
-		if lg, err = login.Parse(o.login.url, o.login.user, o.login.body, u); err != nil {
-			return refuse("%v", err)
+	switch {
+	case o.login.url != "":
+		lg, err = login.Parse(o.login.url, o.login.user, o.login.body, u)
+	case o.login.page != "":
+		lg, err = login.ParsePage(o.login.page, o.login.user, o.login.body, u)
+	}
+	if err != nil {
+		return refuse("%v", err)
+	}
+	// So is the test account's password (ADR 0062). It is kept in memory
+	// only, and never written to the plan, the report or the audit log.
+	if lg != nil {
+		if p, ok := os.LookupEnv(login.PasswordEnv); ok {
+			if err := login.CheckPassword(p); err != nil {
+				return refuse("%v", err)
+			}
+			o.loginPassword = p
 		}
 	}
 	// So is the rate-limit URL (ADR 0036).
@@ -298,6 +326,15 @@ func scanURL(raw string, o urlScan, stdout, stderr io.Writer) int {
 	if o.storageURL != "" {
 		if o.storage, err = backend.ParseStorage(o.storageURL); err != nil {
 			return refuse("%v", err)
+		}
+	}
+	// So is the Supabase key for an app whose scripts have none (ADR 0061):
+	// a secret or service key is refused here, before any request.
+	if o.backend != nil || o.storage != nil {
+		if k, ok := os.LookupEnv(backend.KeyEnv); ok {
+			if o.supabaseKey, err = backend.ParseKey(k); err != nil {
+				return refuse("%v", err)
+			}
 		}
 	}
 	if o.source != "" {
@@ -615,7 +652,9 @@ func runURL(ctx context.Context, u *target.URL, addrs []netip.Addr, mode target.
 		case runner.ProfileSkip(true, o.profile) != "":
 			unavailable[login.ID] = runner.Skip(report.CauseProfile, runner.ProfileSkip(true, o.profile))
 		case lg == nil:
-			unavailable[login.ID] = runner.Skip(report.CauseNoInput, "no login was given: pass --login-url, --login-user and --login-body to test whether failed logins are limited")
+			unavailable[login.ID] = runner.Skip(report.CauseNoInput, "no login was given: pass --login-url (or --login-page), --login-user and --login-body to test whether failed logins are limited")
+		case o.loginPassword == "":
+			unavailable[login.ID] = runner.Skip(report.CauseNoInput, "no password was given: set "+login.PasswordEnv+" to the test account's password; one login with it first shows that the check's logins reach the app's login code (ADR 0062)")
 		case hostOS != "linux":
 			unavailable[login.ID] = runner.Fail(report.CausePlatform, "active tests run only on Linux for now (ADR 0018)")
 		}
@@ -642,7 +681,7 @@ func runURL(ctx context.Context, u *target.URL, addrs []netip.Addr, mode target.
 		case runner.ProfileSkip(true, o.profile) != "":
 			unavailable[login.SprayID] = runner.Skip(report.CauseProfile, runner.ProfileSkip(true, o.profile))
 		case lg == nil:
-			unavailable[login.SprayID] = runner.Skip(report.CauseNoInput, "no login was given: pass --login-url, --login-user and --login-body; spraying runs when login-throttle sees a limit on that account")
+			unavailable[login.SprayID] = runner.Skip(report.CauseNoInput, "no login was given: pass --login-url (or --login-page), --login-user and --login-body; spraying runs when login-throttle sees a limit on that account")
 		case !loginSelected || loginOff:
 			unavailable[login.SprayID] = runner.Skip(report.CauseNoInput, "runs only after login-throttle sees a limit on one account, and login-throttle does not run")
 		case hostOS != "linux":
@@ -773,8 +812,8 @@ func runURL(ctx context.Context, u *target.URL, addrs []netip.Addr, mode target.
 			fmt.Fprintf(stdout, "  %-20s not run - %s\n", login.ID, r.Reason)
 		} else {
 			planned = append(planned, login.ID)
-			fmt.Fprintf(stdout, "  %-20s siegekit %s: %d logins for %q with a random wrong password, POST %s, one per second; the account may be locked\n",
-				login.ID, version, o.login.attempts, lg.User, lg.URL)
+			fmt.Fprintf(stdout, "  %-20s siegekit %s: 1 login for %q with its password from %s, then %d with a random wrong password, %s, one per second; the account may be locked\n",
+				login.ID, version, lg.User, login.PasswordEnv, o.login.attempts, loginTarget(lg))
 		}
 	}
 	if rateSelected {
@@ -791,8 +830,8 @@ func runURL(ctx context.Context, u *target.URL, addrs []netip.Addr, mode target.
 			fmt.Fprintf(stdout, "  %-20s not run - %s\n", login.SprayID, r.Reason)
 		} else {
 			planned = append(planned, login.SprayID)
-			fmt.Fprintf(stdout, "  %-20s siegekit %s: only if login-throttle sees a limit, %d logins for invented user names (%s and on) with one wrong password, POST %s, one per second\n",
-				login.SprayID, version, o.login.attempts, login.SprayUser(lg, 1), lg.URL)
+			fmt.Fprintf(stdout, "  %-20s siegekit %s: only if login-throttle sees a limit, %d logins for invented user names (%s and on) with one wrong password, %s, one per second\n",
+				login.SprayID, version, o.login.attempts, login.SprayUser(lg, 1), loginTarget(lg))
 		}
 	}
 	for _, p := range ratelimit.Pages {
@@ -842,10 +881,14 @@ func runURL(ctx context.Context, u *target.URL, addrs []netip.Addr, mode target.
 			if o.repo != nil {
 				from += " and " + o.source
 			}
-			how := "with the app's own public key for Supabase, with no login for Firebase"
+			sbKey := "the app's own public key"
+			if o.supabaseKey != "" {
+				sbKey += " (" + backend.KeyEnv + " when the app's scripts have none)"
+			}
+			how := "with " + sbKey + " for Supabase, with no login for Firebase"
 			switch o.backend.Kind {
 			case backend.Supabase:
-				how = "with the app's own public key"
+				how = "with " + sbKey
 			case backend.Firebase:
 				how = "with no login"
 			}
@@ -1159,24 +1202,27 @@ func runURL(ctx context.Context, u *target.URL, addrs []netip.Addr, mode target.
 	started := time.Now().UTC()
 	var loginResult *report.PluginResult
 	var loginFindings []findings.Finding
-	loginLimited := false
+	var loginRes login.Result
 	if loginSelected {
 		pr := report.PluginResult{ID: login.ID, Family: login.Family, Tool: "siegekit", Version: version}
 		if r, ok := unavailable[login.ID]; ok {
 			pr.Status, pr.Cause, pr.Reason = r.Status, r.Cause, r.Reason
 		} else {
-			pr.Input = fmt.Sprintf("POST %s as %q", lg.URL, lg.User)
-			fmt.Fprintf(stdout, "%s: sending %d logins, one per second.\n", login.ID, o.login.attempts)
-			res, err := loginCheck(ctx, egress.Config{Target: u, Addrs: addrs, VerifyTLS: o.deployed, Version: version, ReadOnly: o.deployed}, lg, o.login.attempts)
+			pr.Input = fmt.Sprintf("%s as %q", loginTarget(lg), lg.User)
+			fmt.Fprintf(stdout, "%s: sending 1 login with the right password, then %d with a wrong one, one per second.\n", login.ID, o.login.attempts)
+			res, err := loginCheck(ctx, egress.Config{Target: u, Addrs: addrs, VerifyTLS: o.deployed, Version: version, ReadOnly: o.deployed}, lg, o.login.attempts, o.loginPassword)
 			if ctx.Err() != nil {
 				return fail(errors.New("interrupted; no report written"))
 			}
-			pr.Requests = res.Attempts
+			pr.Requests = res.Requests
+			if res.Form != "" {
+				pr.Input = fmt.Sprintf("the form on %s (POST %s, %s) as %q", lg.URL, res.URL, res.Form, lg.User)
+			}
 			if err != nil {
 				pr.Status, pr.Reason = report.Failed, err.Error()
 			} else {
 				loginFindings = login.Findings(lg, res, o.login.attempts)
-				loginLimited = res.Limited
+				loginRes = res
 				pr.Status, pr.Result, pr.Findings = report.Ran, res.Summary(o.login.attempts), len(loginFindings)
 			}
 		}
@@ -1194,16 +1240,16 @@ func runURL(ctx context.Context, u *target.URL, addrs []netip.Addr, mode target.
 			pr.Status, pr.Cause, pr.Reason = r.Status, r.Cause, r.Reason
 		case loginResult.Status != report.Ran:
 			pr.Status, pr.Cause, pr.Reason = report.Skipped, report.CauseNoInput, "runs only after login-throttle sees a limit on one account, and login-throttle did not finish"
-		case !loginLimited:
+		case !loginRes.Limited:
 			pr.Status, pr.Cause, pr.Reason = report.Skipped, report.CauseNoInput, "login-throttle saw no limit on one account, so many accounts from the same address cannot be limited either; nothing to add"
 		default:
-			pr.Input = fmt.Sprintf("POST %s as %s and on", lg.URL, login.SprayUser(lg, 1))
+			pr.Input = fmt.Sprintf("%s as %s and on", loginTarget(lg), login.SprayUser(lg, 1))
 			fmt.Fprintf(stdout, "%s: sending %d logins for invented user names, one per second.\n", login.SprayID, o.login.attempts)
-			res, err := sprayCheck(ctx, egress.Config{Target: u, Addrs: addrs, VerifyTLS: o.deployed, Version: version, ReadOnly: o.deployed}, lg, o.login.attempts)
+			res, err := sprayCheck(ctx, egress.Config{Target: u, Addrs: addrs, VerifyTLS: o.deployed, Version: version, ReadOnly: o.deployed}, lg, o.login.attempts, loginRes)
 			if ctx.Err() != nil {
 				return fail(errors.New("interrupted; no report written"))
 			}
-			pr.Requests = res.Attempts
+			pr.Requests = res.Requests
 			if err != nil {
 				pr.Status, pr.Reason = report.Failed, err.Error()
 			} else {
@@ -1337,7 +1383,7 @@ func runURL(ctx context.Context, u *target.URL, addrs []netip.Addr, mode target.
 			}
 			collectCounted = true
 			fmt.Fprintf(stdout, "%s: reading %s.\n", backend.ID, o.backend)
-			pr, backendFindings = runBackend(ctx, bp, col, o.repo, extra, pr)
+			pr, backendFindings = runBackend(ctx, bp, col, o.repo, o.supabaseKey, extra, pr)
 			if ctx.Err() != nil {
 				return fail(errors.New("interrupted; no report written"))
 			}
@@ -1359,7 +1405,7 @@ func runURL(ctx context.Context, u *target.URL, addrs []netip.Addr, mode target.
 			collectCounted = true
 			var interrupted bool
 			pr, storageFindings, interrupted = o.runStorage(ctx, storageRun{
-				plan: sp, col: col, repo: o.repo, backendConfirmed: backendConfirmed,
+				plan: sp, col: col, repo: o.repo, supabaseKey: o.supabaseKey, backendConfirmed: backendConfirmed,
 				auditLog: filepath.Join(dir, "audit.log"), mode: string(mode), env: env.String(), extraRequests: extra,
 			}, stdout)
 			if interrupted || ctx.Err() != nil {

@@ -32,9 +32,9 @@ func useSpray(t *testing.T, res login.Result) *int {
 	t.Helper()
 	n := 0
 	old := sprayCheck
-	sprayCheck = func(_ context.Context, cfg egress.Config, l *login.Login, attempts int) (login.Result, error) {
+	sprayCheck = func(_ context.Context, cfg egress.Config, l *login.Login, attempts int, _ login.Result) (login.Result, error) {
 		n++
-		if cfg.ReadOnly || l.Path != "/rest/user/login" || attempts != 7 {
+		if cfg.ReadOnly || l.Path != "/rest/user/login" || attempts != 20 {
 			t.Errorf("spray %+v %+v %d", cfg, l, attempts)
 		}
 		return res, nil
@@ -253,11 +253,11 @@ func TestScanURLSpray(t *testing.T) {
 	useActive(t)
 	useData(t)
 	useLogin(t, login.Result{Attempts: 3, Limited: true, Signal: "answered 423"}, nil)
-	n := useSpray(t, login.Result{Attempts: 7, Baseline: 401})
+	n := useSpray(t, login.Result{Attempts: 20, Baseline: 401})
 	code, out, r := scan(loginArgs...)
 	if code != exitOK || *n != 1 || len(r.Plugins) != 2 || r.Plugins[1].ID != login.SprayID || r.Plugins[1].Status != report.Ran ||
 		r.Plugins[1].Input != "POST http://localhost:3000/rest/user/login as siegekit-nobody-1 and on" ||
-		!strings.Contains(out, "login-spray          siegekit 0.0.0-dev: only if login-throttle sees a limit, 7 logins for invented user names (siegekit-nobody-1 and on)") {
+		!strings.Contains(out, "login-spray          siegekit 0.0.0-dev: only if login-throttle sees a limit, 20 logins for invented user names (siegekit-nobody-1 and on)") {
 		t.Fatalf("exit %d, %d sprays %+v\n%s", code, *n, r.Plugins, out)
 	}
 	if len(r.Findings) != 1 || r.Findings[0].RuleID != "spray-not-limited" || r.Findings[0].Severity != findings.Medium {
@@ -266,7 +266,7 @@ func TestScanURLSpray(t *testing.T) {
 	// No limit on one account: nothing to add, skipped with the reason.
 	useActive(t)
 	useData(t)
-	useLogin(t, login.Result{Attempts: 7, Baseline: 401}, nil)
+	useLogin(t, login.Result{Attempts: 20, Baseline: 401}, nil)
 	n = useSpray(t, login.Result{})
 	_, _, r = scan(loginArgs...)
 	if *n != 0 || r.Plugins[1].Status != report.Skipped || r.Plugins[1].Cause != report.CauseNoInput || !strings.Contains(r.Plugins[1].Reason, "login-throttle saw no limit on one account") {

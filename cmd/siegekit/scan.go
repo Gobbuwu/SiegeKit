@@ -124,11 +124,19 @@ Flags:
                     common spec paths on local targets (one GET each)
   --login-url URL   the app's login endpoint, on the target's origin, for
                     the login throttling check (local targets only)
-  --login-user NAME a test account you own; the check may lock it
+  --login-page URL  instead of --login-url: the page with the login form
+                    (a Next.js Server Action, or a form with a CSRF token).
+                    Before each login SiegeKit reads the page and sends its
+                    form as a browser without JavaScript does
+  --login-user NAME a test account you own; the check may lock it. Its
+                    password goes in SIEGEKIT_LOGIN_PASSWORD: one login with
+                    it first shows that the check's logins reach the app
   --login-body TEMPLATE
                     the POST body, with {user} and {password}: JSON if it
                     starts with {, otherwise a form, for example
-                    '{"email":"{user}","password":"{password}"}'
+                    '{"email":"{user}","password":"{password}"}'. With
+                    --login-page, the form's fields to fill in, such as
+                    'email={user}&password={password}'
   --login-attempts N
                     logins to send with a random wrong password, one per
                     second (default 20, at most 50)
@@ -185,7 +193,13 @@ Flags:
                     GET per table or path with the app's own public key.
                     A backend that is not on this machine must appear in
                     the app's scripts, and you type its host name in a
-                    terminal; no flag skips that
+                    terminal; no flag skips that. An app that calls
+                    Supabase only from its server serves no key: set
+                    SIEGEKIT_SUPABASE_KEY to the project's anon or
+                    publishable key (never a secret or service_role key).
+                    On a host not on this machine the project must accept
+                    it (one GET of /auth/v1/settings first), and then the
+                    scripts need not name the host
   --storage-url URL the app's file storage, for the storage-write test
                     (local targets only): the Supabase project URL, or
                     https://firebasestorage.googleapis.com or a local
@@ -196,9 +210,13 @@ Flags:
                     "write test files" after reading the list, and the host
                     name (the bucket name for hosted Firebase) when the
                     storage is not on this machine; no flag skips that. A
-                    file whose delete is refused stays and is listed
-  --source DIR      the app's repository: table names from its Supabase
-                    migrations, paths from database.rules.json, and an
+                    file whose delete is refused stays and is listed.
+                    SIEGEKIT_SUPABASE_KEY works as for --backend-url
+  --source DIR      the app's repository: whether it uses Supabase (a
+                    supabase/ directory) or Firebase (firebase.json or a
+                    rules file) when the app's scripts do not say, table
+                    names from its Supabase migrations, paths from
+                    database.rules.json, and an
                     OpenAPI file for Schemathesis when the app serves none,
                     and on local targets the GET routes of its server code
                     (Go routers, Rocket.Chat REST API, Express) for the
@@ -230,6 +248,7 @@ func scan(args []string, stdout, stderr io.Writer) int {
 	profile := fl.String("profile", "full", "")
 	var lf loginFlags
 	fl.StringVar(&lf.url, "login-url", "", "")
+	fl.StringVar(&lf.page, "login-page", "", "")
 	fl.StringVar(&lf.user, "login-user", "", "")
 	fl.StringVar(&lf.body, "login-body", "", "")
 	fl.IntVar(&lf.attempts, "login-attempts", login.DefaultAttempts, "")
@@ -360,7 +379,7 @@ func scan(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "siegekit scan: %v\n", err)
 		return exitUsage
 	}
-	if *deployed || *authorizedHost != "" || *openAPI != "" || lf.url != "" || attemptsSet || *har != "" || *replayWrites || rl.url != "" || anyPage || *mailCatcher != "" || *backendURL != "" || *storageURL != "" || *source != "" {
+	if *deployed || *authorizedHost != "" || *openAPI != "" || lf.url != "" || lf.page != "" || attemptsSet || *har != "" || *replayWrites || rl.url != "" || anyPage || *mailCatcher != "" || *backendURL != "" || *storageURL != "" || *source != "" {
 		fmt.Fprint(stderr, "siegekit scan: --deployed, --authorized-host, --openapi, --har, --replay-writes, --backend-url, --storage-url, --source, --mail-catcher, the --login flags, the --rate-limit flags and the --reset, --signup and --code flags only apply to URL targets\n")
 		return exitUsage
 	}

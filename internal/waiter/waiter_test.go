@@ -42,7 +42,7 @@ func TestStatValue(t *testing.T) {
 }
 
 // FuzzStatus feeds hostile status files to the parser: the tool can write
-// the file, so it is untrusted (threat model T29).
+// the file, so it is untrusted (threat model T30).
 func FuzzStatus(f *testing.F) {
 	f.Add([]byte(`{"version":1,"exit":0,"cgroup":"v2","memoryKills":0,"processesRefused":0,"memoryPeak":1,"processesPeak":1,"samples":1}`))
 	f.Add([]byte(`{"version":1,"exit":137,"errors":["pids.events: open: no such file"]}`))

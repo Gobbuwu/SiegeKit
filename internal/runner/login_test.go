@@ -5,6 +5,7 @@ import (
 	"net/http/httptest"
 	"net/netip"
 	"net/url"
+	"strings"
 	"testing"
 
 	"github.com/Gobbuwu/SiegeKit/internal/egress"
@@ -26,17 +27,34 @@ func TestLoginFindsPlantedIssue(t *testing.T) {
 		t.Fatal(err)
 	}
 	cfg := egress.Config{Target: tu, Addrs: []netip.Addr{netip.MustParseAddr("127.0.0.1")}, Version: "test"}
+	// Too few attempts give no finding (issue #79), so the logins with no
+	// limit send the default number; the others stop sooner.
 	const attempts = 4
+	const full = login.DefaultAttempts
 	l, err := login.Parse(srv.URL+"/account/sign-in", "tester@shop.test", `{"email":"{user}","password":"{password}"}`, tu)
 	if err != nil {
 		t.Fatal(err)
 	}
-	r, err := login.Check(context.Background(), cfg, l, attempts)
-	if err != nil || r.Limited || r.Attempts != attempts {
+	r, err := login.Check(context.Background(), cfg, l, full, vulnAppPassword)
+	if err != nil || r.Limited || r.Attempts != full {
 		t.Fatalf("%+v %v", r, err)
 	}
 	found := map[string]bool{}
-	for _, f := range login.Findings(l, r, attempts) {
+	for _, f := range login.Findings(l, r, full) {
+		u, _ := url.Parse(f.Location.URI)
+		found[f.RuleID+" "+u.Path] = true
+	}
+
+	// The Server-Action-like form, with --login-page (ADR 0062).
+	l, err = login.ParsePage(srv.URL+"/account/form-sign-in", "tester@shop.test", "email={user}&password={password}", tu)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r, err = login.Check(context.Background(), cfg, l, full, vulnAppPassword)
+	if err != nil || r.Limited || r.Attempts != full || r.Redirect != "/account/form-sign-in?error=invalid_credentials" {
+		t.Fatalf("form: %+v %v", r, err)
+	}
+	for _, f := range login.Findings(l, r, full) {
 		u, _ := url.Parse(f.Location.URI)
 		found[f.RuleID+" "+u.Path] = true
 	}
@@ -45,12 +63,22 @@ func TestLoginFindsPlantedIssue(t *testing.T) {
 			t.Errorf("missed %s (rule %s)", issue, rule)
 		}
 	}
+	// The same form posted urlencoded to its URL is never run: the right
+	// password is answered like a wrong one, so the check fails instead of
+	// reporting no limit (the false finding of the Porchlet run).
+	l, err = login.Parse(srv.URL+"/account/form-sign-in", "tester@shop.test", "email={user}&password={password}", tu)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r, err = login.Check(context.Background(), cfg, l, attempts, vulnAppPassword); err == nil || !strings.Contains(err.Error(), "were both answered 200") {
+		t.Errorf("ignored login: %+v %v", r, err)
+	}
 
 	l, err = login.Parse(srv.URL+"/account/sign-in-limited", "tester", "username={user}&password={password}", tu)
 	if err != nil {
 		t.Fatal(err)
 	}
-	r, err = login.Check(context.Background(), cfg, l, attempts)
+	r, err = login.Check(context.Background(), cfg, l, attempts, vulnAppPassword)
 	if err != nil || !r.Limited || r.Attempts != 3 || r.Signal != "answered 423" || len(login.Findings(l, r, attempts)) != 0 {
 		t.Errorf("limited login: %+v %v", r, err)
 	}
