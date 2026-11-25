@@ -190,6 +190,13 @@ Flags:
                     sign-up page: up to 20 accounts are made). Without
                     these flags, the pages are taken from --har when the
                     recording used them
+  --reset-page URL, --signup-page URL
+                    instead of --reset-url or --signup-url: the page with
+                    the form (a Next.js Server Action, or a form with a
+                    CSRF token). Before each request SiegeKit reads the
+                    page and sends its form as a browser without
+                    JavaScript does; the body names the fields to fill in,
+                    such as 'email={new}%40example.com&password=...'
   --mail-catcher URL
                     a local Mailpit (its web address, such as
                     http://127.0.0.1:8025/) that the app sends its mail
@@ -271,6 +278,9 @@ func scan(args []string, stdout, stderr io.Writer) int {
 		f := &pageFlag{}
 		fl.StringVar(&f.url, string(p)+"-url", "", "")
 		fl.StringVar(&f.body, string(p)+"-body", "", "")
+		if p.PageFlag() != "" {
+			fl.StringVar(&f.page, strings.TrimPrefix(p.PageFlag(), "--"), "", "")
+		}
 		pages[p] = f
 	}
 	mailCatcher := fl.String("mail-catcher", "", "")
@@ -326,11 +336,19 @@ func scan(args []string, stdout, stderr io.Writer) int {
 	anyPage := false
 	for _, p := range ratelimit.Pages {
 		f := pages[p]
-		if f.body != "" && f.url == "" {
-			fmt.Fprintf(stderr, "siegekit scan: --%s-body needs --%s-url\n", p, p)
+		switch {
+		case f.url != "" && f.page != "":
+			fmt.Fprintf(stderr, "siegekit scan: %s and %s cannot be used together: %s reads the URL from the page's form\n", p.Flag(), p.PageFlag(), p.PageFlag())
+			return exitUsage
+		case f.body != "" && f.url == "" && f.page == "":
+			if p.PageFlag() == "" {
+				fmt.Fprintf(stderr, "siegekit scan: --%s-body needs %s\n", p, p.Flag())
+			} else {
+				fmt.Fprintf(stderr, "siegekit scan: --%s-body needs %s or %s\n", p, p.Flag(), p.PageFlag())
+			}
 			return exitUsage
 		}
-		anyPage = anyPage || f.url != ""
+		anyPage = anyPage || f.url != "" || f.page != ""
 	}
 	threshold, err := findings.ParseSeverity(*failOn)
 	if err != nil {

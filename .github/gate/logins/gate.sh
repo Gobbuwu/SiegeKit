@@ -9,6 +9,11 @@
 # at the gateway, so a login SiegeKit thinks it sent but the app never ran
 # is seen.
 #
+# The same app's sign-up and reset pages (ADR 0069, issue #81) are Server
+# Action forms too: each scan of them is checked the same way, and the
+# action runs under each page's limit are counted at Mailpit, where every
+# such run sends one email.
+#
 #   gate.sh start   start Supabase Auth and the app (APP_ENGINE)
 #   gate.sh scan    run the scans; exit 1 if any differs
 #   gate.sh logs    print the logs
@@ -26,6 +31,8 @@ AUTH=http://127.0.0.1:54331 # the gateway in front of Supabase Auth
 # and mirror.gcr.io, which can each answer 429 to anonymous pulls.
 PG=supabase/postgres@sha256:d15ecf03474e4f5437002f3951f758b8fbfb182c3be311a998873c768ff53d37
 GT=supabase/gotrue@sha256:ba8c0c82c574756c835c696df2a2c698020cc408a42034013d3712e34de7964d # v2.198.0
+MP=axllent/mailpit@sha256:e22dce5b36f93c77082e204a3942fb6b283b7896e057458400a4c88344c3df68 # v1.27.11, the mail job's
+MAILPIT=http://127.0.0.1:8025/
 pull() {
   local reg
   for _ in 1 2 3; do
@@ -63,13 +70,14 @@ start() {
     podman) echo "podman $(podman version -f '{{.Version}}'), cgroup $(podman info -f '{{.Host.CgroupsVersion}}'), rootless $(podman info -f '{{.Host.Security.Rootless}}'); node $(node --version); $(uname -m)" ;;
   esac
   mkdir -p "$W"
-  local sec dbpw anon pg gt
+  local sec dbpw anon pg gt mp
   sec=$(python3 -c 'import secrets; print(secrets.token_hex(32))')
   dbpw=$(python3 -c 'import secrets; print(secrets.token_hex(16))')
   python3 -c 'import secrets; print("Gate-" + secrets.token_hex(12))' > "$W/password"
   anon=$(python3 "$H/../storage/jwt.py" "$sec" anon)
   pg=$(pull $PG)
   gt=$(pull $GT)
+  mp=$(pull $MP)
   $E network create lgnet >/dev/null
   $E run -d --name lgdb --network lgnet -e POSTGRES_PASSWORD="$dbpw" "$pg" >/dev/null
   # The image's entrypoint runs its init scripts on a server with no TCP
@@ -91,6 +99,12 @@ start() {
     -e GOTRUE_JWT_ADMIN_ROLES=service_role -e GOTRUE_MAILER_AUTOCONFIRM=true -e GOTRUE_EXTERNAL_EMAIL_ENABLED=true \
     -e GOTRUE_RATE_LIMIT_TOKEN_REFRESH=1 -e GOTRUE_RATE_LIMIT_HEADER=X-Forwarded-For "$gt" >/dev/null
   authup
+  $E run -d --name lgmail -p 127.0.0.1:8025:8025 "$mp" >/dev/null
+  for _ in $(seq 60); do
+    if curl -sf -o /dev/null ${MAILPIT}api/v1/info; then break; fi
+    sleep 0.5
+  done
+  curl -sf -o /dev/null ${MAILPIT}api/v1/info
   nohup node "$H/gateway.js" > "$W/gateway.log" 2>&1 &
   for _ in $(seq 20); do
     if [ "$(curl -s -o /dev/null -w '%{http_code}' $AUTH/auth/v1/health)" = 200 ]; then break; fi
@@ -101,8 +115,8 @@ start() {
   # The app, built and served by the runner's Node; Supabase's URL and key
   # are read on the server only.
   cd "$H"
-  NEXT_TELEMETRY_DISABLED=1 SUPABASE_URL=$AUTH SUPABASE_PUBLISHABLE_KEY="$anon" npx --no-install next build > "$W/next-build.log" 2>&1 || { tail -30 "$W/next-build.log"; exit 1; }
-  NEXT_TELEMETRY_DISABLED=1 SUPABASE_URL=$AUTH SUPABASE_PUBLISHABLE_KEY="$anon" nohup npx --no-install next start -H 127.0.0.1 -p 3100 > "$W/next.log" 2>&1 &
+  NEXT_TELEMETRY_DISABLED=1 SUPABASE_URL=$AUTH SUPABASE_PUBLISHABLE_KEY="$anon" MAILPIT_URL=$MAILPIT npx --no-install next build > "$W/next-build.log" 2>&1 || { tail -30 "$W/next-build.log"; exit 1; }
+  NEXT_TELEMETRY_DISABLED=1 SUPABASE_URL=$AUTH SUPABASE_PUBLISHABLE_KEY="$anon" MAILPIT_URL=$MAILPIT nohup npx --no-install next start -H 127.0.0.1 -p 3100 > "$W/next.log" 2>&1 &
   for _ in $(seq 60); do
     if curl -sf -o /dev/null $APP/login; then break; fi
     sleep 0.5
@@ -121,7 +135,7 @@ SCANS=(
 )
 
 scan() {
-  local fail=0 line name flags want rep before got after
+  local fail=0 line name flags want rep before after
   mkdir -p "$W/observed"
   for line in "${SCANS[@]}"; do
     IFS='|' read -r name flags want <<< "$line"
@@ -137,16 +151,68 @@ scan() {
     after=$(logins)
     echo "== $name"
     if [ ! -f "$rep/report.json" ]; then echo "  FAIL: no report"; tail -20 "$W/scan-$name.log"; fail=1; continue; fi
-    jq -r '.plugins[] | "  \(.id): \(.status), \(.requests // 0) requests, \(.findings // 0) findings: \(.result // .reason)"' "$rep/report.json"
     if grep -qF "$(cat "$W/password")" "$rep/report.json" "$W/scan-$name.log"; then echo "  FAIL: the password was written"; fail=1; fi
     echo "  Supabase Auth logins: $((after - before)) (want $want)"
     if [ "$((after - before))" != "$want" ]; then echo "  FAIL: not the logins the scan should cause"; fail=1; fi
-    while IFS= read -r got; do
-      if ! grep -qxF "$got" "$H/results.txt"; then echo "  FAIL: not the measured requests and result (results.txt): $got"; fail=1; fi
-    done < <(jq -r --arg n "$name" '.plugins[] | "\($n) | \(.id) | \(.status) | \(.requests // 0) | \(.result // .reason)"' "$rep/report.json")
-    if ! (cd "$REPO" && go run ./internal/knownanswers/check -answers "testdata/known-answers/nextjs-login-$name.json" -report "$rep/report.json" -observed "$W/observed/nextjs-login-$name.json"); then
-      cat "$W/observed/nextjs-login-$name.json"; fail=1
-    fi
+    check "$name" "$rep" login || fail=1
+  done
+  pages || fail=1
+  return $fail
+}
+
+# check compares a scan's report with results.txt and its known answer.
+check() {
+  local name=$1 rep=$2 kind=$3 fail=0 got
+  jq -r '.plugins[] | "  \(.id): \(.status), \(.requests // 0) requests, \(.findings // 0) findings: \(.result // .reason)"' "$rep/report.json"
+  while IFS= read -r got; do
+    if ! grep -qxF "$got" "$H/results.txt"; then echo "  FAIL: not the measured requests and result (results.txt): $got"; fail=1; fi
+  done < <(jq -r --arg n "$name" '.plugins[] | "\($n) | \(.id) | \(.status) | \(.requests // 0) | \(.result // .reason)"' "$rep/report.json")
+  if ! (cd "$REPO" && go run ./internal/knownanswers/check -answers "testdata/known-answers/nextjs-$kind-$name.json" -report "$rep/report.json" -observed "$W/observed/nextjs-$kind-$name.json"); then
+    cat "$W/observed/nextjs-$kind-$name.json"; fail=1
+  fi
+  return $fail
+}
+
+# mails counts the emails at Mailpit: the action runs under the limits.
+mails() { curl -sf "${MAILPIT}api/v1/messages?limit=1" | jq .total; }
+
+# The sign-up and reset pages (ADR 0069): name | flags | the action runs
+# under the limit (emails) the scan must cause. The raw posts are issue
+# #81's case: the action never runs, so nothing may be reported. --page
+# scans send the page's form; /signup2 answers 200 with no limit, so only
+# the emails show the sign-ups reached it. {SID} and {FID} are the
+# action IDs of this build's /signup and /forgot forms.
+MC="--mail-catcher $MAILPIT"
+SIGNUP='email={new}%40example.com&password=Gate-page-1'
+PAGE_SCANS=(
+  "signup-raw|--only signup-limit --signup-url $APP/signup --signup-body %24{SID}=&$SIGNUP|0"
+  "reset-raw|--only reset-limit $MC --reset-url $APP/forgot --reset-body %24{FID}=&email=gate-user%40siegekit.test|0"
+  "signup-page|--only signup-limit $MC --signup-page $APP/signup --signup-body $SIGNUP|10"
+  "reset-page|--only reset-limit $MC --reset-page $APP/forgot --reset-body email=gate-user%40siegekit.test|5"
+  "signup2-page|--only signup-limit --signup-page $APP/signup2 --signup-body $SIGNUP|20"
+  "signup2-mail|--only signup-limit $MC --signup-page $APP/signup2 --signup-body $SIGNUP|20"
+)
+
+pages() {
+  local fail=0 line name flags want rep sid fid got
+  sid=$(curl -sf $APP/signup | grep -o 'ACTION_ID_[0-9a-f]*' | head -1)
+  fid=$(curl -sf $APP/forgot | grep -o 'ACTION_ID_[0-9a-f]*' | head -1)
+  test -n "$sid" && test -n "$fid"
+  for line in "${PAGE_SCANS[@]}"; do
+    IFS='|' read -r name flags want <<< "$line"
+    flags=${flags//\{SID\}/$sid}
+    flags=${flags//\{FID\}/$fid}
+    rep=$W/report-page-$name
+    curl -sf -X DELETE "${MAILPIT}api/v1/messages" >/dev/null
+    curl -sf -o /dev/null -X POST $APP/gate-reset
+    # shellcheck disable=SC2086 # flags are split on purpose
+    "$SK" scan --authorized-host 127.0.0.1 --no-save --report-dir "$rep" $flags $APP/ > "$W/scan-page-$name.log" 2>&1 || true
+    echo "== page $name"
+    if [ ! -f "$rep/report.json" ]; then echo "  FAIL: no report"; tail -20 "$W/scan-page-$name.log"; fail=1; continue; fi
+    got=$(mails)
+    echo "  action runs under the limit (emails at Mailpit): $got (want $want)"
+    if [ "$got" != "$want" ]; then echo "  FAIL: not the runs the scan should cause"; fail=1; fi
+    check "$name" "$rep" pages || fail=1
   done
   return $fail
 }
@@ -154,6 +220,6 @@ scan() {
 case ${1:-} in
   start) start ;;
   scan) scan ;;
-  logs) $E logs gt 2>&1 | tail -40; tail -40 "$W/next.log" "$W/gateway.log" 2>/dev/null || true ;;
+  logs) $E logs gt 2>&1 | tail -40; $E logs lgmail 2>&1 | tail -10; tail -40 "$W/next.log" "$W/gateway.log" 2>/dev/null || true ;;
   *) echo "usage: gate.sh start|scan|logs" >&2; exit 2 ;;
 esac

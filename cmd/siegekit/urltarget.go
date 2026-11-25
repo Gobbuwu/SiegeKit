@@ -164,13 +164,16 @@ func (f rateLimitFlags) check(requestsSet bool) error {
 // replace it.
 var rateLimitCheck = ratelimit.Check
 
-// pageFlag is a page's URL and body flags, such as --reset-url and
-// --reset-body (ADR 0055).
-type pageFlag struct{ url, body string }
+// pageFlag is a page's URL, page and body flags, such as --reset-url,
+// --reset-page and --reset-body (ADR 0055, ADR 0069).
+type pageFlag struct{ url, page, body string }
 
 // pageReason says why a page check has no page to test.
 func (o urlScan) pageReason(p ratelimit.Page) string {
 	flags := fmt.Sprintf("pass %s and --%s-body", p.Flag(), p)
+	if p.PageFlag() != "" {
+		flags = fmt.Sprintf("pass %s (or %s) and --%s-body", p.Flag(), p.PageFlag(), p)
+	}
 	switch {
 	case o.harPages.Unusable[p] != "":
 		return fmt.Sprintf("the %s recorded in %s cannot be tested (%s); %s", p.What(), filepath.Base(o.har), o.harPages.Unusable[p], flags)
@@ -182,6 +185,9 @@ func (o urlScan) pageReason(p ratelimit.Page) string {
 
 // pageInput says which page a check tested and where it came from.
 func pageInput(e *ratelimit.Endpoint) string {
+	if e.Form {
+		return fmt.Sprintf("POST of the form on %s (from %s)", e.URL, e.From)
+	}
 	if strings.HasPrefix(e.From, "--") {
 		return fmt.Sprintf("POST %s (from %s)", e.URL, e.From)
 	}
@@ -195,7 +201,7 @@ func pageMade(p ratelimit.Page, r ratelimit.Result) string {
 	case r.Accepted == 0:
 		return ""
 	case p == ratelimit.SignUp:
-		return fmt.Sprintf("; %d answered below 400, so up to %d accounts were made, named siegekit-new-...", r.Accepted, r.Accepted)
+		return fmt.Sprintf("; %d answered below 400, so up to %d accounts may have been made, named siegekit-new-...", r.Accepted, r.Accepted)
 	case p == ratelimit.Reset && r.Mail == nil:
 		return fmt.Sprintf("; %d answered below 400, so the app may have sent up to %d emails or texts", r.Accepted, r.Accepted)
 	}
@@ -308,10 +314,16 @@ func scanURL(raw string, o urlScan, stdout, stderr io.Writer) int {
 	// So are the reset, sign-up and code pages (ADR 0055).
 	o.pageEndpoints = map[ratelimit.Page]*ratelimit.Endpoint{}
 	for _, p := range ratelimit.Pages {
-		if f := o.pageFlags[p]; f != nil && f.url != "" {
-			if o.pageEndpoints[p], err = ratelimit.ParsePage(p, f.url, f.body, u); err != nil {
-				return refuse("%v", err)
-			}
+		f := o.pageFlags[p]
+		switch {
+		case f == nil:
+		case f.url != "":
+			o.pageEndpoints[p], err = ratelimit.ParsePage(p, f.url, f.body, u)
+		case f.page != "":
+			o.pageEndpoints[p], err = ratelimit.ParsePageForm(p, f.page, f.body, u)
+		}
+		if err != nil {
+			return refuse("%v", err)
 		}
 	}
 	// So is the mail catcher (ADR 0056).
@@ -1350,7 +1362,6 @@ func runURL(ctx context.Context, u *target.URL, addrs []netip.Addr, mode target.
 			var mark mailcatcher.Mark
 			var markErr error
 			if counted {
-				pr.Input += "; emails counted at " + o.catcher.String()
 				mark, markErr = o.catcher.Mark(ctx)
 			}
 			var res ratelimit.Result
@@ -1372,7 +1383,13 @@ func runURL(ctx context.Context, u *target.URL, addrs []netip.Addr, mode target.
 			if ctx.Err() != nil {
 				return fail(errors.New("interrupted; no report written"))
 			}
-			pr.Requests = res.Requests
+			pr.Requests = res.Requests + res.Reads
+			if res.Form != "" {
+				pr.Input += ", " + res.Form
+			}
+			if counted {
+				pr.Input += "; emails counted at " + o.catcher.String()
+			}
 			if err != nil {
 				pr.Status, pr.Reason = report.Failed, err.Error()+pageMade(p, res)
 			} else {

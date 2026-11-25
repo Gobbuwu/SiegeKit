@@ -157,7 +157,7 @@ func TestScanURLMailCatcher(t *testing.T) {
 		reset.Result != "no 429, 503 or rate-limit header in 20 requests, all answered 200, but only 1 email arrived at the mail catcher "+srv.URL+"/ to the addresses sent for the 20 requests answered below 400: the app limits these emails" {
 		t.Errorf("reset %+v", reset)
 	}
-	if signup.Findings != 1 || !strings.Contains(signup.Result, "; 20 emails arrived at the mail catcher "+srv.URL+"/ to the addresses sent for 20 requests answered below 400; 20 answered below 400, so up to 20 accounts were made") {
+	if signup.Findings != 1 || !strings.Contains(signup.Result, "; 20 emails arrived at the mail catcher "+srv.URL+"/ to the addresses sent for 20 requests answered below 400; 20 answered below 400, so up to 20 accounts may have been made") {
 		t.Errorf("sign-up %+v", signup)
 	}
 	if strings.Contains(codep.Input, "emails counted") || strings.Contains(codep.Result, "mail catcher") {

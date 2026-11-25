@@ -72,6 +72,7 @@ Each significant design decision is recorded as a short ADR before code is writt
 | [0066](0066-go-module-download.md) | Consented Go module download, a scratch folder on disk for gosec, `--ca-file` and `--proxy` for the update containers, engine mirrors for Docker Hub's limit (amends 0014, 0016, 0045) | Accepted |
 | [0067](0067-checks-finish-or-say-so.md) | Every check compares what it was given with what it checked: run stops fail, file gaps named, Gitleaks archives opened, ZAP's passive cap removed, limits from measured peaks, rules not run named, a shared URL list for both ZAP checks (amends 0009, 0040, 0043) | Accepted |
 | [0068](0068-tools-run-from-repo-root.md) | Gitleaks and Bandit run from the repository's top level, so its allowlists, `.gitleaksignore` and `.bandit` apply as in its own runs; findings in git-ignored, untracked files say so, read from git's index (amends 0020, 0063) | Accepted |
+| [0069](0069-reset-and-signup-page-forms.md) | Reset and sign-up pages given as their forms (`--reset-page`, `--signup-page`), limits seen in the redirect on 3xx only, and a guard that the requests reached the app (amends 0055, 0056, 0062) | Accepted |
 | [0070](0070-extra-headers.md) | `SIEGEKIT_EXTRA_HEADERS`: headers such as a preview host's bypass header, sent on every request to the target's origin (proof fetch, own checks, proxy), never to another host; login and connection headers refused; values hidden in every report (amends 0005, 0018) | Accepted |
 
 ADRs 0002 to 0011 were accepted at the M0 design sign-off on 2026-11-18.
