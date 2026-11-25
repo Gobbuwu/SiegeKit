@@ -212,4 +212,21 @@ func TestScanURLBackend(t *testing.T) {
 	if len(f.got) != 0 || !strings.Contains(out, "OpenAPI spec: "+filepath.Join(repo, "openapi.json")) || len(f.specs) != 1 {
 		t.Errorf("source spec: exit %d, probes %v\n%s", code, f.got, out)
 	}
+
+	// The host starts blocking while the app's scripts are fetched (ADR
+	// 0071): the backend is not contacted and the check is stopped.
+	f = useActive(t)
+	useData(t)
+	h := useHostPage(t, f)
+	calls = useBackend(t, backend.Result{Tested: 2, Requests: 2})
+	collectFake := servedCollect
+	servedCollect = func(ctx context.Context, cfg egress.Config, rate float64, dir string) (served.Result, error) {
+		h.blocked.Store(true)
+		return collectFake(ctx, cfg, rate, dir)
+	}
+	code, out = scan(true, "abcdefghijklmnop.supabase.co\n", f, "--backend-url", hostedBackend, "--source", repo, "--only", "backend-live", "http://localhost:3000/")
+	servedCollect = collectFake
+	if p := plugin(); code != report.ExitIncomplete || len(*calls) != 0 || p.Stop != report.StopHostBlocked || p.Requests != 2 {
+		t.Errorf("blocked: exit %d, %d calls, %+v\n%s", code, len(*calls), p, out)
+	}
 }

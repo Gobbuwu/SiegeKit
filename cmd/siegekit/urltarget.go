@@ -1486,13 +1486,17 @@ func runURL(ctx context.Context, u *target.URL, addrs []netip.Addr, mode target.
 				extra = col.res.Requests
 			}
 			collectCounted = true
-			fmt.Fprintf(stdout, "%s: reading %s.\n", backend.ID, o.backend)
-			pr, backendFindings = runBackend(ctx, bp, col, o.repo, o.supabaseKey, extra, pr)
-			if ctx.Err() != nil {
-				return fail(errors.New("interrupted; no report written"))
-			}
 			if col.block != nil {
-				pr, backendFindings = runner.HostBlocked(pr, col.block, backendFindings)
+				// Its input, the app's scripts, may be the host's page
+				// (ADR 0071): the backend is not contacted.
+				pr, _ = runner.HostBlocked(pr, col.block, nil)
+				pr.Requests = extra
+			} else {
+				fmt.Fprintf(stdout, "%s: reading %s.\n", backend.ID, o.backend)
+				pr, backendFindings = runBackend(ctx, bp, col, o.repo, o.supabaseKey, extra, pr)
+				if ctx.Err() != nil {
+					return fail(errors.New("interrupted; no report written"))
+				}
 			}
 		}
 		backendResult = &pr
@@ -1510,16 +1514,19 @@ func runURL(ctx context.Context, u *target.URL, addrs []netip.Addr, mode target.
 				extra = col.res.Requests
 			}
 			collectCounted = true
-			var interrupted bool
-			pr, storageFindings, interrupted = o.runStorage(ctx, storageRun{
-				plan: sp, col: col, repo: o.repo, supabaseKey: o.supabaseKey, backendConfirmed: backendConfirmed,
-				auditLog: filepath.Join(dir, "audit.log"), mode: string(mode), env: env.String(), extraRequests: extra,
-			}, stdout)
-			if interrupted || ctx.Err() != nil {
-				return fail(errors.New("interrupted; no report written"))
-			}
 			if col.block != nil {
-				pr, storageFindings = runner.HostBlocked(pr, col.block, storageFindings)
+				// As for backend-live: nothing is written to storage.
+				pr, _ = runner.HostBlocked(pr, col.block, nil)
+				pr.Requests = extra
+			} else {
+				var interrupted bool
+				pr, storageFindings, interrupted = o.runStorage(ctx, storageRun{
+					plan: sp, col: col, repo: o.repo, supabaseKey: o.supabaseKey, backendConfirmed: backendConfirmed,
+					auditLog: filepath.Join(dir, "audit.log"), mode: string(mode), env: env.String(), extraRequests: extra,
+				}, stdout)
+				if interrupted || ctx.Err() != nil {
+					return fail(errors.New("interrupted; no report written"))
+				}
 			}
 		}
 		storageResult = &pr
