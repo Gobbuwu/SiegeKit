@@ -599,6 +599,7 @@ jobs:
           done
           if [ -z "$up" ]; then "$APP_ENGINE" logs app; "$APP_ENGINE" logs mailpit; exit 1; fi
           "$APP_ENGINE" exec -u git app gitea admin user create --username alice --password 'Gate-mail-count-1' --email alice@siegekit.test --must-change-password=false
+          "$APP_ENGINE" exec -u git app gitea admin user create --username bob --password 'Gate-mail-count-1' --email bob@siegekit.test --must-change-password=false
           # No email yet, so every one counted below came from the scan.
           test "$(curl -sf 'http://127.0.0.1:8025/api/v1/messages?limit=1' | jq .total)" = 0
       - name: Scan
@@ -628,15 +629,41 @@ jobs:
           test "$(jq '[.messages[] | select(.To[0].Address == "alice@siegekit.test")] | length' "$RUNNER_TEMP/mail.json")" = 1
           test "$(jq '[.messages[] | select(.To[0].Address | test("^siegekit-new-[a-z0-9]{12}@example\\.com$"))] | length' "$RUNNER_TEMP/mail.json")" = 20
           test "$(jq .total "$RUNNER_TEMP/mail.json")" = 21
+      - name: Scan with the pages' forms
+        # ADR 0069: --reset-page and --signup-page send Gitea's own forms
+        # (their _csrf field and cookie). The reset is for bob, who has had
+        # no email yet: 1 email arrives for the 20 resets, as for alice
+        # above. Each sign-up makes an account and an activation email.
+        run: |
+          set +e
+          "$RUNNER_TEMP/siegekit" scan --yes --authorized-host 127.0.0.1 --no-save --report-dir "$RUNNER_TEMP/report-page" \
+            --only reset-limit,signup-limit --mail-catcher http://127.0.0.1:8025/ \
+            --reset-page http://127.0.0.1:3001/user/forgot_password --reset-body 'email=bob@siegekit.test' \
+            --signup-page http://127.0.0.1:3001/user/sign_up \
+            --signup-body 'user_name={new}&email={new}@example.com&password=Gate-mail-count-1&retype=Gate-mail-count-1' \
+            http://127.0.0.1:3001/
+          code=$?
+          set -e
+          echo "exit code $code"
+          if [ "$code" -ne 0 ] && [ "$code" -ne 3 ]; then exit 1; fi
+          r="$RUNNER_TEMP/report-page/report.json"
+          jq '.plugins[] | {id, status, cause, reason, input, result, requests, findings}' "$r"
+          jq -e '[.plugins[] | select(.id == "reset-limit" and .findings == 0 and .requests == 40 and (.input | startswith("POST of the form on http://127.0.0.1:3001/user/forgot_password (from --reset-page), sent to http://127.0.0.1:3001/user/forgot_password as application/x-www-form-urlencoded")) and (.result | endswith("but only 1 email arrived at the mail catcher http://127.0.0.1:8025/ to the addresses sent for the 20 requests answered below 400: the app limits these emails")))] | length == 1' "$r"
+          jq -e '[.plugins[] | select(.id == "signup-limit" and .findings == 1 and .requests == 40 and (.input | startswith("POST of the form on http://127.0.0.1:3001/user/sign_up (from --signup-page), sent to http://127.0.0.1:3001/user/sign_up as application/x-www-form-urlencoded")) and (.result | contains("; 20 emails arrived at the mail catcher http://127.0.0.1:8025/ to the addresses sent for 20 requests answered below 400")))] | length == 1' "$r"
+          jq -e '[.findings[] | select(.ruleId == "signup-not-limited" and (.message | contains("SiegeKit knows they reached the app: emails arrived for them at the mail catcher.")))] | length == 1' "$r"
+          curl -sf 'http://127.0.0.1:8025/api/v1/messages?limit=100' > "$RUNNER_TEMP/mail2.json"
+          test "$(jq '[.messages[] | select(.To[0].Address == "bob@siegekit.test")] | length' "$RUNNER_TEMP/mail2.json")" = 1
+          test "$(jq '[.messages[] | select(.To[0].Address | test("^siegekit-new-[a-z0-9]{12}@example\\.com$"))] | length' "$RUNNER_TEMP/mail2.json")" = 40
       - name: Known answers
         if: ${{ !cancelled() }}
         run: |
           set +e
           go run ./internal/knownanswers/check -answers testdata/known-answers/gitea-mail.json -report "$RUNNER_TEMP/report/report.json" -observed "$RUNNER_TEMP/observed.json"
           code=$?
+          go run ./internal/knownanswers/check -answers testdata/known-answers/gitea-mail-page.json -report "$RUNNER_TEMP/report-page/report.json" -observed "$RUNNER_TEMP/observed-page.json" || code=1
           set -e
-          echo "::group::Answer of this run"
-          cat "$RUNNER_TEMP/observed.json"
+          echo "::group::Answers of this run"
+          cat "$RUNNER_TEMP/observed.json" "$RUNNER_TEMP/observed-page.json"
           echo "::endgroup::"
           exit $code
       - name: App log
@@ -722,11 +749,15 @@ jobs:
           r="$RUNNER_TEMP/report/report.json"
           jq '.plugins[] | {id, status, cause, reason, input, result, requests, findings}' "$r"
           # Measured (ADR 0057): the reset and code pages answer the first
-          # request with X-RateLimit-Limit 100; 20 sign-ups answer 201.
-          for page in reset-limit:/rest/user/reset-password code-limit:/rest/2fa/verify; do
-            jq -e --arg id "${page%%:*}" --arg in "POST $BASE${page#*:} (recorded in a.har)" '[.plugins[] | select(.id == $id and .input == $in and .requests == 1 and (.result | startswith("limit seen after 1 of 20 requests: answered with a X-Ratelimit-Limit header, already at the first request (limit 100 per ")))] | length == 1' "$r"
+          # request with X-RateLimit-Limit 100; 20 sign-ups answer 201. The
+          # reset and sign-up checks first GET their URL to compare its
+          # answer with theirs (ADR 0069), one request more; the code page
+          # has no such GET.
+          for page in reset-limit:2:/rest/user/reset-password code-limit:1:/rest/2fa/verify; do
+            id=${page%%:*} rest=${page#*:}
+            jq -e --arg id "$id" --argjson n "${rest%%:*}" --arg in "POST $BASE${rest#*:} (recorded in a.har)" '[.plugins[] | select(.id == $id and .input == $in and .requests == $n and (.result | startswith("limit seen after 1 of 20 requests: answered with a X-Ratelimit-Limit header, already at the first request (limit 100 per ")))] | length == 1' "$r"
           done
-          jq -e --arg in "POST $BASE/api/Users/ (recorded in a.har)" '[.plugins[] | select(.id == "signup-limit" and .input == $in and .requests == 20 and .result == "no limit seen in 20 requests, all answered 201 with no rate-limit header; 20 answered below 400, so up to 20 accounts were made, named siegekit-new-...")] | length == 1' "$r"
+          jq -e --arg in "POST $BASE/api/Users/ (recorded in a.har)" '[.plugins[] | select(.id == "signup-limit" and .input == $in and .requests == 21 and .result == "no limit seen in 20 requests, all answered 201 with no rate-limit header; 20 answered below 400, so up to 20 accounts may have been made, named siegekit-new-...")] | length == 1' "$r"
           jq -e '[.findings[] | select(.ruleId == "code-limit-high" and .severity == "low")] | length == 1' "$r"
           jq -e '[.findings[] | select(.ruleId == "signup-not-limited" and .severity == "low")] | length == 1' "$r"
           # The app again, read by the gate itself: 20 new accounts, and the

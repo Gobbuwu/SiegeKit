@@ -22,6 +22,7 @@ import (
 	"github.com/Gobbuwu/SiegeKit/internal/findings"
 	"github.com/Gobbuwu/SiegeKit/internal/mailcatcher"
 	"github.com/Gobbuwu/SiegeKit/internal/target"
+	"github.com/Gobbuwu/SiegeKit/internal/webform"
 )
 
 // ID, Name and Family describe the check in plans and reports.
@@ -55,8 +56,15 @@ type Endpoint struct {
 	// {wrong} and {new} are filled in anew for each request.
 	Page Page
 	From string // where the page came from: its flag or the HAR file
-	body []byte
-	json bool
+	// Form is set for --reset-page and --signup-page (ADR 0069): URL is
+	// the page, read before each request, and its form is sent with the
+	// fields the body names.
+	Form    bool
+	body    []byte
+	json    bool
+	fields  []webform.Field
+	pageURL *url.URL
+	target  *target.URL // the target a page's form and redirects must be on
 }
 
 // Parse checks the --rate-limit-url and --rate-limit-body values. The URL
@@ -128,6 +136,33 @@ type Result struct {
 	To []string
 	// Mail is the count at the mail catcher, nil when none was given.
 	Mail *Mail
+	// Reads counts the GETs of a form's page, of the page's own URL for
+	// the guard and of redirects followed (ADR 0069): requests the report
+	// counts that Requests does not.
+	Reads int
+	// Form says how a page's form was sent, for reports: its action,
+	// encoding and button (ADR 0069).
+	Form string
+	// Reached says how the answers showed that the requests reached the
+	// app's own code: one differed from the page's own answer to a GET
+	// (ADR 0069, guard G1). An email at the mail catcher shows it too.
+	Reached string
+	// page is the kind of page checked, "" for --rate-limit-url.
+	page Page
+}
+
+// guarded reports whether r is a reset's or sign-up's, whose "no limit"
+// needs a sign that the requests reached the app (ADR 0069).
+func (r Result) guarded() bool { return r.page == Reset || r.page == SignUp }
+
+// mailed reports whether emails arrived for the requests, so they reached
+// the app, even if more were still arriving.
+func (r Result) mailed() bool { return r.Mail != nil && r.Mail.Emails > 0 }
+
+// unreached reports whether a reset or sign-up saw no limit and no sign
+// that its requests reached the app, so its "no limit" is not reported.
+func (r Result) unreached() bool {
+	return r.guarded() && !r.Limited && r.Changed == 0 && r.Reached == "" && !r.mailed()
 }
 
 // Mail is what a mail catcher received during a reset or sign-up page
@@ -176,13 +211,23 @@ func (m *Mail) said(r Result) string {
 
 // Summary says the result in one line, for reports.
 func (r Result) Summary(planned int) string {
-	if r.Mail == nil {
-		return r.summary(planned)
-	}
 	if r.MailLimited() {
 		return fmt.Sprintf("no 429, 503 or rate-limit header in %d requests, all answered %d, %s", r.Requests, r.Baseline, r.Mail.said(r))
 	}
-	return r.summary(planned) + "; " + r.Mail.said(r)
+	s := r.summary(planned)
+	if r.Mail != nil {
+		s += "; " + r.Mail.said(r)
+	}
+	if r.unreached() {
+		s += fmt.Sprintf("; no answer below 400 differed from the page's own answer to a GET in status, redirect or a new cookie, so SiegeKit cannot tell that its requests reached the app's %s code: not reported", map[Page]string{Reset: "password-reset", SignUp: "sign-up"}[r.page])
+		if r.Mail == nil {
+			s += ". Give " + mailcatcher.Flag + " to count the emails"
+		}
+		if r.Form == "" {
+			s += fmt.Sprintf(". A form that only a browser can send (a Next.js Server Action, a CSRF token) needs %s", r.page.PageFlag())
+		}
+	}
+	return s
 }
 
 func (r Result) summary(planned int) string {
@@ -210,7 +255,7 @@ func (r Result) summary(planned int) string {
 
 // send and sleep are replaced in tests.
 var (
-	send  = egress.Send
+	send  = egress.SendHeader
 	sleep = func(ctx context.Context, d time.Duration) error {
 		t := time.NewTimer(d)
 		defer t.Stop()
@@ -242,9 +287,27 @@ func Check(ctx context.Context, cfg egress.Config, e *Endpoint, n int) (Result, 
 	if cfg.ReadOnly && e.Method != http.MethodGet {
 		return Result{}, errors.New("the rate-limit check would send POST requests, which this target does not allow")
 	}
-	var r Result
+	r := Result{page: e.Page}
 	var last time.Time
 	var baseWords []string // limit words the first answer already had
+	// A reset's or sign-up's limit may show only in its redirect or on the
+	// page it names (ADR 0069), and its "no limit" needs an answer that
+	// differs from the page's own answer to a GET (guard G1).
+	var page webform.Shape
+	var pageWords, baseNext []string
+	var baseLoc string
+	if r.guarded() && !e.Form {
+		g, err := send(ctx, cfg, http.MethodGet, e.Path, http.Header{"Accept": {htmlAccept}}, nil, MaxAnswer)
+		if g == nil || err != nil && !errors.Is(err, egress.ErrTooLarge) {
+			if ctx.Err() != nil {
+				return r, ctx.Err()
+			}
+			return r, fmt.Errorf("the URL did not answer: %v", err)
+		}
+		r.Reads++
+		page = webform.ShapeOf(g, webform.Redirect(g))
+	}
+	what := "the " + e.Page.What()
 	for i := range n {
 		if i > 0 {
 			if err := sleep(ctx, Interval-now().Sub(last)); err != nil {
@@ -252,16 +315,20 @@ func Check(ctx context.Context, cfg egress.Config, e *Endpoint, n int) (Result, 
 			}
 		}
 		last = now()
-		body := e.next()
+		wrong, name := wrongGuess(), newName()
 		if e.Page == Reset || e.Page == SignUp {
-			for _, to := range mailcatcher.Addresses(body, e.Method == http.MethodPost && !e.json) {
+			sent := e.bodyFor(wrong, name)
+			if e.Form {
+				sent = e.formBody(wrong, name)
+			}
+			for _, to := range mailcatcher.Addresses(sent, e.Form || e.Method == http.MethodPost && !e.json) {
 				if !slices.Contains(r.To, to) && len(r.To) < MaxRequests {
 					r.To = append(r.To, to)
 				}
 			}
 		}
-		a, err := send(ctx, cfg, e.Method, e.Path, e.ContentType(), body, MaxAnswer)
-		if a == nil || err != nil && !errors.Is(err, egress.ErrTooLarge) {
+		s, err := e.try(ctx, cfg, wrong, name, &r)
+		if err != nil || s == nil {
 			if ctx.Err() != nil {
 				return r, ctx.Err()
 			}
@@ -270,12 +337,44 @@ func Check(ctx context.Context, cfg egress.Config, e *Endpoint, n int) (Result, 
 			}
 			return r, fmt.Errorf("the target stopped answering after %d request(s): %v. A block of SiegeKit's address and a crash look the same from here, so this check cannot tell which it was", r.Requests, err)
 		}
+		// A form's page, read before each request (ADR 0069), as the login
+		// checks read theirs (ADR 0062 item 4).
+		if p := s.page; p != nil {
+			if sig := Signal(p.Status, p.Header); sig != "" {
+				r.Limited, r.Signal = true, what+" "+sig
+				if i == 0 {
+					r.Signal += ", already at the first request"
+				}
+				return r, nil
+			}
+			switch {
+			case i == 0 && p.Status != http.StatusOK:
+				return r, fmt.Errorf("%s answered %d; %s must be the page with the form itself (SiegeKit does not follow redirects)", what, p.Status, e.From)
+			case i == 0 && s.formErr != nil:
+				return r, fmt.Errorf("%s: %v", e.From, s.formErr)
+			case i == 0:
+				pageWords, page = s.words, webform.ShapeOf(p, webform.Redirect(p))
+				r.Form = fmt.Sprintf("sent to %s as %s", s.form.URL, s.form.Describe())
+			case p.Status >= 500:
+				return r, fmt.Errorf("%s answered %d (a server error) after %d request(s); a crash is not a limit, so this check cannot tell whether requests are limited", what, p.Status, r.Requests)
+			case p.Status != http.StatusOK:
+				r.Limited, r.Signal = true, fmt.Sprintf("%s answered %d instead of 200", what, p.Status)
+			case NewWord(s.words, pageWords) != "":
+				r.Limited, r.Signal = true, what+" has "+Said(NewWord(s.words, pageWords))
+			case s.formErr != nil:
+				return r, fmt.Errorf("after %d request(s) the form on %s could not be sent: %v", r.Requests, what, s.formErr)
+			}
+			if r.Limited {
+				return r, nil
+			}
+		}
+		a := s.a
 		r.Requests++
 		if a.Status < 400 {
 			r.Accepted++
 		}
-		if s := Signal(a.Status, a.Header); s != "" {
-			r.Limited, r.Signal, r.Limit, r.Window = true, s, LimitNumber(a.Header), Window(a.Header, now())
+		if sig := Signal(a.Status, a.Header); sig != "" {
+			r.Limited, r.Signal, r.Limit, r.Window = true, sig, LimitNumber(a.Header), Window(a.Header, now())
 			if i == 0 {
 				r.Signal += ", already at the first request"
 			}
@@ -290,6 +389,17 @@ func Check(ctx context.Context, cfg egress.Config, e *Endpoint, n int) (Result, 
 				return r, nil
 			}
 		}
+		loc := ""
+		if r.guarded() {
+			loc = location(a, own(wrong, name))
+			// An answer of 400 or more is a refusal, which a CSRF check
+			// gives before the app's code runs (Django 5.2.8's reset
+			// answered 403 to 20 posts and sent no email, measured), so
+			// only an answer below 400 can show the request reached it.
+			if sh := webform.ShapeOf(a, loc); r.Reached == "" && a.Status < 400 && differs(sh, page) {
+				r.Reached = fmt.Sprintf("an answer (%s) differed from the page's own answer to a GET (%s)", sh, page)
+			}
+		}
 		if i == 0 {
 			guess := e.Page == Reset || e.Page == Code
 			switch {
@@ -302,7 +412,7 @@ func Check(ctx context.Context, cfg egress.Config, e *Endpoint, n int) (Result, 
 			case e.Page == SignUp && a.Status >= 400:
 				return r, fmt.Errorf("the sign-up answered %d, so it made no account and its limit cannot be tested; check %s", a.Status, e.source())
 			}
-			r.Baseline, baseWords = a.Status, LimitWords(a.Body)
+			r.Baseline, baseWords, baseLoc, baseNext = a.Status, LimitWords(a.Body), loc, s.nextWords
 			continue
 		}
 		if a.Status != r.Baseline {
@@ -310,6 +420,19 @@ func Check(ctx context.Context, cfg egress.Config, e *Endpoint, n int) (Result, 
 		}
 		if a.Status >= 500 {
 			return r, fmt.Errorf("the URL answered %d (a server error) after %d request(s); a crash is not a limit, so this check cannot tell whether requests are limited", a.Status, r.Requests-1)
+		}
+		// A reset's or sign-up's limit seen only in its redirect (ADR
+		// 0069): the same status to another place, or a limit word on the
+		// page it names that the first one's did not have.
+		switch {
+		case a.Status != r.Baseline:
+		case loc != baseLoc:
+			r.Limited, r.Signal = true, fmt.Sprintf("redirected to %s instead of %s", orNone(loc), orNone(baseLoc))
+		case NewWord(s.nextWords, baseNext) != "":
+			r.Limited, r.Signal = true, "the page it redirected to has "+Said(NewWord(s.nextWords, baseNext))
+		}
+		if r.Limited {
+			return r, nil
 		}
 	}
 	return r, nil

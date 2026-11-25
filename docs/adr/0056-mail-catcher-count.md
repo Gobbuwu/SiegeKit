@@ -2,6 +2,7 @@
 
 - Status: Accepted (design: owner 2026-11-21, Q2 C "answers by default, emails counted at a mail catcher when one is given"; ADR 0055 item 10)
 - Date: 2026-11-23
+- Amended by: [0069](0069-reset-and-signup-page-forms.md) (an email that arrived also shows the requests reached the app)
 - Amends: [0055](0055-rate-limit-pages.md) (item 7: when a reset page counts as limited; item 10: this is its PR 2)
 
 ## Context
