@@ -410,7 +410,6 @@ jobs:
     env:
       SIEGEKIT_ENGINE: ${{ matrix.engine }}
       EXPECT_ENGINE: ${{ matrix.engine == 'podman' && 'podman rootless' || 'docker rootful' }}
-      XDG_DATA_HOME: ${{ github.workspace }}/../siegekit-data
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -517,15 +516,18 @@ jobs:
           test "$yes" -ge "$sent"
           test "$sent" -gt 1000
       - name: The secret is in no output
+        # The reports, the terminal output and SiegeKit's data folder (audit
+        # log, saved runs, tool data). Only SiegeKit's own folder: rootless
+        # Podman keeps its image store beside it, with files grep cannot read.
         run: |
+          d="$HOME/.local/share/siegekit"
           set +e
-          grep -rlF -f "$RUNNER_TEMP/secret" "$RUNNER_TEMP/report" "$RUNNER_TEMP/scan.log" "$XDG_DATA_HOME"
+          grep -rlF -f "$RUNNER_TEMP/secret" "$RUNNER_TEMP/report" "$RUNNER_TEMP/scan.log" "$d"
           code=$?
           set -e
-          ls -R "$XDG_DATA_HOME/siegekit" | head -20
-          test -s "$XDG_DATA_HOME/siegekit/audit.log"
-          jq -e 'select(.extraHeaders == ["X-Vercel-Protection-Bypass"])' "$XDG_DATA_HOME/siegekit/audit.log"
-          ls "$XDG_DATA_HOME"/siegekit/runs/*.json
+          test -s "$d/audit.log"
+          jq -e 'select(.extraHeaders == ["X-Vercel-Protection-Bypass"])' "$d/audit.log"
+          ls "$d"/runs/*.json
           # grep exits 1 when no file holds it.
           test "$code" -eq 1
       - name: Known answers
@@ -544,7 +546,7 @@ jobs:
         if: failure()
         run: |
           docker logs juice-shop 2>&1 | tail -50
-          tail -20 "$RUNNER_TEMP/login-gate.out" "$RUNNER_TEMP/gate-requests.log"
+          tail -n 20 "$RUNNER_TEMP/login-gate.out" "$RUNNER_TEMP/gate-requests.log"
 
   writes:
     # ADR 0054: access-control-write (ADR 0049) on real apps, from a real
