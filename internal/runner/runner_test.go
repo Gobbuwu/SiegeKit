@@ -73,8 +73,9 @@ func TestRunConvertsReport(t *testing.T) {
 	if s.TargetDir != o.TargetDir || s.Network != "none" || !strings.Contains(s.Image, "@sha256:") {
 		t.Errorf("unexpected spec %+v", s)
 	}
-	if !slices.Contains(s.Args, "/target") || !slices.Contains(s.Args, "/out/gitleaks.sarif") {
-		t.Errorf("placeholders not substituted: %v", s.Args)
+	// Gitleaks runs from the repository's top level (ADR 0068).
+	if !s.InTarget || !slices.Contains(s.Args, ".") || slices.Contains(s.Args, "/target") || !slices.Contains(s.Args, "/out/gitleaks.sarif") {
+		t.Errorf("placeholders not substituted or not run from the repository: %v %v", s.InTarget, s.Args)
 	}
 	if len(r.Plugins) != 1 || r.Plugins[0].Status != report.Ran || r.Plugins[0].Findings != 1 {
 		t.Fatalf("plugins %+v", r.Plugins)
@@ -410,6 +411,37 @@ func TestRunSkipsGitPluginOutsideRepository(t *testing.T) {
 	}
 	if env := f.specs[0].Env; env["GITLEAKS_CONFIG"] != sandbox.ConfigMountTOML || env["GIT_CONFIG_VALUE_0"] != sandbox.TargetMount {
 		t.Errorf("environment not passed: %v", env)
+	}
+}
+
+// A finding in a file that git ignores and does not track keeps its
+// severity and says so (ADR 0068); paths reported as "./x" are read as "x".
+func TestRunNotesGitIgnoredFiles(t *testing.T) {
+	const sarif = `{"version":"2.1.0","runs":[{"tool":{"driver":{"name":"gitleaks"}},"results":[
+{"ruleId":"generic-api-key","message":{"text":"found in .env.local."},"locations":[{"physicalLocation":{"artifactLocation":{"uri":"./.env.local"},"region":{"startLine":1}}}]},
+{"ruleId":"generic-api-key","message":{"text":"found in config.py."},"locations":[{"physicalLocation":{"artifactLocation":{"uri":"config.py"},"region":{"startLine":1}}}]}]}]}`
+	f := &fake{act: func(s sandbox.Spec) (*sandbox.Result, error) {
+		write(t, s.OutDir, "gitleaks.sarif", sarif)
+		return &sandbox.Result{Status: sandbox.Completed}, nil
+	}}
+	for _, repo := range []bool{true, false} {
+		o := opts(t)
+		write(t, o.TargetDir, ".gitignore", ".env*.local\n")
+		if repo {
+			if err := os.Mkdir(filepath.Join(o.TargetDir, ".git"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+		}
+		r, err := Run(context.Background(), f, []*manifest.Manifest{builtin(t, "gitleaks")}, o)
+		if err != nil || len(r.Findings) != 2 {
+			t.Fatalf("%+v %v", r, err)
+		}
+		for _, fd := range r.Findings {
+			noted := strings.HasSuffix(fd.Message, " "+checks.GitIgnoredNote)
+			if fd.Severity != findings.High || noted != (repo && fd.Location.URI == ".env.local") {
+				t.Errorf("repository %v: %+v", repo, fd)
+			}
+		}
 	}
 }
 

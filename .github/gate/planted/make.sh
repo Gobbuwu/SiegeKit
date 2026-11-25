@@ -91,6 +91,27 @@ commit 2 "add old keys"
 git rm -q src/lib/old.ts
 commit 3 "remove old keys"
 
+# Commit 4 (issue #82, ADR 0068): the repository's path allowlists, written
+# repository-relative and anchored as in Porchlet's .gitleaks.toml, and a
+# .gitleaksignore line, which Gitleaks applies to both scans. The tree scan
+# must leave these files out, as the history scan does.
+cat >> .gitleaks.toml <<'TOML'
+
+[[allowlists]]
+description = "Generated word list"
+paths = ['''^src/lib/wordlist\.ts$''', '''(?i)^docs/sample\.ts$''']
+TOML
+printf 'export const words = "%s";\n' "${sb}secret_$(h planted-wordlist 32)" > src/lib/wordlist.ts
+mkdir -p Docs
+printf 'export const sample = "%s";\n' "${sb}secret_$(h planted-sample 32)" > Docs/Sample.ts
+printf 'export const ignored = "%s";\n' "${sb}secret_$(h planted-ignored 32)" > src/lib/ignored.ts
+printf 'src/lib/ignored.ts:siegekit-supabase-secret-key:1\n' > .gitleaksignore
+# Ignored by .gitignore but committed (git add -f): its finding must not
+# say that it is not committed (ADR 0068).
+printf 'export const forced = "%s";\n' "${sb}secret_$(h planted-forced 32)" > .env.production.local
+git add -f .env.production.local
+commit 4 "allowlisted files and a committed ignored file"
+
 # Not committed and ignored: the CLI's local keys, which are public.
 # Nothing may be reported for this file (negative control).
 printf 'SUPABASE_SECRET_KEY=%s\nNEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=%s\n' "$cli_secret" "$cli_publishable" > .env.local

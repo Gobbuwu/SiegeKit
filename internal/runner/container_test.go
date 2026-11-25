@@ -45,6 +45,11 @@ func TestBuiltinPluginsFindPlantedIssues(t *testing.T) {
 		// The repository's own ignore settings: obeyed, but reported.
 		".gitleaksignore": "# none\n",
 		"notes.txt":       "example = 1 # gitleaks:allow\n",
+		// Bandit runs from the repository's top level, so .bandit's
+		// "./"-relative exclude applies as in the repository's own
+		// "bandit -r ." (issue #82, ADR 0068).
+		".bandit":                "[bandit]\nexclude = ./lib/vendor\n",
+		"lib/vendor/vendored.py": "import subprocess\n\ndef run(cmd):\n    return subprocess.call(cmd, shell=True)\n",
 	} {
 		if err := os.MkdirAll(filepath.Dir(filepath.Join(target, name)), 0o755); err != nil {
 			t.Fatal(err)
@@ -123,6 +128,8 @@ func TestBuiltinPluginsFindPlantedIssues(t *testing.T) {
 			vuln = true
 		case f.Sources[0].Plugin == "bandit" && f.Location.URI == "app.py" && f.Location.StartLine == 4:
 			py = true
+		case f.Sources[0].Plugin == "bandit" && strings.HasPrefix(f.Location.URI, "lib/vendor/"):
+			t.Errorf("excluded by .bandit: %+v", f)
 		case f.Sources[0].Plugin == "gosec" && f.Location.URI == "main.go":
 			gocode = true
 		case f.RuleID == "firebase-public-access" && f.Location.URI == "firestore.rules" && f.Location.StartLine == 5 && f.Severity == findings.Critical:
@@ -152,6 +159,9 @@ func TestBuiltinPluginsFindPlantedIssues(t *testing.T) {
 		if p := byID[id]; !slices.Contains(p.RepoSettings, ".gitleaksignore") || p.IgnoreMarkers != 1 {
 			t.Errorf("%s: repository ignores not reported: %+v", id, p)
 		}
+	}
+	if p := byID["bandit"]; !slices.Contains(p.RepoSettings, ".bandit") {
+		t.Errorf("bandit: .bandit not reported: %+v", p)
 	}
 	if !secret || !root || !vuln || !py || !gocode || !firebase || !supabase || !envHistory || !envIgnore {
 		t.Errorf("planted issues not found: secret=%v root-user=%v vulnerable-dependency=%v python=%v go=%v firebase=%v supabase=%v env-in-history=%v env-not-ignored=%v", secret, root, vuln, py, gocode, firebase, supabase, envHistory, envIgnore)

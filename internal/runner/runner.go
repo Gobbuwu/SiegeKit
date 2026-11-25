@@ -414,7 +414,7 @@ func runPlugin(ctx context.Context, ex Executor, m *manifest.Manifest, opt Optio
 	res, err := ex.Run(ctx, sandbox.Spec{
 		Image: image, Args: args, Env: env, TargetDir: opt.TargetDir, OutDir: out, Network: m.Network,
 		DataDir: dataDir, DataMount: dataMount, Files: fileMounts, ConfigFile: configFile, ScratchDir: scratch,
-		CPUs: cpus, MemoryMiB: m.Resources.MemoryMiB,
+		CPUs: cpus, MemoryMiB: m.Resources.MemoryMiB, InTarget: m.Run.InRepoRoot,
 		Timeout:    time.Duration(m.Resources.TimeoutSeconds) * time.Second,
 		StdoutFile: stdoutFile(m),
 		StderrFile: stderrFile(m),
@@ -435,6 +435,16 @@ func runPlugin(ctx context.Context, ex Executor, m *manifest.Manifest, opt Optio
 	fs, err := readReport(filepath.Join(out, m.Output.File), m, &suppressed, reportContext{})
 	if err != nil {
 		return fail(report.Failed, "%v", err)
+	}
+	if m.Output.GitIgnoredNote {
+		// Severity stays: an ignored file can still leave the machine, such
+		// as in a container image built with COPY . (ADR 0068).
+		g := checks.NewGitState(opt.TargetDir)
+		for i := range fs {
+			if g.IgnoredUntracked(fs[i].Location.URI) {
+				fs[i].Message = strings.TrimSpace(fs[i].Message + " " + checks.GitIgnoredNote)
+			}
+		}
 	}
 	pr.Suppressed = suppressed
 	if err := repoIgnores(ctx, &pr, m, opt.TargetDir); err != nil {

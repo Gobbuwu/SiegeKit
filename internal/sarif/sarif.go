@@ -260,11 +260,15 @@ func adjust(parser, ruleID string, s findings.Severity) findings.Severity {
 }
 
 // RelURI removes the container mount path from the start of a URI. Tools
-// report it as "/target/x", "file:///target/x" or "target/x".
+// report it as "/target/x", "file:///target/x" or "target/x", or, run from
+// the repository's top level (run.inRepoRoot, ADR 0068), as "./x" or "x".
 func RelURI(uri, mount string) string {
 	mount = strings.Trim(mount, "/")
 	if mount == "" {
 		return uri
+	}
+	if rest, ok := strings.CutPrefix(uri, "./"); ok && rest != "" {
+		return rest
 	}
 	for _, p := range []string{"file:///" + mount + "/", "/" + mount + "/", mount + "/"} {
 		if rest, ok := strings.CutPrefix(uri, p); ok && rest != "" {

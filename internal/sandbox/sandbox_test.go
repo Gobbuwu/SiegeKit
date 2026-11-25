@@ -57,6 +57,26 @@ func TestEngineArgsHardening(t *testing.T) {
 	}
 }
 
+// run.inRepoRoot (ADR 0068): the target is the working directory, still
+// mounted read-only; without it the working directory is /tmp.
+func TestEngineArgsWorkdir(t *testing.T) {
+	s := spec(t, "scan")
+	args, err := s.EngineArgs("n", 1000, 1000)
+	if err != nil || !strings.Contains(strings.Join(args, " "), "--workdir /tmp ") {
+		t.Fatalf("default: %v %v", args, err)
+	}
+	s.InTarget = true
+	args, err = s.EngineArgs("n", 1000, 1000)
+	joined := strings.Join(args, " ")
+	if err != nil || !strings.Contains(joined, "--workdir /target ") || !strings.Contains(joined, ",target=/target,readonly") || strings.Contains(joined, "--workdir /tmp") {
+		t.Fatalf("in target: %s %v", joined, err)
+	}
+	s.TargetDir = ""
+	if _, err := s.EngineArgs("n", 1000, 1000); err == nil {
+		t.Error("working directory in the target without a target")
+	}
+}
+
 func TestEngineArgsData(t *testing.T) {
 	s := spec(t, "scan")
 	s.DataDir, s.DataMount = t.TempDir(), "/tmp/tool/db"

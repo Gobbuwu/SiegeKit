@@ -96,6 +96,11 @@ type Spec struct {
 	OutputLimit int64 // bytes; 0 means DefaultOutputLimit
 	// Env is extra environment for the tool; see CheckEnv.
 	Env map[string]string
+	// InTarget makes the target, mounted at TargetMount, the tool's working
+	// directory instead of /tmp, so that the tool reads the repository's
+	// own settings files and matches their repository-relative paths as
+	// in the repository's own runs (ADR 0068). It needs TargetDir.
+	InTarget bool
 	// TmpMiB is the size of the in-memory /tmp; 0 means 256. Its pages count
 	// against MemoryMiB, so it cannot exceed the memory limit.
 	TmpMiB int
@@ -290,6 +295,9 @@ func (s *Spec) validate() error {
 	if err := CheckEnv(s.Env); err != nil {
 		return err
 	}
+	if s.InTarget && s.TargetDir == "" {
+		return errors.New("the target can only be the working directory when a target is mounted")
+	}
 	if s.DataWritable && s.TargetDir != "" {
 		return errors.New("data can only be writable when no target is mounted")
 	}
@@ -377,6 +385,10 @@ func (s *Spec) EngineArgs(name string, uid, gid int) ([]string, error) {
 	if tmp == 0 {
 		tmp = 256
 	}
+	workdir := "/tmp"
+	if s.InTarget {
+		workdir = TargetMount
+	}
 	args := []string{
 		"run", "--rm",
 		"--name", name,
@@ -427,7 +439,7 @@ func (s *Spec) EngineArgs(name string, uid, gid int) ([]string, error) {
 		"--memory-swap", fmt.Sprintf("%dm", s.MemoryMiB),
 		"--cpus", strconv.Itoa(s.CPUs),
 		"--env", "HOME=/tmp",
-		"--workdir", "/tmp",
+		"--workdir", workdir,
 	)
 	keys := make([]string, 0, len(s.Env))
 	for k := range s.Env {
