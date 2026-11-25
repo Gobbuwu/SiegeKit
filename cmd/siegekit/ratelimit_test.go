@@ -38,7 +38,7 @@ func useRateLimit(t *testing.T, res ratelimit.Result, err error) *[]rateCall {
 	return &calls
 }
 
-var rateArgs = []string{"--rate-limit-url", "http://localhost:3000/rest/products/search?q=apple", "--rate-limit-requests", "7"}
+var rateArgs = []string{"--rate-limit-url", "http://localhost:3000/rest/products/search?q=apple", "--rate-limit-requests", "20"}
 
 func TestScanURLRateLimit(t *testing.T) {
 	old := resolver
@@ -92,13 +92,13 @@ func TestScanURLRateLimit(t *testing.T) {
 	// A local GET needs no confirmation; no limit seen is a low finding.
 	f := useActive(t)
 	data := useData(t)
-	calls := useRateLimit(t, ratelimit.Result{Requests: 7, Baseline: 200}, nil)
+	calls := useRateLimit(t, ratelimit.Result{Requests: 20, Baseline: 200}, nil)
 	code, out := scan(false, "", append(slices.Clone(rateArgs), "--only", "rate-limit,zap", "--fail-on", "low", "http://localhost:3000/")...)
 	if code != report.ExitFindings || len(*calls) != 1 || len(f.specs) != 1 || strings.Contains(out, "Type yes") ||
-		!strings.Contains(out, "rate-limit           siegekit 0.0.0-dev: up to 7 requests GET http://localhost:3000/rest/products/search?q=apple, one per second, stopping at the first sign of a limit") {
+		!strings.Contains(out, "rate-limit           siegekit 0.0.0-dev: up to 20 requests GET http://localhost:3000/rest/products/search?q=apple, one per second, stopping at the first sign of a limit") {
 		t.Fatalf("exit %d, %d checks, %d runs\n%s", code, len(*calls), len(f.specs), out)
 	}
-	if c := (*calls)[0]; c.cfg.ReadOnly || c.cfg.VerifyTLS || c.n != 7 || c.e.Path != "/rest/products/search?q=apple" || c.e.Method != "GET" {
+	if c := (*calls)[0]; c.cfg.ReadOnly || c.cfg.VerifyTLS || c.n != 20 || c.e.Path != "/rest/products/search?q=apple" || c.e.Method != "GET" {
 		t.Errorf("call %+v", c)
 	}
 	b, err := os.ReadFile(filepath.Join(data, "siegekit", "audit.log"))
@@ -108,7 +108,7 @@ func TestScanURLRateLimit(t *testing.T) {
 	}
 	r := readReport()
 	p := r.Plugins[0]
-	if p.Status != report.Ran || p.Requests != 7 || p.Findings != 1 || p.Input != "GET http://localhost:3000/rest/products/search?q=apple" || p.Result != "no limit seen in 7 requests, all answered 200 with no rate-limit header" {
+	if p.Status != report.Ran || p.Requests != 20 || p.Findings != 1 || p.Input != "GET http://localhost:3000/rest/products/search?q=apple" || p.Result != "no limit seen in 20 requests, all answered 200 with no rate-limit header" {
 		t.Errorf("plugin %+v", p)
 	}
 	var rf *findings.Finding
@@ -127,7 +127,7 @@ func TestScanURLRateLimit(t *testing.T) {
 	useData(t)
 	useRateLimit(t, ratelimit.Result{Requests: 1, Limited: true, Signal: "answered with a X-Ratelimit-Limit header, already at the first request"}, nil)
 	scan(false, "", append(slices.Clone(rateArgs), "--only", "rate-limit", "http://localhost:3000/")...)
-	if p := readReport().Plugins[0]; p.Status != report.Ran || p.Findings != 0 || !strings.HasPrefix(p.Result, "limit seen after 1 of 7 requests: ") {
+	if p := readReport().Plugins[0]; p.Status != report.Ran || p.Findings != 0 || !strings.HasPrefix(p.Result, "limit seen after 1 of 20 requests: ") {
 		t.Errorf("limited: %+v", p)
 	}
 	useActive(t)

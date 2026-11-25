@@ -2,8 +2,9 @@ package served
 
 import (
 	"bytes"
-	"html"
 	"strings"
+
+	"github.com/Gobbuwu/SiegeKit/internal/htmltag"
 )
 
 // Link is a reference to a file found in a page.
@@ -23,7 +24,7 @@ const maxRef = 2048
 // attribute values may be quoted or not. It never fails; text it cannot
 // read is skipped.
 func Links(page []byte) []Link {
-	lower := asciiLower(page)
+	lower := htmltag.Lower(page)
 	var out []Link
 	for i := 0; i < len(page); {
 		j := bytes.IndexByte(page[i:], '<')
@@ -39,7 +40,10 @@ func Links(page []byte) []Link {
 			i += 4 + k + 3
 			continue
 		}
-		name, attrs, end := readTag(page, lower, i)
+		name, attrs, end := htmltag.Read(page, lower, i, maxRef)
+		for k, v := range attrs {
+			attrs[k] = strings.TrimSpace(v)
+		}
 		i = end
 		switch name {
 		case "script", "style":
@@ -87,73 +91,6 @@ func linkKind(rel, as string) Kind {
 	return ""
 }
 
-// readTag reads the tag that starts at page[i] ('<'). It returns the tag
-// name in lower case ("" for an end tag, a doctype or a stray '<'), its
-// attributes (names in lower case, the first of each kept) and the index
-// after the tag.
-func readTag(page, lower []byte, i int) (string, map[string]string, int) {
-	n := i + 1
-	for n < len(page) && isNameByte(page[n]) {
-		n++
-	}
-	if n == i+1 {
-		return "", nil, i + 1
-	}
-	name := string(lower[i+1 : n])
-	attrs := map[string]string{}
-	p := n
-	for p < len(page) {
-		for p < len(page) && (isSpace(page[p]) || page[p] == '/') {
-			p++
-		}
-		if p >= len(page) {
-			break
-		}
-		if page[p] == '>' {
-			return name, attrs, p + 1
-		}
-		s := p
-		for p < len(page) && !isSpace(page[p]) && page[p] != '=' && page[p] != '>' && page[p] != '/' {
-			p++
-		}
-		if p == s { // a lone '=' or similar: skip it
-			p++
-			continue
-		}
-		an := string(lower[s:p])
-		for p < len(page) && isSpace(page[p]) {
-			p++
-		}
-		val := ""
-		if p < len(page) && page[p] == '=' {
-			p++
-			for p < len(page) && isSpace(page[p]) {
-				p++
-			}
-			if p < len(page) && (page[p] == '"' || page[p] == '\'') {
-				q := page[p]
-				p++
-				e := bytes.IndexByte(page[p:], q)
-				if e < 0 {
-					e = len(page) - p
-				}
-				val = string(page[p : p+e])
-				p += e + 1
-			} else {
-				s := p
-				for p < len(page) && !isSpace(page[p]) && page[p] != '>' {
-					p++
-				}
-				val = string(page[s:p])
-			}
-		}
-		if _, ok := attrs[an]; !ok && len(val) <= maxRef {
-			attrs[an] = strings.TrimSpace(html.UnescapeString(val))
-		}
-	}
-	return name, attrs, min(p, len(page))
-}
-
 // SourceMapRef returns the source map that a script or style names in its
 // last sourceMappingURL comment, or "".
 func SourceMapRef(body []byte) string {
@@ -169,31 +106,11 @@ func SourceMapRef(body []byte) string {
 	}
 	v := body[i+len(key):]
 	e := 0
-	for e < len(v) && !isSpace(v[e]) && !bytes.HasPrefix(v[e:], []byte("*/")) {
+	for e < len(v) && !htmltag.IsSpace(v[e]) && !bytes.HasPrefix(v[e:], []byte("*/")) {
 		e++
 	}
 	if e == 0 || e > maxRef {
 		return ""
 	}
 	return string(v[:e])
-}
-
-func isNameByte(c byte) bool {
-	return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '-'
-}
-
-func isSpace(c byte) bool {
-	return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\f'
-}
-
-// asciiLower lower-cases ASCII letters only, so indexes stay the same.
-func asciiLower(b []byte) []byte {
-	out := make([]byte, len(b))
-	for i, c := range b {
-		if c >= 'A' && c <= 'Z' {
-			c += 'a' - 'A'
-		}
-		out[i] = c
-	}
-	return out
 }

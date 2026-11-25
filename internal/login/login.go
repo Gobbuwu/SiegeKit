@@ -1,11 +1,13 @@
-// Package login is SiegeKit's login throttling check (ADR 0010, ADR 0030).
-// It sends a few logins for a test account the user owns, each with a new
-// randomly generated wrong password, at most one per second, and reports
-// whether the app slows down, blocks, asks for a CAPTCHA or locks the
-// account. It never tries a real password and never uses a password list.
+// Package login is SiegeKit's login throttling check (ADR 0010, ADR 0030,
+// ADR 0062). It sends one login with the test account's right password,
+// which the user gives, then a few logins for that account, each with a
+// new randomly generated wrong password, at most one per second, and
+// reports whether the app slows down, blocks, asks for a CAPTCHA or locks
+// the account. It never guesses a password and never uses a password list.
 package login
 
 import (
+	"cmp"
 	"context"
 	"crypto/rand"
 	"encoding/json"
@@ -13,6 +15,8 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"regexp"
+	"slices"
 	"strings"
 	"time"
 	"unicode"
@@ -49,13 +53,21 @@ const (
 	maxBody = 8 << 10
 )
 
-// Login is a login request with {user} and {password} placeholders.
+// Login is a login request with {user} and {password} placeholders: a
+// body sent to a URL (--login-url), or the form on a page (--login-page,
+// ADR 0062).
 type Login struct {
-	URL  string // origin and path, for plans and reports
-	Path string // path on the target's origin
+	URL  string // origin and path, for plans and reports: the login URL or page
+	Path string // path on the target's origin, with the page's query
 	User string
+	Page bool // the login is the form on the page at URL
 	body string
 	json bool
+	// The page's form: the template's fields, the page's URL and the
+	// target the form's action and a login's redirect must be on.
+	fields  []field
+	pageURL *url.URL
+	target  *target.URL
 }
 
 // Parse checks the --login-url, --login-user and --login-body values. The
@@ -66,21 +78,10 @@ func Parse(rawURL, user, body string, t *target.URL) (*Login, error) {
 	if err != nil {
 		return nil, err
 	}
-	switch {
-	case user == "":
-		return nil, errors.New("--login-user is empty")
-	case len(user) > maxUser:
-		return nil, fmt.Errorf("--login-user is longer than %d bytes", maxUser)
-	case !utf8.ValidString(user) || strings.ContainsFunc(user, unicode.IsControl):
-		return nil, errors.New("--login-user contains control characters or invalid UTF-8")
+	if err := checkUserBody(user, body); err != nil {
+		return nil, err
 	}
-	if len(body) > maxBody {
-		return nil, fmt.Errorf("--login-body is longer than %d bytes", maxBody)
-	}
-	if !strings.Contains(body, "{user}") || !strings.Contains(body, "{password}") {
-		return nil, errors.New(`--login-body must contain {user} and {password}, for example '{"email":"{user}","password":"{password}"}' or 'username={user}&password={password}'`)
-	}
-	l := &Login{URL: u.String(), Path: u.Path, User: user, body: body, json: strings.HasPrefix(strings.TrimLeft(body, " \t\r\n"), "{")}
+	l := &Login{URL: u.String(), Path: u.Path, User: user, body: body, json: strings.HasPrefix(strings.TrimLeft(body, " \t\r\n"), "{"), target: t}
 	b := l.render("x")
 	if l.json && !json.Valid(b) {
 		return nil, errors.New("--login-body is not valid JSON once {user} and {password} are filled in; put them inside quotes")
@@ -93,7 +94,93 @@ func Parse(rawURL, user, body string, t *target.URL) (*Login, error) {
 	return l, nil
 }
 
-// ContentType is the request's content type.
+// ParsePage checks the --login-page, --login-user and --login-body values
+// (ADR 0062). The page must be on the target's origin and may have a
+// query. The body names the form's fields, such as
+// "email={user}&password={password}": SiegeKit fills them in and sends the
+// page's form as a browser does, with its other fields as the page has
+// them.
+func ParsePage(rawPage, user, body string, t *target.URL) (*Login, error) {
+	u, query, err := target.OnOrigin(t, rawPage, "--login-page", true)
+	if err != nil {
+		return nil, err
+	}
+	if err := checkUserBody(user, body); err != nil {
+		return nil, err
+	}
+	if strings.HasPrefix(strings.TrimLeft(body, " \t\r\n"), "{") {
+		return nil, errors.New("with --login-page, --login-body names the form's fields as a form body, such as 'email={user}&password={password}'")
+	}
+	l := &Login{URL: u.String(), Path: u.Path, User: user, Page: true, body: body, target: t}
+	if query != "" {
+		l.URL += "?" + query
+		l.Path += "?" + query
+	}
+	if l.pageURL, err = url.Parse(l.URL); err != nil {
+		return nil, fmt.Errorf("--login-page: %v", err)
+	}
+	seen := map[string]bool{}
+	for kv := range strings.SplitSeq(body, "&") {
+		k, v, _ := strings.Cut(kv, "=")
+		name, err1 := url.QueryUnescape(k)
+		value, err2 := url.QueryUnescape(v)
+		switch {
+		case err1 != nil || err2 != nil:
+			return nil, fmt.Errorf("--login-body is not a valid form body: %v", errors.Join(err1, err2))
+		case name == "":
+			return nil, errors.New("--login-body has a field with no name")
+		case strings.Contains(name, "{user}") || strings.Contains(name, "{password}"):
+			return nil, errors.New("--login-body has {user} or {password} in a field name; they go in values, such as 'email={user}'")
+		case seen[name]:
+			return nil, fmt.Errorf("--login-body names the field %q twice", name)
+		}
+		seen[name] = true
+		l.fields = append(l.fields, field{name, value})
+	}
+	return l, nil
+}
+
+// checkUserBody checks the user name and the body template.
+func checkUserBody(user, body string) error {
+	switch {
+	case user == "":
+		return errors.New("--login-user is empty")
+	case len(user) > maxUser:
+		return fmt.Errorf("--login-user is longer than %d bytes", maxUser)
+	case !utf8.ValidString(user) || strings.ContainsFunc(user, unicode.IsControl):
+		return errors.New("--login-user contains control characters or invalid UTF-8")
+	}
+	if len(body) > maxBody {
+		return fmt.Errorf("--login-body is longer than %d bytes", maxBody)
+	}
+	if !strings.Contains(body, "{user}") || !strings.Contains(body, "{password}") {
+		return errors.New(`--login-body must contain {user} and {password}, for example '{"email":"{user}","password":"{password}"}' or 'username={user}&password={password}'`)
+	}
+	return nil
+}
+
+// PasswordEnv holds the test account's right password: one login with it
+// shows that the check's logins reach the app's login code (ADR 0062).
+const PasswordEnv = "SIEGEKIT_LOGIN_PASSWORD" // #nosec G101 -- the name of an environment variable, not a password
+
+// maxPassword caps PasswordEnv.
+const maxPassword = 1024
+
+// CheckPassword checks the value of PasswordEnv. The value is never
+// written anywhere, errors included.
+func CheckPassword(p string) error {
+	switch {
+	case p == "":
+		return fmt.Errorf("%s is empty", PasswordEnv)
+	case len(p) > maxPassword:
+		return fmt.Errorf("%s is longer than %d bytes", PasswordEnv, maxPassword)
+	case !utf8.ValidString(p) || strings.ContainsFunc(p, unicode.IsControl):
+		return fmt.Errorf("%s contains control characters or invalid UTF-8", PasswordEnv)
+	}
+	return nil
+}
+
+// ContentType is the request's content type in --login-url mode.
 func (l *Login) ContentType() string {
 	if l.json {
 		return "application/json"
@@ -124,10 +211,39 @@ func wrongPassword() string {
 
 // Result is what the check saw.
 type Result struct {
-	Attempts int    // logins answered by the target
+	Attempts int    // logins with a wrong password answered by the target
+	Requests int    // requests sent, with the right-password login and page reads
 	Limited  bool   // a limit was seen
 	Signal   string // what showed the limit
-	Baseline int    // the status of the first answer
+	Baseline int    // the status of the first wrong-password answer
+	Redirect string // the first wrong-password answer's redirect, "" for none
+	Right    string // how the right-password login was answered, "" if none was sent
+	URL      string // where the logins were posted
+	Form     string // the page's form, as sent: "multipart/form-data, button \"Log in\""
+	// limit is the answer that showed the limit, and normal the baseline's
+	// (Spray reads them, ADR 0062).
+	limit, normal *answerKind
+}
+
+// answerKind is what tells a limited answer from a normal one without a
+// fixed sign: the status, the redirect and the limit words in the body.
+type answerKind struct {
+	status   int
+	location string
+	words    string
+	next     string // the limit words of the page the answer redirected to
+}
+
+func kindOf(at *attempt) *answerKind {
+	return &answerKind{at.a.Status, redirect(at.a), strings.Join(ratelimit.LimitWords(at.a.Body), ","), strings.Join(at.nextWords, ",")}
+}
+
+// answer is the wrong-password answer, such as "303 to /error".
+func (r Result) answer() string {
+	if r.Redirect != "" {
+		return fmt.Sprintf("%d to %s", r.Baseline, r.Redirect)
+	}
+	return fmt.Sprint(r.Baseline)
 }
 
 // Summary says the result in one line, for reports.
@@ -135,12 +251,19 @@ func (r Result) Summary(planned int) string {
 	if r.Limited {
 		return fmt.Sprintf("limited after %d of %d attempts: %s", r.Attempts, planned, r.Signal)
 	}
-	return fmt.Sprintf("no limit seen in %d attempts, all answered %d", r.Attempts, r.Baseline)
+	s := fmt.Sprintf("no limit seen in %d attempts, all answered %s", r.Attempts, r.answer())
+	if r.Right != "" {
+		s += "; the right password " + r.Right
+	}
+	if planned < DefaultAttempts {
+		s += fmt.Sprintf("; too few attempts to report a finding, since many apps limit failed logins at 5 to 30: run again with --login-attempts %d or more", DefaultAttempts)
+	}
+	return s
 }
 
 // send and sleep are replaced in tests.
 var (
-	send  = egress.Send
+	send  = egress.SendHeader
 	sleep = func(ctx context.Context, d time.Duration) error {
 		t := time.NewTimer(d)
 		defer t.Stop()
@@ -179,90 +302,378 @@ func SprayUser(l *Login, i int) string {
 // password across many accounts does (design Q5). It runs only after
 // Check saw a limit on one account: if one account is never limited from
 // one address, many accounts from that address cannot be limited either.
-func Spray(ctx context.Context, cfg egress.Config, l *Login, attempts int) (Result, error) {
+// Check's right-password login already showed that these logins reach the
+// login code, so Spray sends none. after is Check's result: a limit for
+// the whole address can still hold when Spray starts, and its first
+// answer is then the limited one Check saw, not a normal one (measured
+// with Supabase Auth, 2026-11-23), so that answer counts as a limit.
+func Spray(ctx context.Context, cfg egress.Config, l *Login, attempts int, after Result) (Result, error) {
 	password := wrongPassword()
-	i := 0
-	return run(ctx, cfg, l, attempts, func() []byte {
-		i++
-		return l.renderFor(SprayUser(l, i), password)
-	})
+	return run(ctx, cfg, l, attempts, "", func(i int) (string, string) { return SprayUser(l, i+1), password }, after.limit, after.normal)
 }
 
-// Check sends attempts logins, at most one per Interval, and stops at the
-// first sign of a limit. The first answer is the baseline: a 429, 423 or
-// 503 status or a Retry-After header in a later answer, a status other than
-// the baseline's, words about a lockout, CAPTCHA or too many attempts that
-// the baseline did not have, or an answer at least 3 times slower than the
-// baseline and at least 1 second long count as a limit (owner decision
-// 2026-11-20, ADR 0030). cfg must not be for a deployed target.
-func Check(ctx context.Context, cfg egress.Config, l *Login, attempts int) (Result, error) {
-	return run(ctx, cfg, l, attempts, func() []byte { return l.render(wrongPassword()) })
+// Check sends one login with the account's right password, then attempts
+// logins with a wrong one, at most one per Interval, and stops at the
+// first sign of a limit. The first wrong-password answer is the baseline:
+// a 429, 423 or 503 status or a Retry-After header in a later answer, a
+// status or redirect other than the baseline's, words about a lockout,
+// CAPTCHA or too many attempts that the baseline did not have, or an
+// answer at least 3 times slower than the baseline and at least 1 second
+// long count as a limit (owner decision 2026-11-20, ADR 0030, ADR 0062).
+// When the right password is answered like a wrong one, the check fails:
+// its logins may never reach the login code (ADR 0062). cfg must not be
+// for a deployed target.
+func Check(ctx context.Context, cfg egress.Config, l *Login, attempts int, right string) (Result, error) {
+	if err := CheckPassword(right); err != nil {
+		return Result{}, err
+	}
+	return run(ctx, cfg, l, attempts, right, func(int) (string, string) { return l.User, wrongPassword() }, nil, nil)
 }
 
-// run sends attempts logins with the bodies body gives; Check and Spray
-// share it, so both read a limit the same way.
-func run(ctx context.Context, cfg egress.Config, l *Login, attempts int, body func() []byte) (Result, error) {
+// attempt is what one login got.
+type attempt struct {
+	a       *egress.Answer // the login's answer; nil when the form was not sent
+	page    *egress.Answer // --login-page: the page's answer
+	words   []string       // the page's limit words
+	formErr error          // why the page's form could not be sent
+	form    *formLogin
+	// The page a wrong login's redirect named, read as a browser does, and
+	// its limit words; nil when the answer was not such a redirect.
+	next      *egress.Answer
+	nextWords []string
+}
+
+// try sends one login for user and password. With --login-page it first
+// reads the page, with no cookie, then sends its form with the cookies the
+// page set, as a browser with no JavaScript does (ADR 0062). Each login
+// starts with no cookie, so a limit kept only in a cookie is not counted.
+func (l *Login) try(ctx context.Context, cfg egress.Config, user, password string, wrong bool, r *Result) (*attempt, error) {
+	if !l.Page {
+		r.Requests++
+		a, err := send(ctx, cfg, http.MethodPost, l.Path, http.Header{"Content-Type": {l.ContentType()}}, l.renderFor(user, password), MaxAnswer)
+		at := &attempt{a: a}
+		if err == nil && wrong {
+			err = l.follow(ctx, cfg, at, l.URL, l.Path, "", r)
+		}
+		return at, err
+	}
+	r.Requests++
+	pa, err := send(ctx, cfg, http.MethodGet, l.Path, http.Header{"Accept": {"text/html,application/xhtml+xml"}}, nil, MaxAnswer)
+	if err != nil {
+		return nil, err
+	}
+	at := &attempt{page: pa}
+	if pa.Status != http.StatusOK {
+		return at, nil
+	}
+	pg := readPage(pa.Body)
+	at.words = pg.words
+	if at.form, at.formErr = pg.build(l.pageURL, l.target, l.fields, user, password); at.formErr != nil {
+		return at, nil
+	}
+	h := http.Header{"Content-Type": {at.form.contentType}, "Origin": {l.target.Origin()}, "Accept": {"text/html,application/xhtml+xml"}}
+	if c := cookies(pa.Header, l.target.Host, l.pageURL.Path, at.form.path, now()); c != "" {
+		h.Set("Cookie", c)
+	}
+	r.Requests++
+	if at.a, err = send(ctx, cfg, http.MethodPost, at.form.path, h, at.form.body, MaxAnswer); err == nil && wrong {
+		err = l.follow(ctx, cfg, at, at.form.url, at.form.path, h.Get("Cookie"), r)
+	}
+	return at, err
+}
+
+// follow reads the page that a wrong login's 301, 302 or 303 names, on the
+// target's origin, with the cookies the login sent and the cookies its
+// answer set, as a browser does. Some apps show their limit only there, in
+// a message carried by the session cookie, behind the same redirect as a
+// wrong password: Rails 8's generated login and Laravel Breeze's (measured,
+// ADR 0062 item 4). A 307 or 308 is not followed: a browser would send the
+// login again.
+func (l *Login) follow(ctx context.Context, cfg egress.Config, at *attempt, from, fromPath, sent string, r *Result) error {
+	a := at.a
+	loc := a.Header.Get("Location")
+	if l.target == nil || loc == "" || a.Status != http.StatusMovedPermanently && a.Status != http.StatusFound && a.Status != http.StatusSeeOther {
+		return nil
+	}
+	base, err := url.Parse(from)
+	if err != nil {
+		return nil
+	}
+	to, err := base.Parse(loc)
+	if err != nil {
+		return nil
+	}
+	to.Fragment, to.RawFragment = "", ""
+	u, query, err := target.OnOrigin(l.target, to.String(), "the login's redirect", true)
+	if err != nil {
+		return nil // not followed: SiegeKit sends requests only to the target
+	}
+	path := u.Path
+	if query != "" {
+		path += "?" + query
+	}
+	h := http.Header{"Accept": {"text/html,application/xhtml+xml"}}
+	if c := mergeCookies(sent, cookies(a.Header, l.target.Host, fromPath, path, now())); c != "" {
+		h.Set("Cookie", c)
+	}
+	r.Requests++
+	if at.next, err = send(ctx, cfg, http.MethodGet, path, h, nil, MaxAnswer); err == nil {
+		at.nextWords = ratelimit.LimitWords(at.next.Body)
+	}
+	return err
+}
+
+// mergeCookies joins two Cookie headers; a cookie in set replaces one of
+// the same name in sent, as a browser keeps the newer value.
+func mergeCookies(sent, set string) string {
+	var out []string
+	names := map[string]int{}
+	for _, h := range []string{sent, set} {
+		for kv := range strings.SplitSeq(h, "; ") {
+			if kv == "" {
+				continue
+			}
+			name, _, _ := strings.Cut(kv, "=")
+			if k, ok := names[name]; ok {
+				out[k] = kv
+				continue
+			}
+			names[name] = len(out)
+			out = append(out, kv)
+		}
+	}
+	return strings.Join(out, "; ")
+}
+
+// run sends the right-password login when right is set, then attempts
+// logins with the user and password next gives (i from 0); Check and
+// Spray share it, so both read a limit the same way. When the first
+// wrong-password answer is of the kind limited, not normal, the limit
+// already holds.
+func run(ctx context.Context, cfg egress.Config, l *Login, attempts int, right string, next func(i int) (string, string), limited, normal *answerKind) (Result, error) {
 	if attempts < MinAttempts || attempts > MaxAttempts {
 		return Result{}, fmt.Errorf("attempts must be from %d to %d", MinAttempts, MaxAttempts)
 	}
 	if cfg.ReadOnly {
 		return Result{}, errors.New("the login throttling check sends POST requests, which this target does not allow")
 	}
-	var r Result
-	var base *egress.Answer
-	var baseWords []string
+	r := Result{URL: l.URL}
 	var last time.Time
-	for i := range attempts {
-		if i > 0 {
+	pace := func() error {
+		if !last.IsZero() {
 			if err := sleep(ctx, Interval-now().Sub(last)); err != nil {
-				return r, err
+				return err
 			}
 		}
 		last = now()
-		a, err := send(ctx, cfg, http.MethodPost, l.Path, l.ContentType(), body(), MaxAnswer)
+		return nil
+	}
+	var base *egress.Answer
+	var baseWords, nextWords, pageWords []string
+	var rightShape shape
+	total := attempts
+	if right != "" {
+		total++
+	}
+	for k := range total {
+		guard := right != "" && k == 0 // the right-password login
+		first := k == 0
+		if err := pace(); err != nil {
+			return r, err
+		}
+		user, password := l.User, right
+		if !guard {
+			user, password = next(r.Attempts)
+		}
+		at, err := l.try(ctx, cfg, user, password, !guard, &r)
 		if err != nil {
-			if i == 0 {
-				return r, fmt.Errorf("the login URL did not answer: %w", err)
+			if first {
+				return r, fmt.Errorf("the login %s did not answer: %w", l.noun(), err)
 			}
 			if ctx.Err() != nil {
 				return r, ctx.Err()
 			}
-			return r, fmt.Errorf("the target stopped answering after %d login(s): %v. A block of SiegeKit's address and a crash look the same from here, so this check cannot tell which it was", r.Attempts, err)
+			return r, fmt.Errorf("the target stopped answering after %d login(s): %v. A block of SiegeKit's address and a crash look the same from here, so this check cannot tell which it was", k, err)
 		}
-		r.Attempts++
+		// The page, read before each login with --login-page.
+		if p := at.page; p != nil {
+			if s := limitStatus(p); s != "" {
+				r.Limited, r.Signal = true, "the login page "+s
+				if first {
+					r.Signal += ", already at the first login (perhaps from an earlier run)"
+				}
+				return r, nil
+			}
+			switch {
+			case first && p.Status != http.StatusOK:
+				return r, fmt.Errorf("the login page answered %d; --login-page must be the page with the login form itself (SiegeKit does not follow redirects)", p.Status)
+			case first && at.formErr != nil:
+				return r, fmt.Errorf("--login-page: %v", at.formErr)
+			case first:
+				pageWords = at.words
+				r.URL, r.Form = at.form.url, at.form.describe()
+			case p.Status >= 500:
+				return r, fmt.Errorf("the login page answered %d (a server error) after %d login(s); a crash is not a limit, so this check cannot tell whether logins are limited", p.Status, k)
+			case p.Status != http.StatusOK:
+				r.Limited, r.Signal = true, fmt.Sprintf("the login page answered %d instead of 200", p.Status)
+			case ratelimit.NewWord(at.words, pageWords) != "":
+				r.Limited, r.Signal = true, "the login page has "+ratelimit.Said(ratelimit.NewWord(at.words, pageWords))
+			case at.formErr != nil:
+				return r, fmt.Errorf("after %d login(s) the login page's form could not be sent: %v", k, at.formErr)
+			}
+			if r.Limited {
+				return r, nil
+			}
+		}
+		a := at.a
+		if !guard {
+			r.Attempts++
+		}
 		if s := limitStatus(a); s != "" {
 			r.Limited, r.Signal = true, s
-			if i == 0 {
-				r.Signal += ", already at the first attempt (perhaps from an earlier run)"
+			if first {
+				r.Signal += ", already at the first login (perhaps from an earlier run)"
 			}
 			return r, nil
 		}
-		if i == 0 {
+		what := "a login with a wrong password"
+		if guard {
+			what = "a login with the right password"
+		}
+		if guard || base == nil {
 			switch {
 			case a.Status == http.StatusNotFound || a.Status == http.StatusMethodNotAllowed || a.Status == http.StatusNotImplemented:
-				return r, fmt.Errorf("the login URL answered %d to a POST; check --login-url", a.Status)
+				return r, fmt.Errorf("the login %s answered %d to a POST; check %s", l.noun(), a.Status, l.flags())
 			case a.Status >= 500:
-				return r, fmt.Errorf("the login URL answered %d (a server error) to a login with a wrong password; check --login-body", a.Status)
+				return r, fmt.Errorf("the login %s answered %d (a server error) to %s; check --login-body", l.noun(), a.Status, what)
 			}
-			base, baseWords, r.Baseline = a, ratelimit.LimitWords(a.Body), a.Status
+		}
+		if guard {
+			rightShape = shapeOf(a)
+			r.Right = rightShape.String()
+			continue
+		}
+		if base == nil {
+			base, baseWords, nextWords, r.Baseline, r.Redirect = a, ratelimit.LimitWords(a.Body), at.nextWords, a.Status, redirect(a)
+			r.normal = kindOf(at)
+			if limited != nil && *r.normal == *limited && (normal == nil || *normal != *limited) {
+				said := ""
+				if len(at.nextWords) > 0 {
+					said = ", and the page it redirected to has " + ratelimit.Said(at.nextWords...)
+				}
+				r.Limited, r.Signal = true, fmt.Sprintf("the first login got the answer that showed login-throttle's limit (%s%s), so the limit holds for other names too", shapeOf(a), said)
+				r.limit = r.normal
+				return r, nil
+			}
+			// The page the first wrong login redirected to says what the
+			// login page does not: a limit already holding (perhaps from an
+			// earlier run), or a warning, either way no report of no limit.
+			if w := ratelimit.NewWord(at.nextWords, pageWords); at.next != nil && w != "" {
+				r.Limited, r.Signal = true, "the page the first wrong login redirected to has "+ratelimit.Said(w)+", already at the first login (perhaps from an earlier run)"
+				r.limit = r.normal
+				return r, nil
+			}
+			if right != "" && shapeOf(a) == rightShape {
+				return r, fmt.Errorf("a login with the right password (%s) and one with a wrong password were both %s, so SiegeKit cannot tell that its logins reach the app's login code, and a report of no limit could be false. Check %s and that %s is the account's password; a login form that needs JavaScript or a CSRF token needs --login-page", PasswordEnv, rightShape, l.flags(), PasswordEnv)
+			}
 			continue
 		}
 		if a.Status >= 500 {
-			return r, fmt.Errorf("the login URL answered %d (a server error) after %d login(s); a crash is not a limit, so this check cannot tell whether logins are limited", a.Status, r.Attempts-1)
+			return r, fmt.Errorf("the login %s answered %d (a server error) after %d login(s); a crash is not a limit, so this check cannot tell whether logins are limited", l.noun(), a.Status, k)
 		}
 		switch {
 		case a.Status != base.Status:
 			r.Limited, r.Signal = true, fmt.Sprintf("answered %d instead of %d", a.Status, base.Status)
+		case redirect(a) != r.Redirect:
+			r.Limited, r.Signal = true, fmt.Sprintf("redirected to %s instead of %s", orNone(redirect(a)), orNone(r.Redirect))
 		case ratelimit.NewWord(ratelimit.LimitWords(a.Body), baseWords) != "":
-			r.Limited, r.Signal = true, fmt.Sprintf("the answer says %q", ratelimit.NewWord(ratelimit.LimitWords(a.Body), baseWords))
+			r.Limited, r.Signal = true, "the answer has "+ratelimit.Said(ratelimit.NewWord(ratelimit.LimitWords(a.Body), baseWords))
+		case ratelimit.NewWord(at.nextWords, nextWords) != "":
+			r.Limited, r.Signal = true, "the page it redirected to has "+ratelimit.Said(ratelimit.NewWord(at.nextWords, nextWords))
 		case a.Took >= 3*base.Took && a.Took >= time.Second:
 			r.Limited, r.Signal = true, fmt.Sprintf("answered in %s instead of %s", a.Took.Round(time.Millisecond), base.Took.Round(time.Millisecond))
 		}
 		if r.Limited {
+			r.limit = kindOf(at)
 			return r, nil
 		}
 	}
 	return r, nil
+}
+
+// noun is "URL" or "page", for messages.
+func (l *Login) noun() string {
+	if l.Page {
+		return "page's form"
+	}
+	return "URL"
+}
+
+// flags names the flags that give the login, for messages.
+func (l *Login) flags() string {
+	if l.Page {
+		return "--login-page and --login-body"
+	}
+	return "--login-url and --login-body"
+}
+
+func orNone(s string) string {
+	if s == "" {
+		return "no redirect"
+	}
+	return s
+}
+
+// shape is what tells a login's answers apart for the right-password
+// guard (ADR 0062): the status, the redirect, and the names of the cookies
+// it sets. A body is not compared: two answers to the same ignored login
+// differ byte for byte (measured on Next.js 16).
+type shape struct {
+	status   int
+	location string
+	cookies  string
+}
+
+func shapeOf(a *egress.Answer) shape {
+	var names []string
+	for _, c := range (&http.Response{Header: a.Header}).Cookies() {
+		if c.MaxAge >= 0 && !slices.Contains(names, c.Name) {
+			names = append(names, c.Name)
+		}
+	}
+	slices.Sort(names)
+	return shape{a.Status, redirect(a), strings.Join(names, ",")}
+}
+
+func (s shape) String() string {
+	out := fmt.Sprintf("answered %d", s.status)
+	if s.location != "" {
+		out += " to " + s.location
+	}
+	if s.cookies != "" {
+		out += " setting the cookies " + s.cookies
+	}
+	return out
+}
+
+// token is a run of letters, digits and hyphens.
+var token = regexp.MustCompile(`[A-Za-z0-9-]+`)
+
+// redirect is an answer's Location with random values left out: a run of
+// letters, digits and hyphens 8 or more long with a digit (a token, an ID
+// or a time) becomes "*" (ADR 0062). Words such as
+// "over_request_rate_limit" stay.
+func redirect(a *egress.Answer) string {
+	loc := a.Header.Get("Location")
+	if len(loc) > 2048 {
+		loc = loc[:2048]
+	}
+	return token.ReplaceAllStringFunc(loc, func(t string) string {
+		if len(t) >= 8 && strings.ContainsAny(t, "0123456789") {
+			return "*"
+		}
+		return t
+	})
 }
 
 // limitStatus names a status or header that always means a limit.
@@ -276,19 +687,23 @@ func limitStatus(a *egress.Answer) string {
 	return ""
 }
 
-// Findings turns a result into findings: one when no limit was seen.
+// Findings turns a result into findings: one when no limit was seen in
+// at least DefaultAttempts attempts (issue #79). A run shows only that the
+// app allowed that many guesses, never that it has no limit, so the
+// finding says so. Fewer attempts give no finding: many apps limit at 5 to
+// 30, so a limit just past a small N would be reported as none.
 func Findings(l *Login, r Result, planned int) []findings.Finding {
-	if r.Limited || r.Attempts < planned {
+	if r.Limited || r.Attempts < planned || planned < DefaultAttempts {
 		return nil
 	}
 	f := findings.Finding{
 		RuleID: "login-not-limited",
-		Title:  "Failed logins are not limited",
-		Message: fmt.Sprintf("%d logins for the test account %q with a wrong password, one per second, all got the same answer (%d) with no slowdown, block, lockout or CAPTCHA, so an attacker can keep guessing this account's password. Limit failed logins, for example with a growing delay, a temporary lock or a CAPTCHA. SiegeKit does not see a limit set above %d attempts, one per IP address, or one across many accounts.",
-			r.Attempts, l.User, r.Baseline, planned),
+		Title:  fmt.Sprintf("No limit seen in %d failed logins", r.Attempts),
+		Message: fmt.Sprintf("%d logins for the test account %q with a wrong password, one per second, all got the same answer (%s) with no slowdown, block, lockout or CAPTCHA, so an attacker can make at least %d guesses at this account's password. A login with the right password first %s, so these logins reached the app's login code. %s If the app has no limit, add one, for example a growing delay, a temporary lock or a CAPTCHA. SiegeKit does not see a limit per IP address or one across many accounts.",
+			r.Attempts, l.User, r.answer(), r.Attempts, r.Right, aboveN(r.Attempts)),
 		Severity: findings.Medium,
 		CWEs:     []string{"CWE-307"},
-		Location: findings.Location{URI: l.URL},
+		Location: findings.Location{URI: cmp.Or(r.URL, l.URL)},
 		Family:   Family,
 	}
 	f.Sources = []findings.Source{{Plugin: ID, RuleID: f.RuleID}}
@@ -296,20 +711,26 @@ func Findings(l *Login, r Result, planned int) []findings.Finding {
 	return []findings.Finding{f}
 }
 
+// aboveN says what a run of n attempts cannot show (issue #79).
+func aboveN(n int) string {
+	return fmt.Sprintf("Many apps limit failed logins at 5 to 30, and NIST SP 800-63B allows at most 100 in a row for one account; SiegeKit does not see a limit set above %d attempts.", n)
+}
+
 // SprayFindings turns a spraying result into findings: one when no limit
-// was seen, medium like a login with no limit (owner 2026-11-22).
+// was seen in at least DefaultAttempts logins, medium like a login with no
+// limit (owner 2026-11-22), and worded like it (issue #79).
 func SprayFindings(l *Login, r Result, planned int) []findings.Finding {
-	if r.Limited || r.Attempts < planned {
+	if r.Limited || r.Attempts < planned || planned < DefaultAttempts {
 		return nil
 	}
 	f := findings.Finding{
 		RuleID: "spray-not-limited",
-		Title:  "Logins across many accounts are not limited",
-		Message: fmt.Sprintf("The app limited failed logins for the one test account, but %d logins for %d different invented user names (siegekit-nobody-1 and on), one per second and all with the same wrong password, all got the same answer (%d) with no slowdown, block or CAPTCHA. So the limit is per account only: an attacker who tries one common password on many accounts (password spraying) is never stopped. Also limit failed logins per client address, or across accounts. SiegeKit does not see a limit set above %d attempts.",
-			r.Attempts, r.Attempts, r.Baseline, planned),
+		Title:  fmt.Sprintf("No limit seen in %d failed logins across accounts", r.Attempts),
+		Message: fmt.Sprintf("The app limited failed logins for the one test account, but %d logins for %d different invented user names (siegekit-nobody-1 and on), one per second and all with the same wrong password, all got the same answer (%s) with no slowdown, block or CAPTCHA. So the limit seen is per account: an attacker who tries one common password on many accounts (password spraying) can make at least %d such guesses from one address. %s If the app has no such limit, also limit failed logins per client address, or across accounts.",
+			r.Attempts, r.Attempts, r.answer(), r.Attempts, aboveN(r.Attempts)),
 		Severity: findings.Medium,
 		CWEs:     []string{"CWE-307"},
-		Location: findings.Location{URI: l.URL},
+		Location: findings.Location{URI: cmp.Or(r.URL, l.URL)},
 		Family:   Family,
 	}
 	f.Sources = []findings.Source{{Plugin: SprayID, RuleID: f.RuleID}}

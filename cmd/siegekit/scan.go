@@ -118,11 +118,19 @@ Flags:
                     common spec paths on local targets (one GET each)
   --login-url URL   the app's login endpoint, on the target's origin, for
                     the login throttling check (local targets only)
-  --login-user NAME a test account you own; the check may lock it
+  --login-page URL  instead of --login-url: the page with the login form
+                    (a Next.js Server Action, or a form with a CSRF token).
+                    Before each login SiegeKit reads the page and sends its
+                    form as a browser without JavaScript does
+  --login-user NAME a test account you own; the check may lock it. Its
+                    password goes in SIEGEKIT_LOGIN_PASSWORD: one login with
+                    it first shows that the check's logins reach the app
   --login-body TEMPLATE
                     the POST body, with {user} and {password}: JSON if it
                     starts with {, otherwise a form, for example
-                    '{"email":"{user}","password":"{password}"}'
+                    '{"email":"{user}","password":"{password}"}'. With
+                    --login-page, the form's fields to fill in, such as
+                    'email={user}&password={password}'
   --login-attempts N
                     logins to send with a random wrong password, one per
                     second (default 20, at most 50)
@@ -233,6 +241,7 @@ func scan(args []string, stdout, stderr io.Writer) int {
 	profile := fl.String("profile", "full", "")
 	var lf loginFlags
 	fl.StringVar(&lf.url, "login-url", "", "")
+	fl.StringVar(&lf.page, "login-page", "", "")
 	fl.StringVar(&lf.user, "login-user", "", "")
 	fl.StringVar(&lf.body, "login-body", "", "")
 	fl.IntVar(&lf.attempts, "login-attempts", login.DefaultAttempts, "")
@@ -363,7 +372,7 @@ func scan(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "siegekit scan: %v\n", err)
 		return exitUsage
 	}
-	if *deployed || *authorizedHost != "" || *openAPI != "" || lf.url != "" || attemptsSet || *har != "" || *replayWrites || rl.url != "" || anyPage || *mailCatcher != "" || *backendURL != "" || *storageURL != "" || *source != "" {
+	if *deployed || *authorizedHost != "" || *openAPI != "" || lf.url != "" || lf.page != "" || attemptsSet || *har != "" || *replayWrites || rl.url != "" || anyPage || *mailCatcher != "" || *backendURL != "" || *storageURL != "" || *source != "" {
 		fmt.Fprint(stderr, "siegekit scan: --deployed, --authorized-host, --openapi, --har, --replay-writes, --backend-url, --storage-url, --source, --mail-catcher, the --login flags, the --rate-limit flags and the --reset, --signup and --code flags only apply to URL targets\n")
 		return exitUsage
 	}

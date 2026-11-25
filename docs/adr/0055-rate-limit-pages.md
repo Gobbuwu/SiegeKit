@@ -2,6 +2,7 @@
 
 - Status: Accepted (design: owner 2026-11-21, "the recommended design (answers by default, emails counted at a mail catcher when one is given)"; severities of items 5 and 6: owner 2026-11-22; item 5's threshold: owner 2026-11-23)
 - Date: 2026-11-22
+- Amended by: [0062](0062-form-logins.md) (spraying's first answer; what the "not limited" findings claim)
 - Amends: [0036](0036-rate-limit-check.md) (item 5: what a first answer may be on these pages; item 6: a changed status is not "not limited"), [0030](0030-login-throttling.md) (spraying after a limit), [0029](0029-check-selection.md) (what `--profile quick` leaves out)
 
 ## Context

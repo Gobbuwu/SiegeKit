@@ -36,7 +36,7 @@ func TestPagesFindPlantedIssues(t *testing.T) {
 		t.Fatal(err)
 	}
 	cfg := egress.Config{Target: tu, Addrs: []netip.Addr{netip.MustParseAddr("127.0.0.1")}, Version: "test"}
-	const n = 5
+	const n = ratelimit.DefaultRequests // fewer give no "not limited" finding (ADR 0062 item 7)
 	found := map[string]map[string]bool{}
 	add := func(id string, fs []findings.Finding) {
 		if found[id] == nil {
@@ -115,11 +115,12 @@ func TestPagesFindPlantedIssues(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if r, err := login.Check(context.Background(), cfg, l, n); err != nil || !r.Limited {
+		if r, err := login.Check(context.Background(), cfg, l, n, vulnAppPassword); err != nil || !r.Limited {
 			t.Fatalf("%s: login-throttle %+v %v", c.path, r, err)
 		}
-		r, err := login.Spray(context.Background(), cfg, l, n)
-		fs := login.SprayFindings(l, r, n)
+		// Too few logins give no finding (issue #79).
+		r, err := login.Spray(context.Background(), cfg, l, login.DefaultAttempts, login.Result{})
+		fs := login.SprayFindings(l, r, login.DefaultAttempts)
 		if err != nil || r.Limited == c.wantFinding || (len(fs) > 0) != c.wantFinding {
 			t.Errorf("%s: spray %+v %v %v", c.path, r, err, fs)
 		}
