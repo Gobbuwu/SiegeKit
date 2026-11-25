@@ -145,13 +145,18 @@ func TestRelURI(t *testing.T) {
 		"/targetx/a.go":         "/targetx/a.go",
 		"app/main.go":           "app/main.go",
 		"https://example.test/": "https://example.test/",
+		// Run from the repository's top level (ADR 0068).
+		"./app/x.py": "app/x.py",
+		"./":         "./",
 	} {
 		if got := RelURI(in, "/target"); got != want {
 			t.Errorf("RelURI(%q) = %q, want %q", in, got, want)
 		}
 	}
-	if got := RelURI("/target/a", ""); got != "/target/a" {
-		t.Errorf("empty mount changed URI: %q", got)
+	for _, u := range []string{"/target/a", "./a"} {
+		if got := RelURI(u, ""); got != u {
+			t.Errorf("empty mount changed URI %q: %q", u, got)
+		}
 	}
 }
 

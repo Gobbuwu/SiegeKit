@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "bandit",
   "name": "Bandit Python code scan",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Finds common security mistakes in Python code, such as shell injection, unsafe deserialization and weak cryptography.",
   "family": "sast",
   "mode": "passive",
@@ -37,9 +37,10 @@
   },
   "network": "none",
   "run": {
+    "inRepoRoot": true,
     "args": [
       "-r",
-      "{target}",
+      ".",
       "-f",
       "json",
       "-o",
