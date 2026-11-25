@@ -187,7 +187,7 @@ func parseIndex(data []byte, hashLen int) ([]string, error) {
 		var name string
 		if version == 4 {
 			strip, n := indexVarint(body[min(p, len(body)):])
-			if n == 0 || strip > uint64(len(prev)) {
+			if n == 0 || strip > len(prev) {
 				return bad("bad path prefix")
 			}
 			p += n
@@ -195,7 +195,7 @@ func parseIndex(data []byte, hashLen int) ([]string, error) {
 			if end < 0 {
 				return bad("unterminated path")
 			}
-			name = prev[:len(prev)-int(strip)] + string(body[p:p+end])
+			name = prev[:len(prev)-strip] + string(body[p:p+end])
 			off = p + end + 1
 		} else {
 			end := bytes.IndexByte(body[min(p, len(body)):], 0)
@@ -222,14 +222,17 @@ func parseIndex(data []byte, hashLen int) ([]string, error) {
 			return bad("extension past the end")
 		}
 		sig := string(body[off : off+4])
-		size := binary.BigEndian.Uint32(body[off+4 : off+8])
+		// Read byte by byte: the size is at most 2^32-1, so it fits an int
+		// on the 64-bit platforms SiegeKit is built for, with no conversion
+		// that could wrap.
+		size := int(body[off+4])<<24 | int(body[off+5])<<16 | int(body[off+6])<<8 | int(body[off+7])
 		if sig == "link" {
 			return bad("split index")
 		}
-		if uint64(size) > uint64(len(body)-off-8) {
+		if size > len(body)-off-8 {
 			return bad("extension past the end")
 		}
-		off += 8 + int(size)
+		off += 8 + size
 	}
 	if off != len(body) {
 		return bad("entries past the end")
@@ -238,21 +241,22 @@ func parseIndex(data []byte, hashLen int) ([]string, error) {
 }
 
 // indexVarint decodes git's offset varint (varint.c), returning the value
-// and the bytes read, or 0 bytes when b holds no complete value.
-func indexVarint(b []byte) (uint64, int) {
+// and the bytes read, or 0 bytes when b holds no complete value or one
+// larger than an index can hold.
+func indexVarint(b []byte) (int, int) {
 	if len(b) == 0 {
 		return 0, 0
 	}
 	c := b[0]
-	v := uint64(c & 0x7f)
+	v := int(c & 0x7f)
 	n := 1
 	for c&0x80 != 0 {
-		if n >= len(b) || n >= 9 {
+		if n >= len(b) || v > maxIndexSize {
 			return 0, 0
 		}
 		c = b[n]
 		n++
-		v = ((v + 1) << 7) | uint64(c&0x7f)
+		v = ((v + 1) << 7) | int(c&0x7f)
 	}
 	return v, n
 }
