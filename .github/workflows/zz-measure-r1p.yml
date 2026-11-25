@@ -72,8 +72,9 @@ jobs:
           "$RUNNER_TEMP/siegekit" scan --only ffuf,nuclei,zap,served-secrets,public-maps --yes --no-save --report-dir "$RUNNER_TEMP/warm" http://127.0.0.1:3000 > "$RUNNER_TEMP/warm.log" 2>&1 || true
           tail -12 "$RUNNER_TEMP/warm.log"
       - name: Cases
+        # A scan's exit code is recorded, not fatal (GitHub's bash runs with -e).
         run: |
-          set -u
+          set -u +e
           mkdir -p "$OUT"
           FULL=ffuf,nuclei,zap,served-secrets,public-maps
           # run NAME "blocksrv args" ONLY URL [ENV=VALUE ...]

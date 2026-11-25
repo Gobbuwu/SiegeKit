@@ -6,7 +6,8 @@ import json, os, re, sys, collections
 
 d = sys.argv[1]
 case = os.path.basename(d.rstrip('/'))
-meta = dict(l.strip().split('=', 1) for l in open(os.path.join(d, 'meta')) if '=' in l)
+mp = os.path.join(d, 'meta')
+meta = dict(l.strip().split('=', 1) for l in open(mp) if '=' in l) if os.path.exists(mp) else {'exit': 'NO META'}
 after, until = int(meta.get('after', -1)), int(meta.get('until', -1))
 
 def hms(s):
