@@ -62,6 +62,13 @@ type Accounts struct{ B, C http.Header }
 // for the request with no login; B's own header names are added to them.
 var sessionHeaders = []string{"Authorization", "Cookie", "X-Api-Key", "X-Auth-Token", "X-Access-Token", "X-Session-Token"}
 
+// IsSessionHeader reports whether name is a header the checks treat as a
+// login: one of the usual session headers, or one that a session in
+// sessions sets. The extra headers of ADR 0070 may not set one.
+func IsSessionHeader(name string, sessions ...http.Header) bool {
+	return sessionNames(sessions...)[http.CanonicalHeaderKey(name)]
+}
+
 // skipHeaders are never replayed: the transport and SiegeKit set them, or
 // they only make sense in the browser.
 var skipHeaders = map[string]bool{

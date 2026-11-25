@@ -24,6 +24,9 @@ type Entry struct {
 	Plugins      []string  `json:"plugins"`
 	// Environment names the machine and container engine (ADR 0038).
 	Environment string `json:"environment,omitempty"`
+	// ExtraHeaders names the headers from SIEGEKIT_EXTRA_HEADERS sent on
+	// every request (ADR 0070); their values are never logged.
+	ExtraHeaders []string `json:"extraHeaders,omitempty"`
 }
 
 // MaxSize is the largest log Append writes to; past it, Append fails rather

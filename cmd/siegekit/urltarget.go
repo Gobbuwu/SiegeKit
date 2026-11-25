@@ -61,7 +61,7 @@ var specGet = egress.Get
 
 // prover checks deployed-mode proof of control; tests replace it.
 var prover interface {
-	Check(ctx context.Context, u *target.URL, addrs []netip.Addr, token string) (string, error)
+	Check(ctx context.Context, u *target.URL, addrs []netip.Addr, token string, header http.Header) (string, error)
 } = &verify.Checker{}
 
 func isURL(s string) bool {
@@ -134,6 +134,9 @@ type urlScan struct {
 	// server code, for the route sweep (ADR 0053).
 	code    *coderoutes.Result
 	codeErr error
+	// Read from SIEGEKIT_EXTRA_HEADERS before any request (ADR 0070): sent
+	// on every request to the target's origin, never to another host.
+	extraHeaders http.Header
 	// in reads every typed answer, so one prompt cannot swallow the next.
 	in *bufio.Reader
 }
@@ -382,6 +385,13 @@ func scanURL(raw string, o urlScan, stdout, stderr io.Writer) int {
 			}
 		}
 	}
+	// So are the extra headers (ADR 0070), after the sessions, whose
+	// header names they may not set.
+	if s, ok := os.LookupEnv(egress.ExtraHeadersEnv); ok {
+		if o.extraHeaders, err = extraHeaders(s, u, deployed, o.sessionB, o.sessionC); err != nil {
+			return refuse("%v", err)
+		}
+	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	rctx, cancel := context.WithTimeout(ctx, 15*time.Second)
@@ -418,7 +428,7 @@ func scanURL(raw string, o urlScan, stdout, stderr io.Writer) int {
 		if err != nil {
 			return refuse("%v", err)
 		}
-		method, err := prover.Check(ctx, u, d.Addrs, token)
+		method, err := prover.Check(ctx, u, d.Addrs, token, o.extraHeaders)
 		if err != nil {
 			fmt.Fprintf(stdout, "\n%s\n\n", verify.Instructions(u, token))
 			return refuse("%v", err)
@@ -456,6 +466,40 @@ func scanURL(raw string, o urlScan, stdout, stderr io.Writer) int {
 	}
 	return runURL(ctx, u, d.Addrs, mode, verification, confirmed, o, spec, lg, stdout, stderr)
 }
+
+// extraHeaders reads SIEGEKIT_EXTRA_HEADERS (ADR 0070). Besides what
+// egress.ParseExtraHeaders refuses, it refuses session headers (they would
+// sign in the access-control check's requests with no login and hide its
+// findings) and a deployed target over plain http (the value would cross
+// the internet unencrypted).
+func extraHeaders(s string, u *target.URL, deployed bool, sessions ...http.Header) (http.Header, error) {
+	h, err := egress.ParseExtraHeaders(s)
+	if err != nil {
+		return nil, err
+	}
+	for _, k := range slices.Sorted(maps.Keys(h)) {
+		if authz.IsSessionHeader(k, sessions...) {
+			return nil, fmt.Errorf("%s cannot set %s: it carries a login, and the access-control check's requests with no login would be signed in; give sessions in %s and %s", egress.ExtraHeadersEnv, k, authz.SessionEnv, authz.SessionEnvC)
+		}
+	}
+	if deployed && u.Scheme != "https" {
+		return nil, fmt.Errorf("%s is sent to a deployed target only over https; %s would send it unencrypted", egress.ExtraHeadersEnv, u.Origin())
+	}
+	return h, nil
+}
+
+// extraValues are h's values, which Run.Hide removes from the reports.
+func extraValues(h http.Header) []string {
+	var v []string
+	for _, vs := range h {
+		v = append(v, vs...)
+	}
+	return v
+}
+
+// headerNames lists h's names, sorted, for the plan and the audit log;
+// the values are never printed.
+func headerNames(h http.Header) []string { return slices.Sorted(maps.Keys(h)) }
 
 // specSource is what --openapi named: a spec read from a file, or a path
 // on the target's origin.
@@ -799,6 +843,9 @@ func runURL(ctx context.Context, u *target.URL, addrs []netip.Addr, mode target.
 	var spec *openapi.Spec
 	noSpec := ""
 	fmt.Fprintf(stdout, "\nPlan: %s, %s mode, addresses %s.\n", u, mode, joinList(addrs))
+	if o.extraHeaders != nil {
+		fmt.Fprintf(stdout, "Every request to %s carries %s from %s (values hidden here and in the reports).\n", u.Origin(), strings.Join(headerNames(o.extraHeaders), ", "), egress.ExtraHeadersEnv)
+	}
 	for _, m := range selected {
 		if r, ok := unavailable[m.ID]; ok {
 			fmt.Fprintf(stdout, "  %-20s not run - %s\n", m.ID, r.Reason)
@@ -1145,7 +1192,7 @@ func runURL(ctx context.Context, u *target.URL, addrs []netip.Addr, mode target.
 	var probeErr error
 	probeSpecs := func() (publicmaps.Probe, error) {
 		if probe == nil {
-			p, err := publicmaps.ProbeSpecs(ctx, specGet, egress.Config{Target: u, Addrs: addrs, VerifyTLS: o.deployed, Version: version, ReadOnly: true}, limits.Rate)
+			p, err := publicmaps.ProbeSpecs(ctx, specGet, egress.Config{Target: u, Addrs: addrs, Header: o.extraHeaders, VerifyTLS: o.deployed, Version: version, ReadOnly: true}, limits.Rate)
 			probe, probeErr = &p, err
 		}
 		return *probe, probeErr
@@ -1154,6 +1201,7 @@ func runURL(ctx context.Context, u *target.URL, addrs []netip.Addr, mode target.
 		if err := audit.Append(filepath.Join(dir, "audit.log"), audit.Entry{
 			Time: time.Now().UTC(), Version: version, Target: u.String(), Addresses: addrStrings(addrs),
 			Mode: string(mode), Verification: verification, Confirmed: confirmed, Plugins: planned, Environment: env.String(),
+			ExtraHeaders: headerNames(o.extraHeaders),
 		}); err != nil {
 			return fail(fmt.Errorf("no test was sent: %w", err))
 		}
@@ -1167,7 +1215,7 @@ func runURL(ctx context.Context, u *target.URL, addrs []netip.Addr, mode target.
 			}
 		}
 		// One GET first, so a target that is down is not sent a full scan.
-		cfg := egress.Config{Target: u, Addrs: addrs, VerifyTLS: o.deployed, Version: version}
+		cfg := egress.Config{Target: u, Addrs: addrs, Header: o.extraHeaders, VerifyTLS: o.deployed, Version: version}
 		if err := reachable(ctx, cfg); err != nil {
 			return fail(fmt.Errorf("%s: %w; no test was sent. Check that the app is running at this address", u, err))
 		}
@@ -1210,7 +1258,7 @@ func runURL(ctx context.Context, u *target.URL, addrs []netip.Addr, mode target.
 		} else {
 			pr.Input = fmt.Sprintf("%s as %q", loginTarget(lg), lg.User)
 			fmt.Fprintf(stdout, "%s: sending 1 login with the right password, then %d with a wrong one, one per second.\n", login.ID, o.login.attempts)
-			res, err := loginCheck(ctx, egress.Config{Target: u, Addrs: addrs, VerifyTLS: o.deployed, Version: version, ReadOnly: o.deployed}, lg, o.login.attempts, o.loginPassword)
+			res, err := loginCheck(ctx, egress.Config{Target: u, Addrs: addrs, Header: o.extraHeaders, VerifyTLS: o.deployed, Version: version, ReadOnly: o.deployed}, lg, o.login.attempts, o.loginPassword)
 			if ctx.Err() != nil {
 				return fail(errors.New("interrupted; no report written"))
 			}
@@ -1245,7 +1293,7 @@ func runURL(ctx context.Context, u *target.URL, addrs []netip.Addr, mode target.
 		default:
 			pr.Input = fmt.Sprintf("%s as %s and on", loginTarget(lg), login.SprayUser(lg, 1))
 			fmt.Fprintf(stdout, "%s: sending %d logins for invented user names, one per second.\n", login.SprayID, o.login.attempts)
-			res, err := sprayCheck(ctx, egress.Config{Target: u, Addrs: addrs, VerifyTLS: o.deployed, Version: version, ReadOnly: o.deployed}, lg, o.login.attempts, loginRes)
+			res, err := sprayCheck(ctx, egress.Config{Target: u, Addrs: addrs, Header: o.extraHeaders, VerifyTLS: o.deployed, Version: version, ReadOnly: o.deployed}, lg, o.login.attempts, loginRes)
 			if ctx.Err() != nil {
 				return fail(errors.New("interrupted; no report written"))
 			}
@@ -1270,7 +1318,7 @@ func runURL(ctx context.Context, u *target.URL, addrs []netip.Addr, mode target.
 			e := o.rateEndpoint
 			pr.Input = e.Method + " " + e.URL
 			fmt.Fprintf(stdout, "%s: sending up to %d requests, one per second.\n", ratelimit.ID, o.rateLimit.requests)
-			res, err := rateLimitCheck(ctx, egress.Config{Target: u, Addrs: addrs, VerifyTLS: o.deployed, Version: version, ReadOnly: o.deployed}, e, o.rateLimit.requests)
+			res, err := rateLimitCheck(ctx, egress.Config{Target: u, Addrs: addrs, Header: o.extraHeaders, VerifyTLS: o.deployed, Version: version, ReadOnly: o.deployed}, e, o.rateLimit.requests)
 			if ctx.Err() != nil {
 				return fail(errors.New("interrupted; no report written"))
 			}
@@ -1310,7 +1358,7 @@ func runURL(ctx context.Context, u *target.URL, addrs []netip.Addr, mode target.
 			if markErr != nil {
 				err = fmt.Errorf("%v; no request was sent to the %s", markErr, p.What())
 			} else {
-				res, err = rateLimitCheck(ctx, egress.Config{Target: u, Addrs: addrs, VerifyTLS: o.deployed, Version: version, ReadOnly: o.deployed}, e, n)
+				res, err = rateLimitCheck(ctx, egress.Config{Target: u, Addrs: addrs, Header: o.extraHeaders, VerifyTLS: o.deployed, Version: version, ReadOnly: o.deployed}, e, n)
 			}
 			if err == nil && counted && res.Accepted > 0 {
 				fmt.Fprintf(stdout, "%s: counting the emails at %s.\n", p.ID(), o.catcher)
@@ -1345,7 +1393,7 @@ func runURL(ctx context.Context, u *target.URL, addrs []netip.Addr, mode target.
 	storageRuns := storageSelected && !storageOff
 	var col *collected
 	if servedRuns || backendRuns || mapsRuns || storageRuns {
-		col = collect(ctx, egress.Config{Target: u, Addrs: addrs, VerifyTLS: o.deployed, Version: version, ReadOnly: true}, limits.Rate)
+		col = collect(ctx, egress.Config{Target: u, Addrs: addrs, Header: o.extraHeaders, VerifyTLS: o.deployed, Version: version, ReadOnly: true}, limits.Rate)
 		defer col.cleanup()
 		if ctx.Err() != nil {
 			return fail(errors.New("interrupted; no report written"))
@@ -1463,7 +1511,7 @@ func runURL(ctx context.Context, u *target.URL, addrs []netip.Addr, mode target.
 			pr.Input += o.codeInput(inSpec)
 			pr.Input += o.accountsInput()
 			fmt.Fprintf(stdout, "%s: replaying %d request(s).\n", authz.ID, len(o.harRequests.Requests))
-			res, err := authzCheck(ctx, egress.Config{Target: u, Addrs: addrs, VerifyTLS: o.deployed, Version: version, ReadOnly: true}, o.harRequests.Requests, authz.Accounts{B: o.sessionB, C: o.sessionC}, limits.Rate)
+			res, err := authzCheck(ctx, egress.Config{Target: u, Addrs: addrs, Header: o.extraHeaders, VerifyTLS: o.deployed, Version: version, ReadOnly: true}, o.harRequests.Requests, authz.Accounts{B: o.sessionB, C: o.sessionC}, limits.Rate)
 			if ctx.Err() != nil {
 				return fail(errors.New("interrupted; no report written"))
 			}
@@ -1489,7 +1537,7 @@ func runURL(ctx context.Context, u *target.URL, addrs []netip.Addr, mode target.
 			pr.Input = fmt.Sprintf("%s, %d write(s) recorded as account A, %d tried on A's objects", filepath.Base(o.har), recorded, tried)
 			pr.Input += o.accountsInput()
 			fmt.Fprintf(stdout, "%s: replaying %d write(s).\n", authz.WriteID, len(o.writes.Writes))
-			res, err := writeCheck(ctx, egress.Config{Target: u, Addrs: addrs, Version: version}, o.writes.Writes, authz.Accounts{B: o.sessionB, C: o.sessionC}, o.harUser, limits.Rate, mode)
+			res, err := writeCheck(ctx, egress.Config{Target: u, Addrs: addrs, Header: o.extraHeaders, Version: version}, o.writes.Writes, authz.Accounts{B: o.sessionB, C: o.sessionC}, o.harUser, limits.Rate, mode)
 			if ctx.Err() != nil {
 				return fail(errors.New("interrupted; no report written"))
 			}
@@ -1518,7 +1566,7 @@ func runURL(ctx context.Context, u *target.URL, addrs []netip.Addr, mode target.
 	run, err := runner.RunURL(ctx, active, selected, runner.URLOptions{
 		Version: version, Target: u, Addrs: addrs, Deployed: o.deployed, Limits: limits, Unavailable: unavailable,
 		FilesRoot: rootsIn(dir).Files, OpenAPI: spec, NoOpenAPI: noSpec, Environment: env,
-		Recorded: recordedRequests, RecordedFrom: filepath.Base(o.har),
+		Recorded: recordedRequests, RecordedFrom: filepath.Base(o.har), Header: o.extraHeaders,
 	})
 	if errors.Is(err, context.Canceled) {
 		return fail(errors.New("interrupted; no report written"))
@@ -1539,6 +1587,8 @@ func runURL(ctx context.Context, u *target.URL, addrs []netip.Addr, mode target.
 			run.Findings = []findings.Finding{}
 		}
 	}
+	// An app that echoes request headers puts the value in tool output.
+	run.Hide(extraValues(o.extraHeaders), "[hidden: "+egress.ExtraHeadersEnv+" value]")
 	return finish(run, o.reportDir, o.noSave, u.Host, o.threshold, o.requireAll, o.requireComplete, stdout, stderr)
 }
 
