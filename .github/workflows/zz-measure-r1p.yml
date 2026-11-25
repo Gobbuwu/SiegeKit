@@ -1,0 +1,144 @@
+name: Measure R1p fixes (temporary)
+
+# MEASUREMENT PROTOTYPE, NOT FOR MERGE (from-porchlet #86, #87). Runs
+# SiegeKit (PR #85's head plus the prototype in internal/egress/zz_detect.go)
+# on a stand-in for a Vercel-hosted app that starts serving one 403 block
+# page (blocksrv), on Juice Shop behind that switch, and on Juice Shop,
+# Gitea and the stand-in without a block. Four detectors run in shadow mode
+# on the same traffic; the E cases make one of them stop the run. The H
+# cases send the Vercel bypass header (H1 generic, H2 Vercel-only).
+on:
+  push:
+    branches: [claude/project-thread-ejp4by]
+    paths:
+      - .github/workflows/zz-measure-r1p.yml
+      - .github/zz-measure/**
+      - internal/egress/zz_detect.go
+
+permissions:
+  contents: read
+
+jobs:
+  measure:
+    name: ${{ matrix.engine }}${{ matrix.os == 'ubuntu-24.04-arm' && ', arm64' || '' }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        engine: [podman, docker]
+        os: [ubuntu-latest, ubuntu-24.04-arm]
+    env:
+      SIEGEKIT_ENGINE: ${{ matrix.engine }}
+      OUT: ${{ github.workspace }}/zz-out
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: "1.27.4"
+          cache: false
+      - name: Build
+        run: |
+          CGO_ENABLED=0 go build -o "$RUNNER_TEMP/siegekit" ./cmd/siegekit
+          go build -o "$RUNNER_TEMP/blocksrv" ./.github/zz-measure/blocksrv
+          echo "arch $(uname -m), engine $SIEGEKIT_ENGINE, $($SIEGEKIT_ENGINE --version)"
+      - name: Sign in to Docker Hub
+        env:
+          DH_USER: ${{ secrets.DOCKERHUB_USERNAME }}
+          DH_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+        run: |
+          set +e
+          if [ -n "$DH_USER" ]; then
+            printf '%s' "$DH_TOKEN" | docker login -u "$DH_USER" --password-stdin > /dev/null 2>&1; echo "docker login exit=$?"
+            printf '%s' "$DH_TOKEN" | podman login docker.io -u "$DH_USER" --password-stdin > /dev/null 2>&1; echo "podman login exit=$?"
+          fi
+      - name: Start Juice Shop and Gitea
+        run: |
+          docker run -d --name juice-shop -p 127.0.0.1:3000:3000 \
+            docker.io/bkimminich/juice-shop@sha256:9bbaecc41791f00b002bc65931cc5ff355fbdb941fa72b06558c18dace43197b
+          docker run -d --name gitea -p 127.0.0.1:3001:3000 -e GITEA__security__INSTALL_LOCK=true \
+            -e GITEA__database__DB_TYPE=sqlite3 -e GITEA__server__ROOT_URL=http://127.0.0.1:3001/ \
+            docker.io/gitea/gitea@sha256:2edc102cbb636ae1ddac5fa0c715aa5b03079dee13ac6800b2cef6d4e912e718
+          for i in $(seq 1 90); do
+            curl -sf -o /dev/null http://127.0.0.1:3000/ && curl -sf -o /dev/null http://127.0.0.1:3001/ && exit 0
+            sleep 2
+          done
+          exit 1
+      - name: Install tools once
+        # The first scan downloads every image and file; its result is not used.
+        run: |
+          "$RUNNER_TEMP/siegekit" scan --only ffuf,nuclei,zap,served-secrets,public-maps --yes --no-save --report-dir "$RUNNER_TEMP/warm" http://127.0.0.1:3000 > "$RUNNER_TEMP/warm.log" 2>&1 || true
+          tail -12 "$RUNNER_TEMP/warm.log"
+      - name: Cases
+        run: |
+          set -u
+          mkdir -p "$OUT"
+          FULL=ffuf,nuclei,zap,served-secrets,public-maps
+          # run NAME "blocksrv args" ONLY URL [ENV=VALUE ...]
+          run() {
+            name=$1; bargs=$2; only=$3; url=$4; shift 4
+            d="$OUT/$name"; mkdir -p "$d"
+            pkill -f "$RUNNER_TEMP/blocksrv" || true; sleep 1
+            "$RUNNER_TEMP/blocksrv" -addr 127.0.0.1:8099 $bargs > "$d/srv.log" 2>&1 &
+            sleep 1
+            after=$(sed -n 's/.*-after \([0-9]*\).*/\1/p' <<<"$bargs"); until=$(sed -n 's/.*-until \([0-9]*\).*/\1/p' <<<"$bargs")
+            t0=$(date +%s)
+            env SIEGEKIT_ZZ_LOG="$d/zz.jsonl" "$@" "$RUNNER_TEMP/siegekit" scan --only "$only" --yes --no-save --report-dir "$d/report" "$url" > "$d/scan.log" 2>&1
+            ex=$?
+            printf 'after=%s\nuntil=%s\nexit=%s\nsecs=%s\nenforce=%s\n' "${after:--1}" "${until:--1}" "$ex" "$(( $(date +%s) - t0 ))" "$(printf '%s\n' "$@" | sed -n 's/^SIEGEKIT_ZZ_ENFORCE=//p')" > "$d/meta"
+            echo "== $name exit=$ex"
+          }
+          S=http://127.0.0.1:8099
+          J="-upstream http://127.0.0.1:3000"
+          # No block (false stops): the stand-in, Juice Shop and Gitea
+          # (scanned directly), every URL check that runs without input.
+          run N3-standin-noblock "" $FULL $S
+          run N1-juice-noblock "" $FULL http://127.0.0.1:3000
+          run N2-gitea-noblock "" $FULL http://127.0.0.1:3001
+          # Block from mid-check, shadow mode.
+          run B1-standin-ffuf "-after 1000" ffuf $S
+          run B2-standin-nuclei "-after 2000" nuclei $S
+          run B3-juice-zap "$J -after 40" zap $S
+          run B4-juice-ffuf-transient "$J -after 1000 -until 1500" ffuf $S
+          run B5-juice-nuclei "$J -after 3000" nuclei $S
+          run B6-juice-full "$J -after 2500" $FULL $S
+          # Each detector enforced.
+          for dd in d1 d2 d3 d4; do
+            run E-$dd-ffuf "-after 1000" ffuf $S SIEGEKIT_ZZ_ENFORCE=$dd
+            run E-$dd-nuclei "-after 2000" nuclei $S SIEGEKIT_ZZ_ENFORCE=$dd
+            run E-$dd-zap "$J -after 40" zap $S SIEGEKIT_ZZ_ENFORCE=$dd
+          done
+          # Header options behind a Vercel Authentication stand-in.
+          H="-require-header X-Vercel-Protection-Bypass=s3cr3t-zz"
+          run H0-none "$H" $FULL $S
+          run H1-generic "$H" $FULL $S "SIEGEKIT_ZZ_HEADERS=x-vercel-protection-bypass: s3cr3t-zz
+          Cookie: refused=1
+          Authorization: Bearer refused"
+          run H2-vercel "$H" $FULL $S SIEGEKIT_ZZ_VERCEL=s3cr3t-zz
+          true
+      - name: Secret in outputs
+        run: |
+          for c in H1-generic H2-vercel; do
+            echo "$c: files holding the secret: $(grep -rl 's3cr3t-zz' "$OUT/$c/report" "$OUT/$c/scan.log" 2>/dev/null | wc -l)"
+          done
+          echo "audit log lines holding the secret: $(grep -c 's3cr3t-zz' ~/.local/share/siegekit/audit.log 2>/dev/null || echo 'n/a')"
+          ls ~/.local/share/siegekit 2>/dev/null | head
+          for c in H1-generic; do echo "$c: requests carrying the refused Cookie/Authorization: $(grep -c 'refused' "$OUT/$c/srv.log")"; done
+      - name: Proof fetch behind the stand-in
+        run: |
+          cp .github/zz-measure/zz_hdr_test.go internal/verify/
+          go test -count=1 ./internal/verify -run ZZ -v 2>&1 | grep 'ZZ proof'
+          SIEGEKIT_ZZ_HEADERS='x-vercel-protection-bypass: s3cr3t-zz' go test -count=1 ./internal/verify -run ZZ -v 2>&1 | grep 'ZZ proof'
+          SIEGEKIT_ZZ_VERCEL=s3cr3t-zz go test -count=1 ./internal/verify -run ZZ -v 2>&1 | grep 'ZZ proof'
+      - name: Summary
+        if: always()
+        run: |
+          for d in "$OUT"/*/; do python3 .github/zz-measure/summ.py "$d"; done | tee "$OUT/summary.txt"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: r1p-${{ matrix.engine }}-${{ matrix.os }}
+          path: zz-out
+          retention-days: 14

@@ -90,6 +90,7 @@ type Proxy struct {
 	closed      bool
 	listener    net.Listener
 	srv         *http.Server
+	zz          *zzDetector // MEASUREMENT PROTOTYPE
 }
 
 // New checks cfg and prepares the proxy and its certificate authority.
@@ -126,6 +127,7 @@ func New(cfg Config) (*Proxy, error) {
 		p.ca, p.leaf = ca, leaf
 	}
 	p.transport = newTransport(cfg)
+	p.zz = newZZ(p)
 	return p, nil
 }
 
@@ -203,6 +205,7 @@ func Reachable(ctx context.Context, cfg Config) error {
 		return err
 	}
 	req.Header.Set("User-Agent", "SiegeKit/"+cfg.Version)
+	zzAddHeaders(req.Header)
 	resp, err := tr.RoundTrip(req)
 	if err != nil {
 		return fmt.Errorf("the target did not answer: %w", err)
@@ -282,6 +285,7 @@ func SendHeader(ctx context.Context, cfg Config, method, path string, header htt
 		}
 	}
 	req.Header.Set("User-Agent", "SiegeKit/"+cfg.Version)
+	zzAddHeaders(req.Header)
 	start := time.Now()
 	resp, err := tr.RoundTrip(req)
 	if err != nil {
@@ -481,6 +485,7 @@ func (p *Proxy) forward(w http.ResponseWriter, r *http.Request) {
 			pr.Out.Host = p.authority
 			ua := strings.TrimSpace(pr.In.Header.Get("User-Agent") + " SiegeKit/" + p.cfg.Version)
 			pr.Out.Header.Set("User-Agent", ua)
+			zzAddHeaders(pr.Out.Header)
 		},
 		Transport: p.transport,
 		ModifyResponse: func(resp *http.Response) error {
@@ -490,6 +495,7 @@ func (p *Proxy) forward(w http.ResponseWriter, r *http.Request) {
 			p.stats.Requests++
 			p.mu.Unlock()
 			p.result(resp.StatusCode >= 500, fmt.Sprintf("the target answered %s", resp.Status))
+			p.zz.answer(zzShapeOf(resp))
 			return nil
 		},
 		ErrorHandler: func(w http.ResponseWriter, _ *http.Request, err error) {

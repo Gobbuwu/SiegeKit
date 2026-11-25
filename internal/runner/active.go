@@ -92,6 +92,7 @@ func RunTargetOnly(ctx context.Context, e *sandbox.Engine, s sandbox.Spec, cfg e
 		}
 	}()
 	res, err := e.Run(runCtx, s)
+	p.ZZFinal() // MEASUREMENT PROTOTYPE
 	out := &ActiveResult{Result: res, Stats: p.Stats(), Stopped: p.StopReason()}
 	if out.Stopped != "" && errors.Is(err, context.Canceled) && ctx.Err() == nil {
 		// The proxy stopped the run: report it as a result, not an error.

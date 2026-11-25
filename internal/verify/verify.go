@@ -12,6 +12,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"github.com/Gobbuwu/SiegeKit/internal/egress"
 	"io"
 	"net"
 	"net/http"
@@ -180,6 +181,7 @@ func (c *Checker) checkWellKnown(ctx context.Context, u *target.URL, addrs []net
 		return err
 	}
 	req.Header.Set("User-Agent", "SiegeKit-verify")
+	egress.ZZAddHeaders(req.Header) // MEASUREMENT PROTOTYPE
 	resp, err := client.Do(req)
 	if err != nil {
 		return err
