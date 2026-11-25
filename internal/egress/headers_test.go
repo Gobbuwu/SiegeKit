@@ -14,7 +14,7 @@ import (
 const bypass = "s3cr3t-bypass-0123456789abcdefXY"
 
 func TestParseExtraHeaders(t *testing.T) {
-	h, err := ParseExtraHeaders("x-vercel-protection-bypass: " + bypass + "\r\n\n  CF-Access-Client-Id :  id-0123456789  \n")
+	h, err := ParseExtraHeaders("x-vercel-protection-bypass: " + bypass + "\r\n\n  CF-Access-Client-Id :  id-0123456789  \n") // gitleaks:allow (fake test value)
 	if err != nil {
 		t.Fatal(err)
 	}
