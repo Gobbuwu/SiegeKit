@@ -334,8 +334,9 @@ func SendHeader(ctx context.Context, cfg Config, method, path string, header htt
 	a.Body = b
 	if blk := cfg.Watch.answer(ctx, shape); blk != nil {
 		// This answer was the block page too: the check gets the stop,
-		// not the page.
-		return nil, &BlockedError{Block: blk}
+		// not the page, and the answer without its body, so the request
+		// is counted as answered by the target.
+		return &Answer{Status: a.Status, Header: a.Header, Took: a.Took}, &BlockedError{Block: blk}
 	}
 	return a, nil
 }
@@ -345,6 +346,14 @@ func SendHeader(ctx context.Context, cfg Config, method, path string, header htt
 type BlockedError struct{ Block *Block }
 
 func (e *BlockedError) Error() string { return "stopped by SiegeKit: " + e.Block.Reason }
+
+// IsBlocked reports whether err is or wraps a BlockedError. A check whose
+// request got one must stop: every later request is refused too, and its
+// pacing would only wait (ADR 0071).
+func IsBlocked(err error) bool {
+	var b *BlockedError
+	return errors.As(err, &b)
+}
 
 // fixedHeader are request headers SendHeader never takes from its caller:
 // SiegeKit labels every request, and the transport owns the rest.
@@ -528,6 +537,11 @@ func (p *Proxy) forward(w http.ResponseWriter, r *http.Request) {
 			ua := strings.TrimSpace(pr.In.Header.Get("User-Agent") + " SiegeKit/" + p.cfg.Version)
 			pr.Out.Header.Set("User-Agent", ua)
 			addExtra(pr.Out.Header, p.cfg.Header)
+			// Answers come uncompressed, as to the watch's start-page
+			// fetch, so their lengths can be compared (ADR 0071): a
+			// compressed block page never matched the start page, and Go's
+			// client, in ffuf and Nuclei, asks for gzip by itself.
+			pr.Out.Header.Del("Accept-Encoding")
 		},
 		Transport: p.transport,
 		ModifyResponse: func(resp *http.Response) error {

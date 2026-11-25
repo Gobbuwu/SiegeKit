@@ -493,12 +493,17 @@ func Check(ctx context.Context, cfg egress.Config, reqs []Request, acc Accounts,
 		if ctx.Err() != nil {
 			return Answer{}, ctx.Err()
 		}
+		if a != nil {
+			res.Requests++
+			if a.Status == http.StatusTooManyRequests {
+				res.Rate429++
+			}
+		}
+		if egress.IsBlocked(err) {
+			return Answer{}, err // the replay ends; what it read so far is kept
+		}
 		if a == nil {
 			return Answer{Err: errString(err)}, nil
-		}
-		res.Requests++
-		if a.Status == http.StatusTooManyRequests {
-			res.Rate429++
 		}
 		if err != nil {
 			return Answer{Status: a.Status, Err: errString(err)}, nil

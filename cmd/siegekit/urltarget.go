@@ -1600,7 +1600,9 @@ func runURL(ctx context.Context, u *target.URL, addrs []netip.Addr, mode target.
 					return fail(errors.New("interrupted; no report written"))
 				}
 				pr.Requests = res.Requests
-				if err != nil {
+				// A block ends the replay early; End below reports it and
+				// F2 drops what was read from the block page (ADR 0071).
+				if err != nil && !egress.IsBlocked(err) {
 					pr.Status, pr.Reason = report.Failed, err.Error()
 				} else {
 					authzFindings = authz.Findings(u.Origin(), res, o.harUser)
@@ -1634,7 +1636,7 @@ func runURL(ctx context.Context, u *target.URL, addrs []netip.Addr, mode target.
 					return fail(errors.New("interrupted; no report written"))
 				}
 				pr.Requests = res.Requests
-				if err != nil {
+				if err != nil && !egress.IsBlocked(err) {
 					pr.Status, pr.Reason = report.Failed, err.Error()
 				} else {
 					writeFindings = authz.WriteFindings(u.Origin(), res)

@@ -1,6 +1,8 @@
 package egress
 
 import (
+	"bytes"
+	"compress/gzip"
 	"context"
 	"errors"
 	"fmt"
@@ -28,6 +30,7 @@ type blockApp struct {
 	srv     *httptest.Server
 	after   atomic.Int64 // 0: never blocks
 	lift    atomic.Bool  // the block ends at the next start-page fetch after it began
+	gzip    atomic.Bool  // answers are gzipped when the request accepts gzip
 	n       atomic.Int64 // requests counted, without start-page fetches
 	pages   atomic.Int64 // start-page fetches
 	blocked atomic.Int64 // block pages answered to counted requests
@@ -67,8 +70,17 @@ func newBlockApp(t *testing.T, after int64) *blockApp {
 				a.blocked.Add(1)
 			}
 			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			body := strings.Repeat("c", 25000+int(i%11))
+			if a.gzip.Load() && strings.Contains(r.Header.Get("Accept-Encoding"), "gzip") {
+				var b bytes.Buffer
+				z := gzip.NewWriter(&b)
+				z.Write([]byte(body))
+				z.Close()
+				body = b.String()
+				w.Header().Set("Content-Encoding", "gzip")
+			}
 			w.WriteHeader(http.StatusForbidden)
-			fmt.Fprint(w, strings.Repeat("c", 25000+int(i%11)))
+			fmt.Fprint(w, body)
 			return
 		}
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -196,14 +208,20 @@ func TestWatchSendStops(t *testing.T) {
 	cfg.Watch = NewWatch(cfg).Begin(ctx)
 	a.after.Store(21)
 	var got error
+	var last *Answer
 	sent := 0
 	for i := range 100 {
-		_, err := Send(ctx, cfg, http.MethodGet, fmt.Sprintf("/p%d", i), "", nil, 1<<20)
+		ans, err := Send(ctx, cfg, http.MethodGet, fmt.Sprintf("/p%d", i), "", nil, 1<<20)
 		if err != nil {
-			got = err
+			got, last = err, ans
 			break
 		}
 		sent++
+	}
+	// The answer that set off the stop is returned without its body, so
+	// the caller counts it as answered by the target.
+	if last == nil || last.Status != http.StatusForbidden || last.Body != nil {
+		t.Errorf("the stopping answer: %+v", last)
 	}
 	var be *BlockedError
 	if !errors.As(got, &be) || !strings.Contains(got.Error(), "stopped by SiegeKit: the host stopped serving the app: 10 answers in a row and the start page were the same page, 403 (text/html,") {
@@ -271,6 +289,34 @@ func TestWatchProxyStops(t *testing.T) {
 	// One fetch at Begin, one for the not-found pages, one for the block.
 	if n := a.pages.Load(); n != 3 {
 		t.Errorf("%d start-page fetches", n)
+	}
+}
+
+// TestWatchProxyStopsCompressed checks D3 on a host that compresses its
+// answers for a tool that accepts gzip (Go's client asks for it by itself,
+// as ffuf and Nuclei do): the block page the tool gets and the start page
+// the watch fetches must be measured alike, or they never match.
+func TestWatchProxyStopsCompressed(t *testing.T) {
+	a := newBlockApp(t, 0)
+	a.gzip.Store(true)
+	ctx := context.Background()
+	unit := NewWatch(a.config(t)).Begin(ctx)
+	u := &upstream{srv: a.srv}
+	p, c, origin := start(t, u, "http", "app.test", func(c *Config) {
+		c.Watch = unit
+		c.MaxConns = 1
+	})
+	a.after.Store(11)
+	for i := range 100 {
+		if _, _, err := get(t, c, fmt.Sprintf("%s/w%d", origin, i), nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if p.Block() == nil || !strings.Contains(p.StopReason(), "10 answers in a row") {
+		t.Fatalf("not stopped: %q", p.StopReason())
+	}
+	if n := a.blocked.Load(); n != StreakAnswers {
+		t.Errorf("%d block pages forwarded, want %d", n, StreakAnswers)
 	}
 }
 

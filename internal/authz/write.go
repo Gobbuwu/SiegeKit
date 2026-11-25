@@ -947,10 +947,15 @@ func WriteCheck(ctx context.Context, cfg egress.Config, ws []Write, acc Accounts
 		if ctx.Err() != nil {
 			return Answer{}, ctx.Err()
 		}
+		if a != nil {
+			res.Requests++
+		}
+		if egress.IsBlocked(err) {
+			return Answer{}, err // the replay ends; what it read so far is kept
+		}
 		if a == nil {
 			return Answer{Err: errString(err)}, nil
 		}
-		res.Requests++
 		lastHeader = a.Header
 		if err != nil {
 			return Answer{Status: a.Status, Err: errString(err)}, nil

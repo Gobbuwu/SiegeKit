@@ -68,7 +68,8 @@ var (
 // ProbeSpecs sends one GET with get (egress.Get outside tests) for each of
 // Paths, no faster than rate per second, following no redirects and
 // reading at most openapi.MaxSize bytes, and returns every spec found. It
-// fails only when ctx ends.
+// fails only when ctx ends, and stops early when the host stopped serving
+// the app (egress.BlockedError).
 func ProbeSpecs(ctx context.Context, get Getter, cfg egress.Config, rate float64) (Probe, error) {
 	var p Probe
 	var interval time.Duration
@@ -90,6 +91,9 @@ func ProbeSpecs(ctx context.Context, get Getter, cfg egress.Config, rate float64
 		status, b, err := get(ctx, cfg, path, openapi.MaxSize)
 		if status != 0 {
 			p.Requests++
+		}
+		if egress.IsBlocked(err) {
+			return p, nil // the watch reports the block (ADR 0071)
 		}
 		if err != nil || status != 200 {
 			continue
