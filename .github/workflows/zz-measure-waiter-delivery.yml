@@ -25,8 +25,7 @@ env:
 jobs:
   linux:
     name: Linux (${{ matrix.engine }}, ${{ matrix.os }})
-    # Round 1 only (run 45508679731); round 2 is macOS.
-    if: false
+    # Round 3: A and D (derived image, SIEGEKIT_MEASURE_WAITER=derived).
     runs-on: ${{ matrix.os }}
     timeout-minutes: 120
     strategy:
@@ -64,13 +63,14 @@ jobs:
             SHA="$(jq -r '.fixture | split("@")[1]' "$answers")"
             dir="$T/target-${REPO//\//__}"
             git init -q "$dir"; git -C "$dir" fetch -q --depth 1 "https://github.com/$REPO.git" "$SHA"; git -C "$dir" -c advice.detachedHead=false checkout -q FETCH_HEAD
-            for v in A:sk-plain: Bdyn:sk-plain:own-binary Bstatic:sk-static:own-binary C:sk-plain:none; do
+            for v in A:sk-plain: D:sk-plain:derived A2:sk-plain: D2:sk-plain:derived; do
               IFS=: read n b e <<<"$v"
               r="$T/report-$n-${REPO//\//__}"
               t0=$(date +%s)
               SIEGEKIT_MEASURE_WAITER=$e $T/$b scan --yes --update --no-save --report-dir "$r" "$dir" > "$r.log" 2>&1
               code=$?
               echo "RESULT $REPO $n exit=$code s=$(( $(date +%s)-t0 ))"
+              grep MEASURE-D "$r.log" | sed 's/@sha256:[0-9a-f]*//; s/ id=.*//' | sort | uniq -c | head -12
               jq -r '.plugins[] | "  \(.id) \(.status) \(.stop // "") usage=\(if .usage then "\(.usage.memoryPeak)/\(.usage.processPeak)" else "none" end) \(.reason // "" | .[0:160])"' "$r/report.json"
               go run ./internal/knownanswers/check -answers "$answers" -report "$r/report.json" -observed "$r.observed.json" > "$r.ka" 2>&1
               echo "  known answers exit=$? $(tail -1 "$r.ka" | cut -c1-200)"
@@ -121,9 +121,7 @@ jobs:
           set -u
           T=$RUNNER_TEMP
           go build -o $T/sk-plain ./cmd/siegekit
-          git fetch -q --depth 1 origin main && git worktree add -q $T/main FETCH_HEAD
-          (cd $T/main && git log -1 --format='main at %h %s' && go build -o $T/sk-main ./cmd/siegekit)
-          file $T/sk-plain $T/sk-main
+          file $T/sk-plain
           echo "TMPDIR=$TMPDIR"; colima list; colima ssh -- sh -c "mount | grep -E 'virtiofs|9p|sshfs' | cut -c1-160"
       - name: Scan a real repository with each variant (round 2)
         run: |
@@ -135,7 +133,7 @@ jobs:
           dir="$T/target"
           git init -q "$dir"; git -C "$dir" fetch -q --depth 1 "https://github.com/$REPO.git" "$SHA"; git -C "$dir" -c advice.detachedHead=false checkout -q FETCH_HEAD
           mkdir -p "$HOME/sk-tmp"; chmod 700 "$HOME/sk-tmp"
-          for v in main:sk-main::default A:sk-plain::default main:sk-main::home A:sk-plain::home B:sk-plain:own-binary:home C:sk-plain:none:home; do
+          for v in A:sk-plain::home D:sk-plain:derived:home; do
             IFS=: read n b e tmp <<<"$v"
             r="$T/report-$n-$tmp"
             if [ "$tmp" = home ]; then td="$HOME/sk-tmp"; else td="$TMPDIR"; fi
@@ -145,6 +143,7 @@ jobs:
             echo "RESULT $REPO $n tmp=$tmp exit=$code s=$(( $(date +%s)-t0 ))"
             jq -r '.plugins[] | "  \(.id) \(.status) \(.stop // "") usage=\(if .usage then "\(.usage.memoryPeak)/\(.usage.processPeak)" else "none" end) \(.reason // "" | .[0:200])"' "$r/report.json"
             grep -m3 -E "docker: |Error|exec format" "$r.log" | cut -c1-300
+            grep MEASURE-D "$r.log" | sed 's/@sha256:[0-9a-f]*//; s/ id=.*//' | head -12
             go run ./internal/knownanswers/check -answers "$answers" -report "$r/report.json" -observed "$r.observed.json" > "$r.ka" 2>&1
             echo "  known answers exit=$? $(tail -1 "$r.ka" | cut -c1-200)"
           done
