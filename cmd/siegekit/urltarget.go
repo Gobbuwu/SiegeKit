@@ -86,26 +86,27 @@ func otherScheme(s string) string {
 
 // urlScan holds the scan flags that apply to a URL target.
 type urlScan struct {
-	deployed       bool
-	authorizedHost string
-	only, skip     []string
-	threshold      findings.Severity
-	reportDir      string
-	noSave         bool
-	consent        consent
-	requireAll     bool
-	openAPI        string // --openapi: a file or a URL on the target's origin
-	profile        string // --profile: full or quick
-	login          loginFlags
-	loginPassword  string // SIEGEKIT_LOGIN_PASSWORD (ADR 0062)
-	har, harUser   string // --har and --har-user (ADR 0035)
-	replayWrites   bool   // --replay-writes (ADR 0049)
-	rateLimit      rateLimitFlags
-	pageFlags      map[ratelimit.Page]*pageFlag // --reset-url and the like (ADR 0055)
-	mailCatcher    string                       // --mail-catcher (ADR 0056)
-	backendURL     string                       // --backend-url (ADR 0037)
-	storageURL     string                       // --storage-url (ADR 0058)
-	source         string                       // --source: the app's repository (ADR 0037)
+	deployed        bool
+	authorizedHost  string
+	only, skip      []string
+	threshold       findings.Severity
+	reportDir       string
+	noSave          bool
+	consent         consent
+	requireAll      bool
+	requireComplete bool
+	openAPI         string // --openapi: a file or a URL on the target's origin
+	profile         string // --profile: full or quick
+	login           loginFlags
+	loginPassword   string // SIEGEKIT_LOGIN_PASSWORD (ADR 0062)
+	har, harUser    string // --har and --har-user (ADR 0035)
+	replayWrites    bool   // --replay-writes (ADR 0049)
+	rateLimit       rateLimitFlags
+	pageFlags       map[ratelimit.Page]*pageFlag // --reset-url and the like (ADR 0055)
+	mailCatcher     string                       // --mail-catcher (ADR 0056)
+	backendURL      string                       // --backend-url (ADR 0037)
+	storageURL      string                       // --storage-url (ADR 0058)
+	source          string                       // --source: the app's repository (ADR 0037)
 
 	// Read from --har, SIEGEKIT_SESSION_B and SIEGEKIT_SESSION_C before
 	// any request.
@@ -1555,7 +1556,7 @@ func runURL(ctx context.Context, u *target.URL, addrs []netip.Addr, mode target.
 			run.Findings = []findings.Finding{}
 		}
 	}
-	return finish(run, o.reportDir, o.noSave, u.Host, o.threshold, o.requireAll, stdout, stderr)
+	return finish(run, o.reportDir, o.noSave, u.Host, o.threshold, o.requireAll, o.requireComplete, stdout, stderr)
 }
 
 // zapActive is the plugin that attacks the HAR file's requests (ADR 0047).

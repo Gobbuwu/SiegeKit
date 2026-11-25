@@ -124,10 +124,11 @@ type weakHit struct {
 	skip   string // non-empty: counted, not reported
 }
 
-func runWeakPasswords(ctx context.Context, root string) ([]findings.Finding, string, error) {
+func runWeakPasswords(ctx context.Context, root string) (Outcome, error) {
 	var out []findings.Finding
+	var g gaps
 	skipped := map[string]int{}
-	err := walk(ctx, root, func(rel string) bool {
+	err := walk(ctx, root, &g, func(rel string) bool {
 		for _, d := range strings.Split(path.Dir(rel), "/") {
 			if generatedDirs[d] {
 				return false
@@ -146,9 +147,9 @@ func runWeakPasswords(ctx context.Context, root string) ([]findings.Finding, str
 		return nil
 	})
 	if err != nil {
-		return nil, "", err
+		return Outcome{}, err
 	}
-	return out, weakSummary(len(out), skipped), nil
+	return Outcome{Findings: out, Result: weakSummary(len(out), skipped), Gaps: g.list}, nil
 }
 
 func weakSummary(reported int, skipped map[string]int) string {

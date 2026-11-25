@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/Gobbuwu/SiegeKit/internal/report"
 	"github.com/Gobbuwu/SiegeKit/internal/testpath"
 )
 
@@ -23,6 +24,8 @@ type Source struct {
 	FirebaseFolders []string
 	SupabaseBuckets []string
 	SupabaseFolders []string
+	// Gaps names files and folders not read (ADR 0067).
+	Gaps []report.Gap
 	// Which backend the repository is set up for, for a backend or storage
 	// the app's scripts do not name (ADR 0061): Supabase when it has a
 	// supabase/ directory with config.toml or a .sql file (supabase start
@@ -43,12 +46,14 @@ type SourceFile struct {
 var reSpecName = regexp.MustCompile(`^(?i)(openapi|swagger)[a-z0-9._-]*\.(json|ya?ml)$`)
 
 // ReadSource reads table names, database paths and OpenAPI candidates from
-// root. Spec files over MaxFileSize are skipped.
+// root. Text files over MaxFileSize and folders deeper than MaxDepth are
+// not read and are named in Gaps.
 func ReadSource(ctx context.Context, root string) (Source, error) {
 	var s Source
 	sql := map[string][]byte{}
 	paths, fbFolders := map[string]bool{}, map[string]bool{}
-	err := walk(ctx, root, func(rel string) bool {
+	var g gaps
+	err := walk(ctx, root, &g, func(rel string) bool {
 		base := path.Base(rel)
 		if reSpecName.MatchString(base) {
 			return true // a spec in a test folder is still a spec candidate; the shortest path wins
@@ -112,6 +117,7 @@ func ReadSource(ctx context.Context, root string) (Source, error) {
 		}
 		return a < b
 	})
+	s.Gaps = g.list
 	return s, nil
 }
 

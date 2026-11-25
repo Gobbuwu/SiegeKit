@@ -41,7 +41,7 @@ jobs:
           - { os: macos-latest }
     runs-on: ${{ matrix.os }}
     # Above the worst case of the steps' own limits (go test -timeout 30m,
-    # 17 minutes of fuzzing, the self-scan), so a hung test is ended by
+    # 17.5 minutes of fuzzing, the self-scan), so a hung test is ended by
     # Go with its goroutine dump, not by GitHub without one (full project
     # check F13).
     timeout-minutes: 60
@@ -128,6 +128,7 @@ jobs:
           go test -run='^$' -fuzz='^FuzzParseStorage$' -fuzztime=30s ./internal/backend
           go test -run='^$' -fuzz='^FuzzReadStorageScripts$' -fuzztime=30s ./internal/backend
           go test -run='^$' -fuzz='^FuzzStorageRuleFolders$' -fuzztime=30s ./internal/checks
+          go test -run='^$' -fuzz='^FuzzStatus$' -fuzztime=30s ./internal/waiter
       - name: Staticcheck
         # On both architectures: each checks the code built for its GOARCH.
         if: matrix.engine == 'podman'

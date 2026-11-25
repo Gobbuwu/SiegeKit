@@ -33,10 +33,10 @@ var backendRules = Check{
 	Run:     noResult(runBackendRules),
 }
 
-func runBackendRules(ctx context.Context, root string) ([]findings.Finding, error) {
+func runBackendRules(ctx context.Context, root string, g *gaps) ([]findings.Finding, error) {
 	var out []findings.Finding
 	sql := map[string][]byte{}
-	err := walk(ctx, root, func(rel string) bool {
+	err := walk(ctx, root, g, func(rel string) bool {
 		if testpath.IsTest(rel) {
 			return false
 		}

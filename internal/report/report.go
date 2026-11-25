@@ -114,6 +114,113 @@ type PluginResult struct {
 	// "limited after 6 of 20 attempts" for the login throttling check
 	// (ADR 0030).
 	Result string `json:"result,omitempty"`
+	// Stop says, as a fixed word, why the check was cut short (ADR 0067,
+	// decision 1). The check is failed (timed-out for StopTimeLimit) and
+	// its findings up to the stop are kept.
+	Stop Stop `json:"stop,omitempty"`
+	// Gaps names what the check could not read, each with a typed cause
+	// (ADR 0067, decision 1); at most MaxGaps are listed and GapCount
+	// counts them all. Gaps do not change the exit code unless
+	// --require-complete is given.
+	Gaps     []Gap `json:"gaps,omitempty"`
+	GapCount int   `json:"gapCount,omitempty"`
+	// Completeness is set on every check that ran: whether it compared what
+	// it was given with what it checked (ADR 0067).
+	Completeness Completeness `json:"completeness,omitempty"`
+	// Usage is what the check's container used, as the waiter measured it.
+	Usage *Usage `json:"usage,omitempty"`
+}
+
+// Stop is why a check was cut short (ADR 0067).
+type Stop string
+
+// Run stops. A stopped check fails the run with exit code 4.
+const (
+	StopTimeLimit      Stop = "time-limit"
+	StopMemoryKill     Stop = "memory-kill"
+	StopProcessLimit   Stop = "process-limit"
+	StopKilled         Stop = "killed"
+	StopOutputLimit    Stop = "output-limit"
+	StopCountersUnread Stop = "counters-unread"
+	StopTargetStopped  Stop = "target-stopped" // SiegeKit's proxy stopped the run: the target kept failing
+	StopFileLimit      Stop = "file-limit"     // the tree has more files than a check reads
+)
+
+// Completeness says whether a check that ran showed it checked everything
+// it was given (ADR 0067, decision 1).
+type Completeness string
+
+const (
+	// Complete: the check compared what it was given with what it checked
+	// and found nothing left out.
+	Complete Completeness = "complete"
+	// WithGaps: the check named what it could not read in Gaps.
+	WithGaps Completeness = "gaps"
+	// NotProven: the tool leaves no signal to compare, so the check cannot
+	// show it read everything.
+	NotProven Completeness = "not-proven"
+)
+
+// GapCause says, as a fixed word, why something was not checked.
+type GapCause string
+
+// Gap causes.
+const (
+	GapTooLarge  GapCause = "too-large"  // a file over the size a check reads
+	GapTooDeep   GapCause = "too-deep"   // a folder deeper than a check descends
+	GapNotParsed GapCause = "not-parsed" // the tool could not parse the file
+	GapOverLimit GapCause = "over-limit" // more items than the check takes
+	GapNoAnswer  GapCause = "no-answer"  // a request for it got no usable answer
+)
+
+// Gap is one thing a check could not read.
+type Gap struct {
+	Cause GapCause `json:"cause"`
+	// Path is a slash-separated path in the target, or a URL path.
+	Path   string `json:"path"`
+	Detail string `json:"detail,omitempty"`
+}
+
+// MaxGaps is how many gaps a check lists; GapCount counts the rest.
+const MaxGaps = 200
+
+// AddGap records g, listing it while fewer than MaxGaps are listed.
+func (p *PluginResult) AddGap(g Gap) {
+	p.GapCount++
+	if len(p.Gaps) < MaxGaps {
+		p.Gaps = append(p.Gaps, g)
+	}
+}
+
+// Usage is the program memory and processes a check's container used.
+type Usage struct {
+	// MemoryPeak is the highest program memory sampled every 0.2 s, in
+	// bytes (anon memory; file cache left out).
+	MemoryPeak   int64 `json:"memoryPeak"`
+	MemoryLimit  int64 `json:"memoryLimit"`
+	ProcessPeak  int64 `json:"processPeak"`
+	ProcessLimit int64 `json:"processLimit"`
+}
+
+// GapNote says in one line what the check could not read, or "".
+func (p PluginResult) GapNote() string {
+	if p.GapCount == 0 {
+		return ""
+	}
+	const show = 5
+	var names []string
+	for _, g := range p.Gaps[:min(show, len(p.Gaps))] {
+		n := g.Path + " (" + string(g.Cause)
+		if g.Detail != "" {
+			n += ": " + g.Detail
+		}
+		names = append(names, n+")")
+	}
+	s := fmt.Sprintf("%d not checked: %s", p.GapCount, strings.Join(names, ", "))
+	if p.GapCount > len(names) {
+		s += fmt.Sprintf(" and %d more (all listed in report.json, up to %d)", p.GapCount-len(names), MaxGaps)
+	}
+	return s
 }
 
 // IgnoreNote says in one line what the repository told the tool to ignore,
@@ -239,6 +346,7 @@ var NotTested = []string{
 	"The running application, unless you scanned its URL: a directory scan only reads files. A URL scan crawls the app with ZAP and runs ZAP's passive checks, runs Nuclei's templates for known issues, exposed files and misconfigurations, and asks for common paths with ffuf. Attack tests (ZAP's attack scan, Nuclei's intrusive and default-login templates, Schemathesis's API tests) run only on local targets; deployed targets get only GET and HEAD requests until request limits are measured. ZAP's crawler follows HTML links, so pages that a single-page app builds in JavaScript are mostly not reached. Nuclei runs only its HTTP templates (its TCP, DNS, SSL and JavaScript templates cannot pass SiegeKit's proxy), without out-of-band callbacks (so blind flaws such as blind SSRF are not found), and without its denial-of-service, fuzzing and brute-force templates; its default-login templates, which try each vendor's documented factory logins once, run only on local targets. ffuf guesses 4,751 common paths on local targets but only 210 on deployed targets, so exposed files with other names are missed there. Schemathesis tests an API only with an OpenAPI or Swagger 2.0 spec, given with --openapi or found at one of 11 common paths; APIs without one are not tested by it, and its random inputs can miss bugs. The login throttling check runs only on local targets and only with a login given by --login-url, --login-user and --login-body; it does not see a limit set above the number of attempts it sends (20 by default), one per IP address, or one across many accounts. The rate-limit check runs only on local targets, on one URL given by --rate-limit-url that answers without a login; it does not see a limit set above the number of requests it sends (20 by default), one per IP address, one that only slows answers, or one that shows no 429 or 503 and no rate-limit header. ZAP's attack scan sends request bodies (XML, JSON, forms) only for the requests of a --har recording, so XML external entities (XXE) and flaws in writes the recording does not hold are not tested, and SAML is not tested. The public-maps check looks for an API spec only at 11 common paths (a spec elsewhere, Swagger UI mounted elsewhere than /api-docs and GraphQL schemas are not found) and for the source maps of the files the start page links. The served-secrets check scans for keys only the start page and the same-origin scripts, styles, JSON files and source maps it links (at most 200 requests, 10 MiB each), with Gitleaks' rules: scripts loaded later by other scripts, other pages, files on other origins such as CDNs, inline source maps and files behind a login are not scanned. sqlmap and Nikto are planned for M2.",
 	"The source code, unless you scanned its directory: a URL scan only sends requests to the running app.",
 	"Code in languages without an analyzer: Python (bandit) and Go (gosec) code is analyzed; JavaScript, TypeScript and other languages are not yet (planned for M2). Secrets, dependencies and configuration files are checked in any language.",
+	"Dependency and version-control folders in SiegeKit's own repository checks (backend-rules, dotenv-gitignore, weak-passwords): they do not read .git, node_modules, vendor, .venv, venv or __pycache__. Text files over 1 MiB and folders deeper than 40 levels are not read either; each check names those in its gaps.",
 	"Development dependencies in pnpm lockfiles older than version 9: Trivy leaves them out of its results, so their vulnerabilities are not reported. In npm, Yarn, Bun and uv lockfiles development dependencies are scanned and a finding says when the package is one (measured); other lockfile formats were not measured.",
 	"Access control: whether every request checks that this user may access this record. The access-control check (URL scans with --har) replays only the GET and HEAD requests of a browser recording made as one test account, plus OpenAPI routes without path parameters, as a second account and with no login; it reports an answer only when the second account gets exactly the first account's answer while a request with no login is refused, or when a request with no login gets the first account's answer with its login name in it, or a JSON answer with a field named like a password, hash, secret, key or token that holds a value. It does not test pages the recording did not reach, other IDs than the recorded ones, changes (POST, PUT, PATCH, DELETE), answers that differ on every request, secrets given only to logged-in accounts, or data readable with no login that neither names the first account nor has a field named like a secret. Without --har, access control is not tested.",
 	"Business logic: skipping steps, replaying actions, tampering with prices or limits.",
@@ -255,6 +363,33 @@ func (r *Run) Complete() bool {
 		}
 	}
 	return true
+}
+
+// GapCount counts what the checks that ran could not read.
+func (r *Run) GapCount() int {
+	n := 0
+	for _, p := range r.Plugins {
+		if p.Status == Ran {
+			n += p.GapCount
+		}
+	}
+	return n
+}
+
+// MarkCompleteness sets each ran check's completeness that its runner left
+// unset: with gaps when it named any, otherwise not proven, so no check
+// is called complete without a signal (ADR 0067).
+func (r *Run) MarkCompleteness() {
+	for i, p := range r.Plugins {
+		switch {
+		case p.Status != Ran:
+			r.Plugins[i].Completeness = ""
+		case p.GapCount > 0:
+			r.Plugins[i].Completeness = WithGaps
+		case p.Completeness == "":
+			r.Plugins[i].Completeness = NotProven
+		}
+	}
 }
 
 // CheckCauses makes every skipped check without a valid cause failed, so a
@@ -313,15 +448,16 @@ const (
 )
 
 // ExitCode returns ExitFindings if any finding is at or above threshold,
-// otherwise ExitIncomplete if any plugin failed or timed out, otherwise
+// otherwise ExitIncomplete if any plugin failed or timed out, or, with
+// requireComplete, if a check that ran named gaps (ADR 0067), otherwise
 // ExitClean. An incomplete run is never reported as clean.
-func (r *Run) ExitCode(threshold findings.Severity) int {
+func (r *Run) ExitCode(threshold findings.Severity, requireComplete bool) int {
 	for _, f := range r.Findings {
 		if f.Severity >= threshold {
 			return ExitFindings
 		}
 	}
-	if !r.Complete() || r.RanCount() == 0 {
+	if !r.Complete() || r.RanCount() == 0 || requireComplete && r.GapCount() > 0 {
 		return ExitIncomplete
 	}
 	return ExitClean
@@ -444,6 +580,7 @@ func WriteHTML(w io.Writer, r *Run) error {
 		"VersionNote": versionNote,
 		"Headline":    r.Headline(),
 		"Complete":    r.Complete(),
+		"Gaps":        r.GapCount(),
 		"Plugins":     plugins,
 		"NotTested":   NotTested,
 		"Counts": []struct {
@@ -479,7 +616,8 @@ code,pre{font:13px ui-monospace,monospace;white-space:pre-wrap;word-break:break-
 <body>
 <h1>SiegeKit report</h1>
 <p><strong>{{.Headline}}</strong></p>
-{{if not .Complete}}<p class="warn">This run is incomplete: at least one check failed or timed out. Missing checks may hide issues.</p>{{end}}
+{{if not .Complete}}<p class="warn">This run is incomplete: at least one check failed, timed out or was cut short. Missing checks may hide issues.</p>{{end}}
+{{with .Gaps}}<p class="warn">{{.}} file(s) or item(s) could not be checked; each check below names them.</p>{{end}}
 <p>Target: <code>{{.Run.Target}}</code> · Mode: {{.Run.Mode}} · SiegeKit {{.Run.SiegeKitVersion}} · {{.Run.Started.Format "2006-01-02 15:04 MST"}}{{with .Run.Environment}} · {{.String}}{{end}}</p>
 
 {{with .Run.Comparison}}<h2>Since the last scan</h2>
@@ -495,7 +633,7 @@ code,pre{font:13px ui-monospace,monospace;white-space:pre-wrap;word-break:break-
 <h2>What was tested</h2>
 <table>
 <tr><th>Check</th><th>Family</th><th>Tool</th><th>Status</th><th>Findings</th></tr>
-{{range .Plugins}}<tr><td>{{.ID}}</td><td>{{.Family}}</td><td>{{.Tool}} {{.Version}}</td><td>{{.Status}}{{if .Reason}}: {{.Reason}}{{end}}{{with .IgnoreNote}}<br>Repository ignores: {{.}}{{end}}{{with .Input}}<br>Tested from: {{.}}{{end}}{{with .Result}}<br>Result: {{.}}{{end}}{{if or .Requests .Refused}}<br>Requests answered by the target: {{.Requests}}. Refused by SiegeKit: {{.Refused}}{{if .RefusedTo}} ({{range $i, $d := .RefusedTo}}{{if $i}}, {{end}}<code>{{$d}}</code>{{end}}){{end}}.{{end}}</td><td>{{.Findings}}</td></tr>
+{{range .Plugins}}<tr><td>{{.ID}}</td><td>{{.Family}}</td><td>{{.Tool}} {{.Version}}</td><td>{{.Status}}{{if .Reason}}: {{.Reason}}{{end}}{{with .IgnoreNote}}<br>Repository ignores: {{.}}{{end}}{{with .Input}}<br>Tested from: {{.}}{{end}}{{with .Result}}<br>Result: {{.}}{{end}}{{with .Stop}}<br>Cut short: {{.}}{{end}}{{with .GapNote}}<br>Gaps: {{.}}{{end}}{{if eq .Completeness "not-proven"}}<br>Not proven complete: the tool gives no count of what it read.{{end}}{{if or .Requests .Refused}}<br>Requests answered by the target: {{.Requests}}. Refused by SiegeKit: {{.Refused}}{{if .RefusedTo}} ({{range $i, $d := .RefusedTo}}{{if $i}}, {{end}}<code>{{$d}}</code>{{end}}){{end}}.{{end}}</td><td>{{.Findings}}</td></tr>
 {{else}}<tr><td colspan="5">No checks were selected.</td></tr>{{end}}
 </table>
 

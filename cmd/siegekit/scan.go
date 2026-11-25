@@ -110,6 +110,12 @@ Flags:
                     as an incomplete run (exit code 4 unless there are
                     findings); tests left out by the mode, the profile, a
                     missing input or the target's files do not count
+  --require-complete
+                    treat files or items a check could not read (the "gaps"
+                    each check names) as an incomplete run (exit code 4
+                    unless there are findings); without it they are named
+                    but do not change the exit code. A check cut short
+                    always makes the run incomplete
   --openapi FILE_OR_URL
                     the API's OpenAPI or Swagger 2.0 spec (JSON or YAML) for
                     Schemathesis and access-control (on local targets every
@@ -244,6 +250,7 @@ func scan(args []string, stdout, stderr io.Writer) int {
 	yes := fl.Bool("yes", false, "")
 	noInstall := fl.Bool("no-install", false, "")
 	requireAll := fl.Bool("require-all", false, "")
+	requireComplete := fl.Bool("require-complete", false, "")
 	openAPI := fl.String("openapi", "", "")
 	profile := fl.String("profile", "full", "")
 	var lf loginFlags
@@ -380,7 +387,7 @@ func scan(args []string, stdout, stderr io.Writer) int {
 			deployed: *deployed, authorizedHost: *authorizedHost,
 			only: splitList(*only), skip: splitList(*skip), threshold: threshold,
 			reportDir: *reportDir, noSave: *noSave, consent: consent{yes: *yes, none: *noInstall},
-			requireAll: *requireAll, openAPI: *openAPI, profile: *profile, login: lf,
+			requireAll: *requireAll, requireComplete: *requireComplete, openAPI: *openAPI, profile: *profile, login: lf,
 			har: *har, harUser: *harUser, replayWrites: *replayWrites, rateLimit: rl, pageFlags: pages,
 			mailCatcher: *mailCatcher, backendURL: *backendURL, storageURL: *storageURL, source: *source,
 		}, stdout, stderr)
@@ -455,7 +462,7 @@ func scan(args []string, stdout, stderr io.Writer) int {
 		return fail(err)
 	}
 
-	return finish(run, *reportDir, *noSave, filepath.Base(target), threshold, *requireAll, stdout, stderr)
+	return finish(run, *reportDir, *noSave, filepath.Base(target), threshold, *requireAll, *requireComplete, stdout, stderr)
 }
 
 // badCause is told which checks were skipped with no valid cause; the
@@ -464,11 +471,12 @@ var badCause = func([]string) {}
 
 // finish writes the reports, prints the summary, saves the run unless
 // noSave, and returns the exit code.
-func finish(run *report.Run, reportDir string, noSave bool, name string, threshold findings.Severity, requireAll bool, stdout, stderr io.Writer) int {
+func finish(run *report.Run, reportDir string, noSave bool, name string, threshold findings.Severity, requireAll, requireComplete bool, stdout, stderr io.Writer) int {
 	fail := func(err error) int {
 		fmt.Fprintf(stderr, "siegekit scan: %v\n", err)
 		return exitInvalid
 	}
+	run.MarkCompleteness()
 	if bad := run.CheckCauses(); len(bad) > 0 {
 		badCause(bad)
 		fmt.Fprintf(stderr, "siegekit scan: SiegeKit bug: %s skipped with no valid cause; reported as failed\n", strings.Join(bad, ", "))
@@ -498,7 +506,15 @@ func finish(run *report.Run, reportDir string, noSave bool, name string, thresho
 
 	fmt.Fprintf(stdout, "\n%s\n", run.Headline())
 	if !run.Complete() {
-		fmt.Fprintln(stdout, "This run is incomplete: at least one check failed or timed out.")
+		fmt.Fprintln(stdout, "This run is incomplete: at least one check failed, timed out or was cut short.")
+	}
+	if n := run.GapCount(); n > 0 {
+		fmt.Fprintf(stdout, "%d file(s) or item(s) could not be checked; each check below names them", n)
+		if requireComplete {
+			fmt.Fprintln(stdout, " (--require-complete: the run counts as incomplete).")
+		} else {
+			fmt.Fprintln(stdout, " (use --require-complete to fail the run on them).")
+		}
 	}
 	fmt.Fprintln(stdout)
 	for _, p := range run.Plugins {
@@ -514,6 +530,15 @@ func finish(run *report.Run, reportDir string, noSave bool, name string, thresho
 		}
 		if p.Result != "" {
 			line += " (result: " + p.Result + ")"
+		}
+		if p.Stop != "" {
+			line += " (cut short: " + string(p.Stop) + ")"
+		}
+		if n := p.GapNote(); n != "" {
+			line += " (gaps: " + n + ")"
+		}
+		if p.Completeness == report.NotProven {
+			line += " (not proven complete)"
 		}
 		if p.Requests > 0 || p.Refused > 0 {
 			line += fmt.Sprintf(" (%d request(s) answered by the target, %d refused by SiegeKit", p.Requests, p.Refused)
@@ -542,7 +567,7 @@ func finish(run *report.Run, reportDir string, noSave bool, name string, thresho
 		fmt.Fprintf(stdout, "Saved run %s\n", id)
 	}
 	fmt.Fprintln(stdout, "Automated checks do not cover everything; see \"Not tested by SiegeKit\" in the HTML report.")
-	code := run.ExitCode(threshold)
+	code := run.ExitCode(threshold, requireComplete)
 	if requireAll && code == report.ExitClean {
 		// Only a missing or declined dependency counts (ADR 0016, ADR 0041):
 		// a check left out by the target mode, the profile, a missing input

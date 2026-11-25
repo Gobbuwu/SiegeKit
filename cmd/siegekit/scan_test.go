@@ -137,7 +137,7 @@ func TestScan(t *testing.T) {
 	if code := run([]string{"scan", "--yes", "--update", target, "--report-dir", reports}, &out, &errb); code != exitOK {
 		t.Fatalf("exit %d: %s %s", code, out.String(), errb.String())
 	}
-	if !strings.Contains(out.String(), "No issues found by the 8 check(s) that ran.") || !strings.Contains(out.String(), "Saved run") {
+	if !strings.Contains(out.String(), "No issues found by the 7 check(s) that ran.") || !strings.Contains(out.String(), "Saved run") {
 		t.Errorf("output: %s", out.String())
 	}
 	for _, name := range []string{"report.html", "report.json", "report.sarif"} {
@@ -177,7 +177,7 @@ func TestScanErrors(t *testing.T) {
 		{"yes and no-install", []string{"--yes", "--no-install", dir}, nil, nil, exitUsage, "cannot be used together"},
 		{"no engine", []string{"--no-save", "--report-dir", filepath.Join(dir, "r0"), dir}, nil, errors.New("no container engine found"), exitOK, "SiegeKit does not install one"},
 		{"incomplete", []string{"--no-save", "--report-dir", filepath.Join(dir, "r"), dir}, fakeExec(func(sandbox.Spec) (*sandbox.Result, error) {
-			return &sandbox.Result{Status: sandbox.TimedOut}, nil
+			return &sandbox.Result{Status: sandbox.TimedOut, Stop: sandbox.StopTimeLimit, StopReason: "stopped after 30 seconds, its time limit"}, nil
 		}), nil, 4, "incomplete"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
