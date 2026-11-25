@@ -152,32 +152,62 @@ func parseIgnore(line string) (ignoreRule, bool) {
 	return r, true
 }
 
-// gitClasses rewrites git's negated class "[!...]" as path.Match's
-// "[^...]": path.Match reads "!" there as a plain character, the opposite
-// of git (measured with git check-ignore, ADR 0068).
+// gitClasses rewrites git's bracket classes in path.Match's syntax, where
+// the two differ (measured with git check-ignore, ADR 0068): git negates a
+// class with "!" as well as "^", where path.Match reads "!" as a member,
+// and git reads a "]" first in a class, and a "-" first or last, as
+// members, where path.Match refuses them unescaped. A class git leaves
+// open stays as it is, and path.Match refuses it.
 func gitClasses(p string) string {
-	b := []byte(p)
-	for i := 0; i < len(b); i++ {
-		switch b[i] {
-		case '\\':
-			i++ // the next character is literal
-		case '[':
-			if i+1 < len(b) && b[i+1] == '!' {
-				b[i+1] = '^'
+	var out strings.Builder
+	for i := 0; i < len(p); i++ {
+		switch {
+		case p[i] == '\\' && i+1 < len(p):
+			out.WriteString(p[i : i+2]) // the next character is literal
+			i++
+		case p[i] == '[':
+			j := i + 1
+			neg := j < len(p) && (p[j] == '!' || p[j] == '^')
+			if neg {
+				j++
 			}
-			// Skip to the end of the class, so that "[" or "!" inside it
-			// is left as it is.
-			j := i + 2
-			for j < len(b) && b[j] != ']' {
-				if b[j] == '\\' {
+			start := j
+			if j < len(p) && p[j] == ']' {
+				j++
+			}
+			for j < len(p) && p[j] != ']' {
+				if p[j] == '\\' {
 					j++
 				}
 				j++
 			}
+			if j >= len(p) {
+				out.WriteString(p[i:])
+				return out.String()
+			}
+			out.WriteByte('[')
+			if neg {
+				out.WriteByte('^')
+			}
+			for k := start; k < j; k++ {
+				c := p[k]
+				switch {
+				case c == '\\' && k+1 < j:
+					out.WriteString(p[k : k+2])
+					k++
+					continue
+				case c == ']', c == '-' && (k == start || k == j-1):
+					out.WriteByte('\\')
+				}
+				out.WriteByte(c)
+			}
+			out.WriteByte(']')
 			i = j
+		default:
+			out.WriteByte(p[i])
 		}
 	}
-	return string(b)
+	return out.String()
 }
 
 // ignored reports whether the file at rel (slash-separated) is ignored. As

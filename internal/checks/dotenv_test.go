@@ -102,6 +102,11 @@ func TestIgnoreNegatedClass(t *testing.T) {
 		{"[^a].log", map[string]bool{"a.log": false, "b.log": true}},
 		{`\[!a].log`, map[string]bool{"[!a].log": true, "b.log": false}},
 		{".env[!.]*", map[string]bool{".envx": true, ".env.local": false}},
+		// "]" first in a class is a member, so the second class is negated too.
+		{"[!]a][!b].log", map[string]bool{"xc.log": true, "]c.log": false, "xb.log": false, "ac.log": false, "!c.log": true}},
+		// "-" first or last in a class is a member.
+		{"[-_]x.log", map[string]bool{"-x.log": true, "_x.log": true, "ax.log": false}},
+		{"[a-]y.log", map[string]bool{"-y.log": true, "ay.log": true, "by.log": false}},
 	} {
 		r, ok := parseIgnore(c.pattern)
 		if !ok {

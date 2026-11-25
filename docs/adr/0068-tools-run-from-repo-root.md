@@ -48,9 +48,9 @@ Local: Docker 29.9.3 rootful, cgroup v1, linux/amd64, gitleaks 8.30.1 at the pin
 - **N1 as info, or dropped.** Measured: hides the image path above.
 - **N1 from the `.gitignore` matcher only** (the round-2 prototype): wrong for ignored files that are tracked, as above.
 
-## Also fixed: the matcher's `[!…]` and escapes
+## Also fixed: the matcher's bracket classes and escapes
 
-The `.gitignore` matcher this note relies on (shared with `dotenv-gitignore`) read `[!a]` as `path.Match` does, a class holding `!` and `a`, where git negates it, and it dropped a leading backslash, so `\[!a].log` became a class too. Both are fixed: `[!` becomes `[^` outside escapes, and a leading backslash stays (`path.Match` reads `\c` as `c`). Answers checked against `git check-ignore` (git 2.43) for `[!a].log`, `[^a].log`, `\[!a].log` and `.env[!.]*`.
+The `.gitignore` matcher this note relies on (shared with `dotenv-gitignore`) passed git's bracket classes to `path.Match` unchanged, and the two read them differently: git negates `[!a]`, where `path.Match` reads a class holding `!` and `a`; git reads a `]` first in a class (`[]a]`, `[!]a]`) and a `-` first or last (`[-_]`, `[a-]`) as members, where `path.Match` refuses the pattern, so the rule never matched. It also dropped a leading backslash, so `\[!a].log` became a class. All are fixed: classes are rewritten in `path.Match`'s syntax (`!` as `^`, those `]` and `-` escaped), and a leading backslash stays (`path.Match` reads `\c` as `c`). Answers checked against `git check-ignore` (git 2.43) for `[!a].log`, `[^a].log`, `\[!a].log`, `.env[!.]*`, `[!]a][!b].log`, `[-_]x.log` and `[a-]y.log`. Not handled: POSIX classes such as `[[:alpha:]]`, which `path.Match` does not know; such a rule matches nothing, which can only leave a note out.
 
 ## Follow-up outside this decision
 
