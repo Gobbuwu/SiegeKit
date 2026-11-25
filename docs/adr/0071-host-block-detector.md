@@ -45,7 +45,8 @@ Findings reported before the stop: F1 keep all (ADR 0067's rule) left block-page
   - Block from ffuf's 1,000th request, `--only ffuf,public-maps,zap`: ffuf failed `host-blocked` after 10 block pages, no finding kept (Docker writes no ffuf report on a stop); ZAP not run ("before this check"); public-maps ran with its finding; 8 start-page fetches in all; exit 4.
   - The same block, ending after ffuf's stop: ffuf failed `host-blocked`; ZAP ran on the app (94 requests, 33 findings, none from the block page).
   - Block from SiegeKit's 55th own request (access-control's last answers): access-control failed `host-blocked` by D1, 45 requests, 3 got the block page, F2 dropped 1 and kept 4 cross-account reads (without a block: 5 findings, the 4 plus `no-login-secret`).
-- Gate job `block` runs these three cases on rootless Podman and Docker, amd64 and arm64, with Nuclei in place of ZAP. Every other gate job scans with the detector on and must meet its known answers: the false-stop check on Juice Shop, Gitea, the Next.js login app, Mailpit and the storage backends. Results: in the PR and `docs/milestones/M2.md`.
+- Gate job `block` runs these three cases on rootless Podman and Docker, amd64 and arm64, with Nuclei in place of ZAP. Every other gate job scans with the detector on and must meet its known answers: the false-stop check on Juice Shop, Gitea, the Next.js login app, Mailpit and the storage backends. Results on head 55f1fe5: CI run 45648414828 and gate run 45648414966 green, job `block` on all four setups; on rootless Podman ffuf writes its report when stopped, and F2 dropped its 10 block-page findings and kept 7 real ones.
+- On Vercel (owner, Porchlet's protected preview with the bypass header, WSL Docker rootful, cgroup v2, amd64, 2026-11-25): two scans of about 10.7k requests with no block had no false stop. With Vercel's Attack Challenge Mode switched on while Nuclei ran, Nuclei stopped `host-blocked` after 1,980 requests on "403 (text/html, 25144 bytes)", with no finding from the challenge page, exit 4. During the mode a request with the bypass header got Vercel's 429 challenge page, so the header does not get past it.
 - Unit tests: shapes and the 5% margin; D1 before, after and on an unreachable start page; D3 on `Send` (stops at exactly 10 block pages, sends nothing after) and on the proxy (forwards exactly 10, refuses the rest, 3 start-page fetches); 40 not-found pages cost one fetch and no stop; a block that ends lets the next check run; a streamed answer is not held back; the start-page fetch carries the extra headers; RunURL for a proxy stop, a D1 stop and a D1 stop after a time limit (F2 drops 2 of 4 ffuf findings, the next plugin is not run); SiegeKit's own checks through the CLI (start-page fetch, spec probe, rate-limit before, access-control after); F2 on access-control's answers.
 
 ## Consequences
@@ -58,7 +59,7 @@ Findings reported before the stop: F1 keep all (ADR 0067's rule) left block-page
   - A block that starts and ends inside one check in fewer than 10 answers is not seen.
   - A real answer with the block page's status and a length within 5% of it is dropped from a stopped check.
   - An app-wide limit that a throttle check triggers fails every later check while it lasts, with the start page's answer in the reason.
-  - Not yet run against Vercel's real checkpoint: Porchlet's R2 verifies it before this merges.
+  - Verified on Vercel's Attack Challenge Mode page, not on the Security Checkpoint starting on its own (it did not start in two runs of about 10.7k requests); both were a 403 of about 25 KB to SiegeKit.
 
 ## Alternatives considered
 
