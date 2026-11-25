@@ -727,7 +727,7 @@ jobs:
         # answers' encoding (match). Prints the results; asserts nothing.
         if: success() || failure()
         run: |
-          set -uo pipefail
+          set +e -uo pipefail
           for mode in strip match; do
             log="$RUNNER_TEMP/d-$mode.log"
             nohup "$RUNNER_TEMP/block-gate" -addr 127.0.0.1:3000 -app http://127.0.0.1:3001 -ua 'Fuzz Faster U Fool' -after 1000 -gzip -log "$log" > /dev/null 2>&1 &
@@ -747,7 +747,7 @@ jobs:
         # on the wire, start-page fetches, requests, findings and time.
         if: success() || failure()
         run: |
-          set -uo pipefail
+          set +e -uo pipefail
           for mode in strip match; do
             log="$RUNNER_TEMP/e-$mode.log"
             nohup "$RUNNER_TEMP/block-gate" -addr 127.0.0.1:3000 -app http://127.0.0.1:3001 -after 0 -gzip -log "$log" > /dev/null 2>&1 &

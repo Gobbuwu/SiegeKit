@@ -47,11 +47,10 @@ const maxShapeBody = 2 << 20
 const startPageAgent = " (start page check)"
 
 // matchEncoding is a measurement switch for #92's review (prototype, not
-// for merge): "match" (the default here) keeps tools' Accept-Encoding and
-// fetches the start page in the encoding of the answers it is compared
-// with; SIEGEKIT_PROTO_ENCODING=strip forwards tools' requests without
-// Accept-Encoding instead.
-var matchEncoding = os.Getenv("SIEGEKIT_PROTO_ENCODING") != "strip"
+// for merge): "strip" (the default here) forwards tools' requests without
+// Accept-Encoding; SIEGEKIT_PROTO_ENCODING=match keeps it and fetches the
+// start page in the encoding of the answers it is compared with.
+var matchEncoding = os.Getenv("SIEGEKIT_PROTO_ENCODING") == "match"
 
 // Shape is what the watch compares answers by.
 type Shape struct {
