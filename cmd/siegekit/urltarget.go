@@ -1145,6 +1145,7 @@ func runURL(ctx context.Context, u *target.URL, addrs []netip.Addr, mode target.
 	var probeErr error
 	probeSpecs := func() (publicmaps.Probe, error) {
 		if probe == nil {
+			egress.ZZSendPhase("public-maps") // MEASUREMENT PROTOTYPE
 			p, err := publicmaps.ProbeSpecs(ctx, specGet, egress.Config{Target: u, Addrs: addrs, VerifyTLS: o.deployed, Version: version, ReadOnly: true}, limits.Rate)
 			probe, probeErr = &p, err
 		}
@@ -1345,6 +1346,7 @@ func runURL(ctx context.Context, u *target.URL, addrs []netip.Addr, mode target.
 	storageRuns := storageSelected && !storageOff
 	var col *collected
 	if servedRuns || backendRuns || mapsRuns || storageRuns {
+		egress.ZZSendPhase("fetch") // MEASUREMENT PROTOTYPE
 		col = collect(ctx, egress.Config{Target: u, Addrs: addrs, VerifyTLS: o.deployed, Version: version, ReadOnly: true}, limits.Rate)
 		defer col.cleanup()
 		if ctx.Err() != nil {
@@ -1463,6 +1465,7 @@ func runURL(ctx context.Context, u *target.URL, addrs []netip.Addr, mode target.
 			pr.Input += o.codeInput(inSpec)
 			pr.Input += o.accountsInput()
 			fmt.Fprintf(stdout, "%s: replaying %d request(s).\n", authz.ID, len(o.harRequests.Requests))
+			egress.ZZSendPhase("access-control") // MEASUREMENT PROTOTYPE
 			res, err := authzCheck(ctx, egress.Config{Target: u, Addrs: addrs, VerifyTLS: o.deployed, Version: version, ReadOnly: true}, o.harRequests.Requests, authz.Accounts{B: o.sessionB, C: o.sessionC}, limits.Rate)
 			if ctx.Err() != nil {
 				return fail(errors.New("interrupted; no report written"))
@@ -1503,6 +1506,25 @@ func runURL(ctx context.Context, u *target.URL, addrs []netip.Addr, mode target.
 		}
 		writeResult = &pr
 	}
+	egress.ZZSendPhase("tools") // MEASUREMENT PROTOTYPE: ends the own checks' phases
+	zzOwn := func(pr *report.PluginResult, fs *[]findings.Finding, phases ...string) {
+		if pr == nil {
+			return
+		}
+		for _, ph := range phases {
+			if r := egress.ZZSendStop(ph); r != "" {
+				pr.Status, pr.Stop, pr.Reason = report.Failed, report.StopTargetStopped, "stopped by SiegeKit: "+r
+				kept, note := runner.ZZFilter(r, *fs)
+				*fs = kept
+				pr.Reason += note
+				pr.Findings = len(kept)
+				return
+			}
+		}
+	}
+	zzOwn(servedResult, &servedFindings, "fetch")
+	zzOwn(mapsResult, &mapsFindings, "public-maps", "fetch")
+	zzOwn(authzResult, &authzFindings, "access-control")
 	var active runner.ActiveRunner
 	if e, ok := ex.(*sandbox.Engine); ok {
 		bin, err := os.Executable()

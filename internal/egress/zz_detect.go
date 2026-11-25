@@ -67,6 +67,7 @@ type zzDetector struct {
 	k403     int
 	fired    map[string]bool
 	canaries map[string]int
+	own      bool // the detector of SiegeKit's own checks
 }
 
 func newZZ(p *Proxy) *zzDetector {
@@ -134,15 +135,24 @@ func (z *zzDetector) baseline() {
 }
 
 func (z *zzDetector) fire(d, why string) {
+	key := d
+	if z.own {
+		zzSendMu.Lock()
+		key = d + "@" + zzPhase
+		zzSendMu.Unlock()
+	}
 	z.mu.Lock()
-	if z.fired[d] {
+	if z.fired[key] {
 		z.mu.Unlock()
 		return
 	}
-	z.fired[d] = true
+	z.fired[key] = true
 	fwd := z.fwd
 	z.mu.Unlock()
-	zzLog(map[string]any{"ev": "would-stop", "detector": d, "forwarded": fwd, "why": why})
+	zzLog(map[string]any{"ev": "would-stop", "detector": d, "own": key, "forwarded": fwd, "why": why})
+	if z.enforce == d && z.own {
+		zzRecordOwnStop("the host stopped serving the app (" + d + "): " + why)
+	}
 	if z.enforce == d {
 		z.p.mu.Lock()
 		if z.p.stopReason == "" {
@@ -296,3 +306,74 @@ func zzAddHeaders(h http.Header) {
 
 // ZZAddHeaders is used by the proof fetch.
 func ZZAddHeaders(h http.Header) { zzAddHeaders(h) }
+
+// ---- SiegeKit's own checks (egress.Send), one detector per run ----
+
+var (
+	zzSendMu    sync.Mutex
+	zzSendDet   *zzDetector
+	zzPhase     string
+	zzSendStops = map[string]string{} // phase -> stop reason
+)
+
+func zzSendFor(cfg Config) *zzDetector {
+	zzSendMu.Lock()
+	defer zzSendMu.Unlock()
+	if zzSendDet == nil {
+		p := &Proxy{cfg: cfg, transport: newTransport(cfg), stop: make(chan struct{})}
+		zzSendDet = newZZ(p)
+		zzSendDet.own = true
+	}
+	return zzSendDet
+}
+
+// zzSendBlocked returns the stop reason once the enforced detector fired.
+func zzSendBlocked(cfg Config) string {
+	d := zzSendFor(cfg)
+	d.p.mu.Lock()
+	defer d.p.mu.Unlock()
+	return d.p.stopReason
+}
+
+func zzSendAnswer(cfg Config, status int, h http.Header, n int64) {
+	zzSendFor(cfg).answer(zzShape{status, zzType(h), n})
+}
+
+// ZZSendPhase names the own check whose requests follow; ending a phase
+// runs D1 for it.
+func ZZSendPhase(name string) {
+	zzSendMu.Lock()
+	d, prev := zzSendDet, zzPhase
+	zzSendMu.Unlock()
+	if d != nil && prev != "" {
+		d.final() // D1 for the phase that ends, recorded under its name
+		d.mu.Lock()
+		d.fwd = 0
+		d.mu.Unlock()
+	}
+	zzSendMu.Lock()
+	zzPhase = name
+	zzSendMu.Unlock()
+	if d != nil {
+		// A run already stopped refuses this phase's requests too.
+		if r := zzSendBlocked(d.p.cfg); r != "" && d.enforce != "" {
+			zzRecordOwnStop(r)
+		}
+	}
+	zzLog(map[string]any{"ev": "phase", "from": prev, "to": name})
+}
+
+// ZZSendStop says why the enforced detector stopped the given phase, or "".
+func ZZSendStop(phase string) string {
+	zzSendMu.Lock()
+	defer zzSendMu.Unlock()
+	return zzSendStops[phase]
+}
+
+func zzRecordOwnStop(reason string) {
+	zzSendMu.Lock()
+	defer zzSendMu.Unlock()
+	if _, ok := zzSendStops[zzPhase]; !ok {
+		zzSendStops[zzPhase] = reason
+	}
+}

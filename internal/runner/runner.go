@@ -503,6 +503,9 @@ func stopped(pr report.PluginResult, status sandbox.Status, stop report.Stop, re
 	for i := range fs {
 		fs[i].RedactCredentials()
 	}
+	var zzNote string
+	fs, zzNote = ZZFilter(reason, fs) // MEASUREMENT PROTOTYPE
+	pr.Reason += zzNote
 	pr.Findings = len(fs)
 	if len(fs) > 0 {
 		pr.Reason += fmt.Sprintf("; the %d finding(s) reported before the stop are kept", len(fs))

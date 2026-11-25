@@ -18,6 +18,7 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"net/netip"
+	"os"
 	"slices"
 	"strconv"
 	"strings"
@@ -286,6 +287,9 @@ func SendHeader(ctx context.Context, cfg Config, method, path string, header htt
 	}
 	req.Header.Set("User-Agent", "SiegeKit/"+cfg.Version)
 	zzAddHeaders(req.Header)
+	if r := zzSendBlocked(cfg); r != "" && os.Getenv("SIEGEKIT_ZZ_ENFORCE") != "" {
+		return nil, errors.New("stopped by SiegeKit: " + r)
+	}
 	start := time.Now()
 	resp, err := tr.RoundTrip(req)
 	if err != nil {
@@ -302,6 +306,7 @@ func SendHeader(ctx context.Context, cfg Config, method, path string, header htt
 		return a, fmt.Errorf("%w %d bytes", ErrTooLarge, max)
 	}
 	a.Body = b
+	zzSendAnswer(cfg, a.Status, a.Header, int64(len(b)))
 	return a, nil
 }
 

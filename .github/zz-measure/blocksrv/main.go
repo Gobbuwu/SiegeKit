@@ -69,7 +69,11 @@ func main() {
 				hdr = "yes"
 			}
 		}
-		defer func() { log.Printf("%d %s %s %d hdr=%s ua=%q", i, r.Method, r.URL.RequestURI(), code, hdr, ua) }()
+		rh := "no" // a refused header (Cookie or Authorization from the H1 list) reached the app
+		if strings.Contains(r.Header.Get("Cookie"), "refused=1") || r.Header.Get("Authorization") == "Bearer refused" {
+			rh = "yes"
+		}
+		defer func() { log.Printf("%d %s %s %d hdr=%s ua=%q rh=%s", i, r.Method, r.URL.RequestURI(), code, hdr, ua, rh) }()
 		if hdr == "no" {
 			code = 302
 			w.Header().Set("Location", "https://vercel.com/sso-api?url="+url.QueryEscape(r.URL.RequestURI()))

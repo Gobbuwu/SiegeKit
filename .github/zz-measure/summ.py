@@ -34,7 +34,8 @@ for e in zz:
     if e.get('ev') == 'final':
         canaries.update(e.get('canaries', {}))
 
-out = {'case': case, 'exit': meta.get('exit'), 'secs': meta.get('secs'), 'enforce': meta.get('enforce', ''),
+out = {'case': case, 'exit': meta.get('exit'), 'secs': meta.get('secs'), 'enforce': meta.get('enforce', ''), 'f': meta.get('f', ''),
+       'refused_header_reached_app': sum(1 for l in open(p) if l.rstrip().endswith('rh=yes')) if os.path.exists(p) else None,
        'requests_at_server': len(srv), 'onset_index': onset and onset['i'], 'block_end_index': end and end['i']}
 det = {}
 for dname in ['d1', 'd2', 'd3', 'd4']:
@@ -60,7 +61,7 @@ if os.path.exists(rp):
     out['plugins'] = {p['id']: {k: p.get(k) for k in ('status', 'findings', 'requests', 'stop', 'reason') if p.get(k) not in (None, '')} for p in r.get('plugins', [])}
     for p in out['plugins'].values():
         if 'reason' in p:
-            p['reason'] = p['reason'][:200]
+            p['reason'] = p['reason'][:500]
     byplug = collections.defaultdict(collections.Counter)
     for f in r.get('findings', []):
         src = (f.get('sources') or [{}])[0].get('plugin', '?')
