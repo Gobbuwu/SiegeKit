@@ -388,6 +388,38 @@ func TestGitleaksRulesRules(t *testing.T) {
 	}
 }
 
+// TestRepoRootRules checks where run.inRepoRoot and output.gitIgnoredNote
+// are allowed (ADR 0068), starting from the built-in Gitleaks plugin.
+func TestRepoRootRules(t *testing.T) {
+	b, err := os.ReadFile("../../plugins/gitleaks/plugin.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m, err := Parse(b); err != nil || !m.Run.InRepoRoot || !m.Output.GitIgnoredNote {
+		t.Fatalf("gitleaks: %v", err)
+	}
+	for _, c := range []struct {
+		name   string
+		mutate func(m map[string]any)
+		want   string
+	}{
+		{"url target", func(m map[string]any) { m["targets"] = []string{"repo", "url"} }, "run.inRepoRoot is only for plugins whose only target is repo"},
+		{"{target} in args", func(m map[string]any) { m["run"].(map[string]any)["args"] = []string{"dir", "{target}"} }, "must name the repository as \".\", not {target}"},
+		{"{target} inside an arg", func(m map[string]any) { m["run"].(map[string]any)["args"] = []string{"--source={target}"} }, "not {target}"},
+		{"note on a history scan", func(m map[string]any) { m["requiresGit"] = true }, "output.gitIgnoredNote is only for secrets plugins"},
+		{"note on another family", func(m map[string]any) { m["family"] = "sast" }, "output.gitIgnoredNote is only for secrets plugins"},
+	} {
+		var m map[string]any
+		if err := json.Unmarshal(b, &m); err != nil {
+			t.Fatal(err)
+		}
+		c.mutate(m)
+		if _, err := Parse(mustMarshal(t, m)); err == nil || !strings.Contains(err.Error(), c.want) {
+			t.Errorf("%s: %v, want %q", c.name, err, c.want)
+		}
+	}
+}
+
 // TestGoModulesRules checks where run.goModules is allowed (ADR 0066),
 // starting from the built-in gosec plugin.
 func TestGoModulesRules(t *testing.T) {

@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "gitleaks",
   "name": "Gitleaks secret scan",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "Finds API keys, tokens, passwords and private keys committed in source files, with Gitleaks' rules (or the repository's own .gitleaks.toml) plus SiegeKit's rules for Supabase keys. Secret values are redacted by the tool and masked again by SiegeKit.",
   "family": "secrets",
   "mode": "passive",
@@ -33,9 +33,10 @@
   },
   "network": "none",
   "run": {
+    "inRepoRoot": true,
     "args": [
       "dir",
-      "{target}",
+      ".",
       "--redact",
       "--no-banner",
       "--exit-code",
@@ -50,7 +51,8 @@
   "output": {
     "format": "sarif",
     "parser": "sarif-gitleaks",
-    "file": "gitleaks.sarif"
+    "file": "gitleaks.sarif",
+    "gitIgnoredNote": true
   },
   "repoIgnores": {
     "files": [

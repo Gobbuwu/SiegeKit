@@ -71,6 +71,7 @@ Each significant design decision is recorded as a short ADR before code is writt
 | [0065](0065-recorded-request-bodies-framed.md) | Recorded request bodies reach ZAP framed and unchanged (amends 0047) | Accepted |
 | [0066](0066-go-module-download.md) | Consented Go module download, a scratch folder on disk for gosec, `--ca-file` and `--proxy` for the update containers, engine mirrors for Docker Hub's limit (amends 0014, 0016, 0045) | Accepted |
 | [0067](0067-checks-finish-or-say-so.md) | Every check compares what it was given with what it checked: run stops fail, file gaps named, Gitleaks archives opened, ZAP's passive cap removed, limits from measured peaks, rules not run named, a shared URL list for both ZAP checks (amends 0009, 0040, 0043) | Accepted |
+| [0068](0068-tools-run-from-repo-root.md) | Gitleaks and Bandit run from the repository's top level, so its allowlists, `.gitleaksignore` and `.bandit` apply as in its own runs; findings in git-ignored, untracked files say so, read from git's index (amends 0020, 0063) | Accepted |
 
 ADRs 0002 to 0011 were accepted at the M0 design sign-off on 2026-11-18.
 

@@ -195,6 +195,9 @@ jobs:
           jq -e '[.plugins[] | select(.id == "gitleaks" or .id == "gitleaks-history") | .input | startswith("the rules in the repository'"'"'s .gitleaks.toml and SiegeKit'"'"'s rules ")] == [true, true]' "$r"
           # Only the development dependency's finding says it is one (SK-3).
           jq -e '[.findings[] | select(.message | contains("This is a development dependency")) | .ruleId] | unique == ["CVE-2021-44906"]' "$r"
+          # Only the ignored, never-committed .env.local is called git-ignored;
+          # .env.production.local is ignored too but committed (ADR 0068).
+          jq -e '[.findings[] | select(.message | endswith(" This file is git-ignored: not committed.")) | .location.uri] | unique == [".env.local"]' "$r"
       - name: Known answers
         if: ${{ !cancelled() }}
         run: |

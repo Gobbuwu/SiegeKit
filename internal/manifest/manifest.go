@@ -191,6 +191,14 @@ type Run struct {
 	// passive plugins whose only target is repo, with no data section; the
 	// image must have go on its PATH.
 	GoModules bool `json:"goModules,omitempty"`
+	// InRepoRoot runs the tool with the repository as its working
+	// directory, and Args name the repository as "." instead of {target}.
+	// Tools then read the repository's own settings files, and match the
+	// repository-relative paths written in them, as in the repository's
+	// own runs, such as Gitleaks allowlist paths and .gitleaksignore, and
+	// Bandit's .bandit exclude paths (ADR 0068, issue #82). Only for
+	// plugins whose only target is repo.
+	InRepoRoot bool `json:"inRepoRoot,omitempty"`
 }
 
 var reGitleaksRuleID = regexp.MustCompile(`(?m)^id = "([a-z0-9][a-z0-9-]{0,63})"$`)
@@ -232,6 +240,13 @@ type Output struct {
 	// {outdir}, read by its parser for work the tool did not do; the run is
 	// then incomplete and its findings are kept (ADR 0040).
 	Stdout *Stdout `json:"stdout,omitempty"`
+	// GitIgnoredNote ends the message of each finding in a file that git
+	// ignores and does not track with "This file is git-ignored: not
+	// committed." The severity stays: an ignored file can still leave the
+	// machine, such as in a container image (ADR 0068). Only for secrets
+	// plugins whose only target is repo and that scan the files on disk,
+	// not git history (no requiresGit).
+	GitIgnoredNote bool `json:"gitIgnoredNote,omitempty"`
 }
 
 // Stdout is where a tool's standard output is saved and how it is read.
@@ -446,6 +461,14 @@ func (m *Manifest) Validate() error {
 				}
 			}
 		}
+		if m.Run.InRepoRoot {
+			if !slices.Equal(m.Targets, []string{"repo"}) {
+				add("run.inRepoRoot is only for plugins whose only target is repo")
+			}
+			if slices.ContainsFunc(m.Run.Args, func(a string) bool { return strings.Contains(a, "{target}") }) {
+				add("run.args must name the repository as \".\", not {target}, with run.inRepoRoot")
+			}
+		}
 		if len(m.Run.FindingsExitCodes) > 4 {
 			add("run.findingsExitCodes has more than 4 entries")
 		}
@@ -492,6 +515,9 @@ func (m *Manifest) Validate() error {
 		}
 		if strings.HasPrefix(m.Output.Parser, "sarif") && m.Output.Format != "sarif" {
 			add("output.parser %q needs output.format \"sarif\"", m.Output.Parser)
+		}
+		if m.Output.GitIgnoredNote && (m.Family != "secrets" || !slices.Equal(m.Targets, []string{"repo"}) || m.RequiresGit) {
+			add("output.gitIgnoredNote is only for secrets plugins whose only target is repo, without requiresGit")
 		}
 		if m.Output.Parser == "bandit-json" && m.Output.Format != "json" {
 			add("output.parser \"bandit-json\" needs output.format \"json\"")

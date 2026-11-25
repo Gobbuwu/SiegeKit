@@ -321,6 +321,10 @@
           "maxLength": 16384,
           "description": "SiegeKit's own Gitleaks rules as TOML [[rules]] tables, each with its id written as id = \"name\" on its own line. SiegeKit appends them to the scanned repository's .gitleaks.toml, or to Gitleaks' default rules when there is none, and points GITLEAKS_CONFIG at the result (ADR 0063). Only for Gitleaks plugins whose only target is repo; repoIgnores.files must list .gitleaks.toml."
         },
+        "inRepoRoot": {
+          "type": "boolean",
+          "description": "Runs the tool with the repository as its working directory; args name the repository as \".\" instead of {target}. Tools then read the repository's own settings files, and match the repository-relative paths in them, as in the repository's own runs, such as Gitleaks allowlist paths and .gitleaksignore, and Bandit's .bandit exclude paths (ADR 0068). Only for plugins whose only target is repo."
+        },
         "goModules": {
           "type": "boolean",
           "description": "The tool loads Go packages with the Go in its image, such as gosec (ADR 0066). SiegeKit gives each run an empty scratch folder on disk for Go's build cache and compile scratch (GOCACHE, GOTMPDIR), and mounts the shared Go module cache read-only (GOMODCACHE, GOPROXY=off) when it exists; the install question offers to download the target's modules into it. Only for passive plugins whose only target is repo, with no data section; run.env must not set GOCACHE, GOTMPDIR, GOMODCACHE, GOPROXY or GOFLAGS."
@@ -463,6 +467,10 @@
               "description": "Also saves the tool's standard error (its log) to this file inside {outdir} for the parser. Needed by gosec-errors: gosec names in its log the packages whose SSA-based rules it skipped (ADR 0066)."
             }
           }
+        },
+        "gitIgnoredNote": {
+          "type": "boolean",
+          "description": "Ends the message of each finding in a file that git ignores and does not track with \"This file is git-ignored: not committed.\" The severity stays (ADR 0068). Only for secrets plugins whose only target is repo, without requiresGit."
         }
       }
     },
