@@ -15,8 +15,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
-	"regexp"
-	"slices"
 	"strings"
 	"time"
 	"unicode"
@@ -26,6 +24,7 @@ import (
 	"github.com/Gobbuwu/SiegeKit/internal/findings"
 	"github.com/Gobbuwu/SiegeKit/internal/ratelimit"
 	"github.com/Gobbuwu/SiegeKit/internal/target"
+	"github.com/Gobbuwu/SiegeKit/internal/webform"
 )
 
 // ID, Name and Family describe the check in plans and reports.
@@ -65,7 +64,7 @@ type Login struct {
 	json bool
 	// The page's form: the template's fields, the page's URL and the
 	// target the form's action and a login's redirect must be on.
-	fields  []field
+	fields  []webform.Field
 	pageURL *url.URL
 	target  *target.URL
 }
@@ -119,23 +118,8 @@ func ParsePage(rawPage, user, body string, t *target.URL) (*Login, error) {
 	if l.pageURL, err = url.Parse(l.URL); err != nil {
 		return nil, fmt.Errorf("--login-page: %v", err)
 	}
-	seen := map[string]bool{}
-	for kv := range strings.SplitSeq(body, "&") {
-		k, v, _ := strings.Cut(kv, "=")
-		name, err1 := url.QueryUnescape(k)
-		value, err2 := url.QueryUnescape(v)
-		switch {
-		case err1 != nil || err2 != nil:
-			return nil, fmt.Errorf("--login-body is not a valid form body: %v", errors.Join(err1, err2))
-		case name == "":
-			return nil, errors.New("--login-body has a field with no name")
-		case strings.Contains(name, "{user}") || strings.Contains(name, "{password}"):
-			return nil, errors.New("--login-body has {user} or {password} in a field name; they go in values, such as 'email={user}'")
-		case seen[name]:
-			return nil, fmt.Errorf("--login-body names the field %q twice", name)
-		}
-		seen[name] = true
-		l.fields = append(l.fields, field{name, value})
+	if l.fields, err = webform.ParseFields(body, "--login-body", "{user}", "{password}"); err != nil {
+		return nil, err
 	}
 	return l, nil
 }
@@ -235,7 +219,7 @@ type answerKind struct {
 }
 
 func kindOf(at *attempt) *answerKind {
-	return &answerKind{at.a.Status, redirect(at.a), strings.Join(ratelimit.LimitWords(at.a.Body), ","), strings.Join(at.nextWords, ",")}
+	return &answerKind{at.a.Status, webform.Redirect(at.a), strings.Join(ratelimit.LimitWords(at.a.Body), ","), strings.Join(at.nextWords, ",")}
 }
 
 // answer is the wrong-password answer, such as "303 to /error".
@@ -336,7 +320,7 @@ type attempt struct {
 	page    *egress.Answer // --login-page: the page's answer
 	words   []string       // the page's limit words
 	formErr error          // why the page's form could not be sent
-	form    *formLogin
+	form    *webform.Submission
 	// The page a wrong login's redirect named, read as a browser does, and
 	// its limit words; nil when the answer was not such a redirect.
 	next      *egress.Answer
@@ -366,18 +350,17 @@ func (l *Login) try(ctx context.Context, cfg egress.Config, user, password strin
 	if pa.Status != http.StatusOK {
 		return at, nil
 	}
-	pg := readPage(pa.Body)
-	at.words = pg.words
-	if at.form, at.formErr = pg.build(l.pageURL, l.target, l.fields, user, password); at.formErr != nil {
+	at.words = ratelimit.LimitWords(pa.Body)
+	if at.form, at.formErr = webform.Read(pa.Body).Build(l.pageURL, l.target, l.fields, strings.NewReplacer("{user}", user, "{password}", password)); at.formErr != nil {
 		return at, nil
 	}
-	h := http.Header{"Content-Type": {at.form.contentType}, "Origin": {l.target.Origin()}, "Accept": {"text/html,application/xhtml+xml"}}
-	if c := cookies(pa.Header, l.target.Host, l.pageURL.Path, at.form.path, now()); c != "" {
+	h := http.Header{"Content-Type": {at.form.ContentType}, "Origin": {l.target.Origin()}, "Accept": {"text/html,application/xhtml+xml"}}
+	if c := webform.Cookies(pa.Header, l.target.Host, l.pageURL.Path, at.form.Path, now()); c != "" {
 		h.Set("Cookie", c)
 	}
 	r.Requests++
-	if at.a, err = send(ctx, cfg, http.MethodPost, at.form.path, h, at.form.body, MaxAnswer); err == nil && wrong {
-		err = l.follow(ctx, cfg, at, at.form.url, at.form.path, h.Get("Cookie"), r)
+	if at.a, err = send(ctx, cfg, http.MethodPost, at.form.Path, h, at.form.Body, MaxAnswer); err == nil && wrong {
+		err = l.follow(ctx, cfg, at, at.form.URL, at.form.Path, h.Get("Cookie"), r)
 	}
 	return at, err
 }
@@ -390,59 +373,20 @@ func (l *Login) try(ctx context.Context, cfg egress.Config, user, password strin
 // ADR 0062 item 4). A 307 or 308 is not followed: a browser would send the
 // login again.
 func (l *Login) follow(ctx context.Context, cfg egress.Config, at *attempt, from, fromPath, sent string, r *Result) error {
-	a := at.a
-	loc := a.Header.Get("Location")
-	if l.target == nil || loc == "" || a.Status != http.StatusMovedPermanently && a.Status != http.StatusFound && a.Status != http.StatusSeeOther {
-		return nil
-	}
-	base, err := url.Parse(from)
-	if err != nil {
-		return nil
-	}
-	to, err := base.Parse(loc)
-	if err != nil {
-		return nil
-	}
-	to.Fragment, to.RawFragment = "", ""
-	u, query, err := target.OnOrigin(l.target, to.String(), "the login's redirect", true)
-	if err != nil {
-		return nil // not followed: SiegeKit sends requests only to the target
-	}
-	path := u.Path
-	if query != "" {
-		path += "?" + query
+	path, cookie, ok := webform.Next(l.target, at.a, from, fromPath, sent, now())
+	if !ok {
+		return nil // not a redirect a browser follows with a GET, or not to the target
 	}
 	h := http.Header{"Accept": {"text/html,application/xhtml+xml"}}
-	if c := mergeCookies(sent, cookies(a.Header, l.target.Host, fromPath, path, now())); c != "" {
-		h.Set("Cookie", c)
+	if cookie != "" {
+		h.Set("Cookie", cookie)
 	}
 	r.Requests++
+	var err error
 	if at.next, err = send(ctx, cfg, http.MethodGet, path, h, nil, MaxAnswer); err == nil {
 		at.nextWords = ratelimit.LimitWords(at.next.Body)
 	}
 	return err
-}
-
-// mergeCookies joins two Cookie headers; a cookie in set replaces one of
-// the same name in sent, as a browser keeps the newer value.
-func mergeCookies(sent, set string) string {
-	var out []string
-	names := map[string]int{}
-	for _, h := range []string{sent, set} {
-		for kv := range strings.SplitSeq(h, "; ") {
-			if kv == "" {
-				continue
-			}
-			name, _, _ := strings.Cut(kv, "=")
-			if k, ok := names[name]; ok {
-				out[k] = kv
-				continue
-			}
-			names[name] = len(out)
-			out = append(out, kv)
-		}
-	}
-	return strings.Join(out, "; ")
 }
 
 // run sends the right-password login when right is set, then attempts
@@ -470,7 +414,7 @@ func run(ctx context.Context, cfg egress.Config, l *Login, attempts int, right s
 	}
 	var base *egress.Answer
 	var baseWords, nextWords, pageWords []string
-	var rightShape shape
+	var rightShape webform.Shape
 	total := attempts
 	if right != "" {
 		total++
@@ -511,7 +455,7 @@ func run(ctx context.Context, cfg egress.Config, l *Login, attempts int, right s
 				return r, fmt.Errorf("--login-page: %v", at.formErr)
 			case first:
 				pageWords = at.words
-				r.URL, r.Form = at.form.url, at.form.describe()
+				r.URL, r.Form = at.form.URL, at.form.Describe()
 			case p.Status >= 500:
 				return r, fmt.Errorf("the login page answered %d (a server error) after %d login(s); a crash is not a limit, so this check cannot tell whether logins are limited", p.Status, k)
 			case p.Status != http.StatusOK:
@@ -554,7 +498,7 @@ func run(ctx context.Context, cfg egress.Config, l *Login, attempts int, right s
 			continue
 		}
 		if base == nil {
-			base, baseWords, nextWords, r.Baseline, r.Redirect = a, ratelimit.LimitWords(a.Body), at.nextWords, a.Status, redirect(a)
+			base, baseWords, nextWords, r.Baseline, r.Redirect = a, ratelimit.LimitWords(a.Body), at.nextWords, a.Status, webform.Redirect(a)
 			r.normal = kindOf(at)
 			if limited != nil && *r.normal == *limited && (normal == nil || *normal != *limited) {
 				said := ""
@@ -584,8 +528,8 @@ func run(ctx context.Context, cfg egress.Config, l *Login, attempts int, right s
 		switch {
 		case a.Status != base.Status:
 			r.Limited, r.Signal = true, fmt.Sprintf("answered %d instead of %d", a.Status, base.Status)
-		case redirect(a) != r.Redirect:
-			r.Limited, r.Signal = true, fmt.Sprintf("redirected to %s instead of %s", orNone(redirect(a)), orNone(r.Redirect))
+		case webform.Redirect(a) != r.Redirect:
+			r.Limited, r.Signal = true, fmt.Sprintf("redirected to %s instead of %s", orNone(webform.Redirect(a)), orNone(r.Redirect))
 		case ratelimit.NewWord(ratelimit.LimitWords(a.Body), baseWords) != "":
 			r.Limited, r.Signal = true, "the answer has "+ratelimit.Said(ratelimit.NewWord(ratelimit.LimitWords(a.Body), baseWords))
 		case ratelimit.NewWord(at.nextWords, nextWords) != "":
@@ -624,57 +568,10 @@ func orNone(s string) string {
 	return s
 }
 
-// shape is what tells a login's answers apart for the right-password
-// guard (ADR 0062): the status, the redirect, and the names of the cookies
-// it sets. A body is not compared: two answers to the same ignored login
-// differ byte for byte (measured on Next.js 16).
-type shape struct {
-	status   int
-	location string
-	cookies  string
-}
-
-func shapeOf(a *egress.Answer) shape {
-	var names []string
-	for _, c := range (&http.Response{Header: a.Header}).Cookies() {
-		if c.MaxAge >= 0 && !slices.Contains(names, c.Name) {
-			names = append(names, c.Name)
-		}
-	}
-	slices.Sort(names)
-	return shape{a.Status, redirect(a), strings.Join(names, ",")}
-}
-
-func (s shape) String() string {
-	out := fmt.Sprintf("answered %d", s.status)
-	if s.location != "" {
-		out += " to " + s.location
-	}
-	if s.cookies != "" {
-		out += " setting the cookies " + s.cookies
-	}
-	return out
-}
-
-// token is a run of letters, digits and hyphens.
-var token = regexp.MustCompile(`[A-Za-z0-9-]+`)
-
-// redirect is an answer's Location with random values left out: a run of
-// letters, digits and hyphens 8 or more long with a digit (a token, an ID
-// or a time) becomes "*" (ADR 0062). Words such as
-// "over_request_rate_limit" stay.
-func redirect(a *egress.Answer) string {
-	loc := a.Header.Get("Location")
-	if len(loc) > 2048 {
-		loc = loc[:2048]
-	}
-	return token.ReplaceAllStringFunc(loc, func(t string) string {
-		if len(t) >= 8 && strings.ContainsAny(t, "0123456789") {
-			return "*"
-		}
-		return t
-	})
-}
+// shapeOf is what tells a login's answers apart for the right-password
+// guard (ADR 0062): webform.Shape with the redirect's random values left
+// out.
+func shapeOf(a *egress.Answer) webform.Shape { return webform.ShapeOf(a, webform.Redirect(a)) }
 
 // limitStatus names a status or header that always means a limit.
 func limitStatus(a *egress.Answer) string {

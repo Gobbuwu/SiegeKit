@@ -1,0 +1,11 @@
+{
+  "fixture": "Next.js 16.4.6 app (.github/gate/logins, React 19.3.1) whose sign-up and reset pages are Server Action forms (ADR 0069, issue #81): /signup (formAction button, 10 sign-ups, then the same 303 to /signup?error=too-many-attempts instead of ?notice=check-email), /forgot (formAction button, 5 resets, then the same 303 to /forgot?error=too-many-attempts), /signup2 (useActionState, no limit, answers 200 with the form's state); each action run under the limit emails Mailpit axllent/mailpit@sha256:e22dce5b36f93c77082e204a3942fb6b283b7896e057458400a4c88344c3df68 (v1.27.11) (gate.yml job logins); this scan: --signup-page with --mail-catcher: 10 sign-ups run, then the limit's redirect",
+  "measured": "local runs on 2026-11-25 (Docker 29.9.3 rootful, cgroup v1, linux/amd64, Node 22.23.5): the same answer, requests and emails each time; to be confirmed by the CI gate on both engines and both architectures. Minimum requests are the measured ones: the counts are fixed",
+  "checks": {
+    "signup-limit": {
+      "status": "ran",
+      "minRequests": 33,
+      "why": "the limit shows only in the redirect: limited after 11 sign-ups (11 page reads, 11 posts, 11 redirects followed, ADR 0069)"
+    }
+  }
+}

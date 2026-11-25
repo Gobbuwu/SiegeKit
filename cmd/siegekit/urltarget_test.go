@@ -395,7 +395,7 @@ func TestScanURLRunsActivePlugins(t *testing.T) {
 		r.Plugins[9].ID != "public-maps" || r.Plugins[9].Status != report.Ran || r.Plugins[9].Requests != len(publicmaps.Paths()) || r.Plugins[9].Findings != 1 ||
 		r.Plugins[8].ID != "storage-write" || r.Plugins[8].Status != report.Skipped || r.Plugins[8].Cause != report.CauseNoInput || !strings.Contains(r.Plugins[8].Reason, "--storage-url") ||
 		r.Plugins[7].ID != "backend-live" || r.Plugins[7].Status != report.Skipped || !strings.Contains(r.Plugins[7].Reason, "no backend URL was given") || r.Plugins[6].ID != "served-secrets" || r.Plugins[6].Status != report.Ran ||
-		r.Plugins[3].ID != "reset-limit" || r.Plugins[3].Status != report.Skipped || r.Plugins[3].Cause != report.CauseNoInput || !strings.Contains(r.Plugins[3].Reason, "--reset-url and --reset-body") ||
+		r.Plugins[3].ID != "reset-limit" || r.Plugins[3].Status != report.Skipped || r.Plugins[3].Cause != report.CauseNoInput || !strings.Contains(r.Plugins[3].Reason, "--reset-url (or --reset-page) and --reset-body") ||
 		r.Plugins[4].ID != "signup-limit" || r.Plugins[4].Status != report.Skipped || r.Plugins[5].ID != "code-limit" || r.Plugins[5].Status != report.Skipped ||
 		r.Plugins[1].ID != "login-spray" || r.Plugins[1].Status != report.Skipped || r.Plugins[1].Cause != report.CauseNoInput ||
 		r.Plugins[2].ID != "rate-limit" || r.Plugins[2].Status != report.Skipped || !strings.Contains(r.Plugins[2].Reason, "no URL was given") || r.Plugins[0].ID != "login-throttle" || r.Plugins[0].Status != report.Skipped || !strings.Contains(r.Plugins[0].Reason, "no login was given") {

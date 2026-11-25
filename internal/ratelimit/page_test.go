@@ -252,13 +252,25 @@ func pageEndpoint(t *testing.T, p Page, body string) (*Endpoint, egress.Config) 
 	return pe, cfg
 }
 
+// next is the body of a request with new values, as Check makes them.
+func (e *Endpoint) next() []byte { return e.bodyFor(wrongGuess(), newName()) }
+
+// pageGET is the page's own answer to a GET in installPage: an API URL
+// that has no page, so the guard sees the requests reach the app.
+var pageGET = func() *egress.Answer {
+	return &egress.Answer{Status: http.StatusMethodNotAllowed, Header: http.Header{}}
+}
+
 // installPage replaces send for a page: bodies differ on each request.
 func installPage(t *testing.T, e *Endpoint, answer func(i int) *egress.Answer) *[]string {
 	var f fake
 	f.install(t, e, nil)
 	var bodies []string
-	send = func(ctx context.Context, cfg egress.Config, method, path, ct string, body []byte, max int64) (*egress.Answer, error) {
-		if method != http.MethodPost || path != e.Path || ct != e.ContentType() {
+	send = func(ctx context.Context, cfg egress.Config, method, path string, h http.Header, body []byte, max int64) (*egress.Answer, error) {
+		if method == http.MethodGet && path == e.Path && body == nil && (e.Page == Reset || e.Page == SignUp) {
+			return pageGET(), nil // the guard's GET of the page (ADR 0069)
+		}
+		if ct := h.Get("Content-Type"); method != http.MethodPost || path != e.Path || ct != e.ContentType() {
 			t.Errorf("sent %s %s %s", method, path, ct)
 		}
 		bodies = append(bodies, string(body))
@@ -289,8 +301,17 @@ func TestCheckPage(t *testing.T) {
 			seen[b] = true
 		}
 	}
+	// A refused reset (403 from a CSRF check, as Django 5.2.8's reset
+	// gives a post without its token, measured) differs from the page's
+	// GET but shows nothing reached the app: no finding (ADR 0069).
+	e, cfg := pageEndpoint(t, Reset, `{"email":"me@x.test"}`)
+	installPage(t, e, func(int) *egress.Answer { return answer(403, nil) })
+	r, err := Check(context.Background(), cfg, e, 20)
+	if err != nil || r.Reached != "" || r.Requests != 20 || len(Findings(e, r, 20)) != 0 || !strings.Contains(r.Summary(20), "cannot tell that its requests reached the app's password-reset code") {
+		t.Errorf("refused reset: %+v %v %q", r, err, r.Summary(20))
+	}
 	// A sign-up that is refused made no account: the check fails.
-	e, cfg := pageEndpoint(t, SignUp, `{"email":"{new}@x.test"}`)
+	e, cfg = pageEndpoint(t, SignUp, `{"email":"{new}@x.test"}`)
 	installPage(t, e, func(int) *egress.Answer { return answer(400, nil) })
 	if _, err := Check(context.Background(), cfg, e, 5); err == nil || !strings.Contains(err.Error(), "the sign-up answered 400, so it made no account") {
 		t.Errorf("sign-up 400: %v", err)
@@ -307,7 +328,7 @@ func TestCheckPage(t *testing.T) {
 		}
 		return answer(201, nil)
 	})
-	r, err := Check(context.Background(), cfg, e, 5)
+	r, err = Check(context.Background(), cfg, e, 5)
 	if err != nil || r.Limited || r.Accepted != 3 || r.Changed != 2 || len(Findings(e, r, 5)) != 0 || !strings.Contains(r.Summary(5), "2 answered a status other than the first answer's 201") {
 		t.Errorf("changed: %+v %v %q", r, err, r.Summary(5))
 	}
@@ -357,7 +378,8 @@ func TestPageFindings(t *testing.T) {
 		}
 		return e
 	}
-	notLimited := Result{Requests: 20, Baseline: 200, Accepted: 20}
+	reached := "an answer (answered 200) differed from the page's own answer to a GET (answered 405)"
+	notLimited := Result{Requests: 20, Baseline: 200, Accepted: 20, Reached: reached}
 	for _, c := range []struct {
 		p    Page
 		r    Result
@@ -367,7 +389,7 @@ func TestPageFindings(t *testing.T) {
 		text string
 	}{
 		{Reset, notLimited, "reset-not-limited", findings.Low, "CWE-799", "The answers do not show whether the app sent an email"},
-		{SignUp, notLimited, "signup-not-limited", findings.Low, "CWE-799", "up to 20 accounts were made, named siegekit-new-"},
+		{SignUp, notLimited, "signup-not-limited", findings.Low, "CWE-799", "SiegeKit knows they reached the app: " + reached + ". Up to 20 accounts may have been made, named siegekit-new-"},
 		{Code, Result{Requests: 20, Baseline: 401}, "code-not-limited", findings.Medium, "CWE-307", "20 wrong codes"},
 		// Juice Shop (measured 2026-11-23): 100 per 300 s is 28,800 a day.
 		{Code, Result{Requests: 1, Limited: true, Signal: "answered with a X-Ratelimit-Limit header, already at the first request", Limit: 100, Window: 300 * time.Second}, "code-limit-high", findings.Low, "CWE-307", "allows 100 requests per 5m0s, so an attacker who has the password can make about 28800 wrong guesses a day"},
@@ -530,8 +552,9 @@ func TestMailCount(t *testing.T) {
 		t.Fatal(err)
 	}
 	const catcher = "http://127.0.0.1:8025/"
-	same := Result{Requests: 20, Baseline: 200, Accepted: 20, To: []string{"tester@shop.test"}}
+	same := Result{Requests: 20, Baseline: 200, Accepted: 20, To: []string{"tester@shop.test"}, page: Reset, Reached: "an answer (answered 200) differed from the page's own answer to a GET (answered 405)"}
 	with := func(m Mail) Result { r := same; m.Catcher = catcher; r.Mail = &m; return r }
+	unreached := func(r Result) Result { r.Reached = ""; return r }
 	for _, c := range []struct {
 		name    string
 		r       Result
@@ -555,6 +578,13 @@ func TestMailCount(t *testing.T) {
 		{"any address", with(Mail{Emails: 1, Settled: true, Any: true}), true, "", "to any address (the requests held none)"},
 		// No catcher: as PR 1, pointing at the flag.
 		{"no catcher", same, false, "Give --mail-catcher with a local Mailpit", "no limit seen in 20 requests, all answered 200"},
+		// Guard G1 (ADR 0069): answers like the page's own GET and no
+		// email give no finding; an email that arrived shows the
+		// requests reached the app, even while more arrive.
+		{"none, answers like the page", unreached(with(Mail{Settled: true})), false, "",
+			"no email arrived at the mail catcher http://127.0.0.1:8025/ to the addresses sent: the app sent none for these requests, or does not send its mail there; no answer below 400 differed from the page's own answer to a GET in status, redirect or a new cookie, so SiegeKit cannot tell that its requests reached the app's password-reset code: not reported. A form that only a browser can send (a Next.js Server Action, a CSRF token) needs --reset-page"},
+		{"no catcher, answers like the page", unreached(same), false, "", "not reported. Give --mail-catcher to count the emails. A form that only a browser can send"},
+		{"arriving, answers like the page", unreached(with(Mail{Emails: 7})), false, "SiegeKit knows they reached the app: emails arrived for them at the mail catcher.", "more were still arriving"},
 	} {
 		fs := Findings(reset, c.r, 20)
 		if c.r.MailLimited() != c.limited || (c.finding == "") != (len(fs) == 0) ||

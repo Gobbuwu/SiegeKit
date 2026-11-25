@@ -41,7 +41,7 @@ jobs:
           - { os: macos-latest }
     runs-on: ${{ matrix.os }}
     # Above the worst case of the steps' own limits (go test -timeout 30m,
-    # 11.5 minutes of fuzzing, the self-scan), so a hung test is ended by
+    # 17 minutes of fuzzing, the self-scan), so a hung test is ended by
     # Go with its goroutine dump, not by GitHub without one (full project
     # check F13).
     timeout-minutes: 60
@@ -108,6 +108,7 @@ jobs:
           go test -run='^$' -fuzz='^FuzzCheck$' -fuzztime=30s ./internal/openapi
           go test -run='^$' -fuzz='^FuzzBasePath$' -fuzztime=30s ./internal/openapi
           go test -run='^$' -fuzz='^FuzzLogin$' -fuzztime=30s ./internal/login
+          go test -run='^$' -fuzz='^FuzzReadPage$' -fuzztime=30s ./internal/webform
           go test -run='^$' -fuzz='^FuzzLinks$' -fuzztime=30s ./internal/served
           go test -run='^$' -fuzz='^FuzzBackendRules$' -fuzztime=30s ./internal/checks
           go test -run='^$' -fuzz='^FuzzDotenv$' -fuzztime=30s ./internal/checks
