@@ -15,6 +15,16 @@
 - Confirm the upstream license and update [THIRD_PARTY.md](THIRD_PARTY.md).
 - Re-run the parser golden tests against the new version's real output.
 
+## Changing the waiter
+
+The waiter (`internal/waiter`, ADR 0067) runs inside every tool container, so SiegeKit embeds it as static Linux programs in `internal/waiterbin/bin`. After changing `internal/waiter` or `cmd/siegekit-waiter`, rebuild them with the Go release CI uses and commit the result:
+
+```
+GOTOOLCHAIN=go1.27.4 go generate ./internal/waiterbin
+```
+
+Every CI job builds them again from source and fails if a byte differs (`TestEmbeddedMatchesSource`). When CI moves to another Go release, update `waiterbin.GoVersion` and rebuild.
+
 ## Commits
 
 - Small, focused commits with a clear message.

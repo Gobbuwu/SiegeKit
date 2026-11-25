@@ -3,6 +3,7 @@ package report
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -63,7 +64,7 @@ func TestExitCodes(t *testing.T) {
 		{&Run{}, ExitIncomplete},
 	}
 	for i, c := range cases {
-		if got := c.r.ExitCode(findings.Medium); got != c.want {
+		if got := c.r.ExitCode(findings.Medium, false); got != c.want {
 			t.Errorf("case %d: exit %d, want %d", i, got, c.want)
 		}
 	}
@@ -187,5 +188,45 @@ func TestCheckCauses(t *testing.T) {
 	var j bytes.Buffer
 	if err := WriteJSON(&j, r); err != nil || !strings.Contains(j.String(), `"cause": "no-files"`) {
 		t.Errorf("report.json has no cause: %v\n%s", err, j.String())
+	}
+}
+
+func TestGapsAndRequireComplete(t *testing.T) {
+	r := run(Ran)
+	r.Plugins = []PluginResult{{ID: "a", Status: Ran}, {ID: "b", Status: Ran}, {ID: "c", Status: Failed, Stop: StopMemoryKill}}
+	for i := 0; i < MaxGaps+3; i++ {
+		r.Plugins[0].AddGap(Gap{Cause: GapTooLarge, Path: fmt.Sprintf("big%d.json", i)})
+	}
+	r.Plugins[1].Completeness = Complete
+	r.MarkCompleteness()
+	if p := r.Plugins[0]; p.GapCount != MaxGaps+3 || len(p.Gaps) != MaxGaps || p.Completeness != WithGaps {
+		t.Fatalf("gaps %d listed %d completeness %q", p.GapCount, len(p.Gaps), p.Completeness)
+	}
+	if r.Plugins[1].Completeness != Complete || r.Plugins[2].Completeness != "" {
+		t.Fatalf("completeness %q %q", r.Plugins[1].Completeness, r.Plugins[2].Completeness)
+	}
+	if !strings.Contains(r.Plugins[0].GapNote(), "203 not checked: big0.json (too-large)") {
+		t.Errorf("note %q", r.Plugins[0].GapNote())
+	}
+	r.Plugins = r.Plugins[:2] // without the stopped check
+	if got := r.ExitCode(findings.Medium, false); got != ExitClean {
+		t.Errorf("gaps alone: exit %d, want %d", got, ExitClean)
+	}
+	if got := r.ExitCode(findings.Medium, true); got != ExitIncomplete {
+		t.Errorf("gaps with --require-complete: exit %d, want %d", got, ExitIncomplete)
+	}
+	plain := run(Ran)
+	plain.MarkCompleteness()
+	if plain.Plugins[0].Completeness != NotProven {
+		t.Errorf("a check with no signal must be not proven, got %q", plain.Plugins[0].Completeness)
+	}
+	var b bytes.Buffer
+	if err := WriteJSON(&b, r); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{`"gapCount": 203`, `"cause": "too-large"`, `"completeness": "gaps"`} {
+		if !strings.Contains(b.String(), want) {
+			t.Errorf("report.json lacks %s", want)
+		}
 	}
 }

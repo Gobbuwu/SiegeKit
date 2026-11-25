@@ -45,7 +45,7 @@ func TestUpdateReplacesDataOnlyOnSuccess(t *testing.T) {
 			return &sandbox.Result{Status: sandbox.Completed, ExitCode: 1}, nil
 		},
 		"timeout": func(sandbox.Spec) (*sandbox.Result, error) {
-			return &sandbox.Result{Status: sandbox.TimedOut}, nil
+			return &sandbox.Result{Status: sandbox.TimedOut, Stop: sandbox.StopTimeLimit, StopReason: "stopped after 30 seconds, its time limit"}, nil
 		},
 		"no data": func(sandbox.Spec) (*sandbox.Result, error) {
 			return &sandbox.Result{Status: sandbox.Completed}, nil

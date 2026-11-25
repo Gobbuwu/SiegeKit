@@ -113,7 +113,8 @@ func TestRunWeakPasswords(t *testing.T) {
 		"dist/app.js":           "password = 'admin'\n",
 		"package-lock.json":     `{"password": "admin"}`,
 	})
-	fs, result, err := weakPasswords.Run(context.Background(), root)
+	o, err := weakPasswords.Run(context.Background(), root)
+	fs, result := o.Findings, o.Result
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -134,7 +135,7 @@ func TestRunWeakPasswords(t *testing.T) {
 	if fs[0].Location != (findings.Location{URI: ".env", StartLine: 1}) || !strings.Contains(fs[0].Message, "admi****") {
 		t.Errorf("%+v", fs[0])
 	}
-	if _, result, _ := weakPasswords.Run(context.Background(), tree(t, nil)); result != "0 weak password(s) reported" {
+	if o, _ := weakPasswords.Run(context.Background(), tree(t, nil)); o.Result != "0 weak password(s) reported" {
 		t.Errorf("empty: %q", result)
 	}
 }

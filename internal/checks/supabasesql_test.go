@@ -46,7 +46,8 @@ func expected(t *testing.T, root string, ids ...string) []string {
 
 func TestSupabaseRules(t *testing.T) {
 	root := filepath.Join("testdata", "supabase-rules")
-	fs, _, err := backendRules.Run(context.Background(), root)
+	o, err := backendRules.Run(context.Background(), root)
+	fs := o.Findings
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -75,7 +76,8 @@ func TestSupabaseRules(t *testing.T) {
 }
 
 func TestSupabaseSeedPassword(t *testing.T) {
-	fs, _, err := weakPasswords.Run(context.Background(), filepath.Join("testdata", "supabase-rules"))
+	o, err := weakPasswords.Run(context.Background(), filepath.Join("testdata", "supabase-rules"))
+	fs := o.Findings
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -116,7 +118,8 @@ func TestStorageGateSets(t *testing.T) {
 			}
 			files = map[string]string{"storage.rules": string(data)}
 		}
-		fs, _, err := backendRules.Run(context.Background(), tree(t, files))
+		o, err := backendRules.Run(context.Background(), tree(t, files))
+		fs := o.Findings
 		if err != nil {
 			t.Fatal(err)
 		}

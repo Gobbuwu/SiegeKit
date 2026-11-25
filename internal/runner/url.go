@@ -227,22 +227,29 @@ func runActive(ctx context.Context, run ActiveRunner, m *manifest.Manifest, opt 
 		// destructive, whatever the tool's own settings (ADR 0023).
 		ReadOnly: opt.Deployed && !*m.Destructive,
 	}
-	res, err := run(ctx, sandbox.Spec{
+	spec := sandbox.Spec{
 		Image: image, Args: args, Env: m.Run.Env, OutDir: outDir, ConfigFile: configFile, Files: fileMounts,
 		CPUs: cpus, MemoryMiB: m.Resources.MemoryMiB,
 		Timeout: time.Duration(m.Resources.TimeoutSeconds) * time.Second,
 		// Java tools keep their working files in /tmp.
 		TmpMiB: m.Resources.MemoryMiB / 2,
-	}, cfg)
+	}
+	res, err := run(ctx, spec, cfg)
 	if err != nil {
 		return fail(report.Failed, "%v", err)
 	}
 	pr.Requests, pr.Refused, pr.RefusedTo = res.Stats.Requests, res.Stats.Refused, res.Stats.RefusedTo
+	pr.Usage = usage(res.Result, spec)
+	readFindings := func() ([]findings.Finding, error) {
+		return readReport(filepath.Join(outDir, m.Output.File), m, nil, rc)
+	}
 	switch {
 	case res.Stopped != "":
-		return fail(report.Failed, "stopped by SiegeKit: %s", res.Stopped)
-	case res.Status == sandbox.TimedOut:
-		return fail(report.TimedOut, "stopped after %d seconds", m.Resources.TimeoutSeconds)
+		// SiegeKit's proxy stopped the run: the target kept failing (ADR
+		// 0018). A run cut short (ADR 0067).
+		return stopped(pr, sandbox.Failed, report.StopTargetStopped, "stopped by SiegeKit: "+res.Stopped, readFindings)
+	case res.Stop != "":
+		return stopped(pr, res.Status, report.Stop(res.Stop), res.StopReason, readFindings)
 	case res.Status == sandbox.Failed:
 		return fail(report.Failed, "%s", lastLine(res.Stderr))
 	case res.ExitCode != 0 && !slices.Contains(m.Run.FindingsExitCodes, res.ExitCode):

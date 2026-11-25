@@ -9,6 +9,7 @@ import (
 	"crypto/rand"
 	"debug/elf"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -29,6 +30,8 @@ import (
 	"unicode/utf8"
 
 	"github.com/Gobbuwu/SiegeKit/internal/relay"
+	"github.com/Gobbuwu/SiegeKit/internal/waiter"
+	"github.com/Gobbuwu/SiegeKit/internal/waiterbin"
 )
 
 // Paths inside the container.
@@ -157,12 +160,58 @@ const (
 	Failed    Status = "failed"
 )
 
+// Stop says, as a fixed word, why a run was cut short (ADR 0067, decision
+// 1). A stopped run is Failed (TimedOut for StopTimeLimit), so every caller
+// that does not look at Stop still treats it as failed; the output the tool
+// wrote before the stop is left in place.
+type Stop string
+
+// Run stops.
+const (
+	// The run reached its time limit.
+	StopTimeLimit Stop = "time-limit"
+	// The kernel killed a process of the tool for memory.
+	StopMemoryKill Stop = "memory-kill"
+	// The kernel refused to start a process at the process limit.
+	StopProcessLimit Stop = "process-limit"
+	// The container's first process was killed (exit 137) before it could
+	// report; the kernel's reason is not known (ADR 0067, decision 2).
+	StopKilled Stop = "killed"
+	// The tool wrote more than its output limit.
+	StopOutputLimit Stop = "output-limit"
+	// The kernel's counters could not be read, so a stop cannot be ruled
+	// out.
+	StopCountersUnread Stop = "counters-unread"
+)
+
 // Result of a sandboxed run.
 type Result struct {
 	Status   Status
 	ExitCode int
-	Stderr   string // last 64 KiB
+	// Stderr is the last 64 KiB of the tool's output. When the run was
+	// stopped, its last line is StopReason, so a caller that shows only the
+	// last line shows why.
+	Stderr   string
 	Duration time.Duration
+	// Stop and StopReason say why the run was cut short; "" when it was not.
+	Stop       Stop
+	StopReason string
+	// Usage is what the waiter measured; nil when it wrote no counters.
+	Usage *waiter.Status
+}
+
+// stopped marks r as cut short for why.
+func (r *Result) stopped(stop Stop, why string) {
+	if r.Stop == "" {
+		r.Stop, r.StopReason = stop, why
+		r.Stderr = strings.TrimRight(r.Stderr, "\n") + "\n" + why
+	} else {
+		r.StopReason += "; " + why
+		r.Stderr += "; " + why
+	}
+	if r.Status != TimedOut {
+		r.Status = Failed
+	}
 }
 
 // Engine is a container engine CLI (Docker or Podman).
@@ -369,10 +418,7 @@ func (s *Spec) EngineArgs(name string, uid, gid int) ([]string, error) {
 		return nil, err
 	}
 	uid, gid = ToolIdentity(uid, gid)
-	pids := s.PidsLimit
-	if pids == 0 {
-		pids = 256
-	}
+	pids := s.ProcessLimit()
 	tmp := s.TmpMiB
 	if tmp == 0 {
 		tmp = 256
@@ -475,6 +521,8 @@ func (s *Spec) EngineArgs(name string, uid, gid int) ([]string, error) {
 }
 
 // Run executes the spec and waits for it, killing the container on timeout.
+// The tool runs under the waiter (ADR 0067), whose counters decide whether
+// the run was cut short.
 func (e *Engine) Run(ctx context.Context, s Spec) (*Result, error) {
 	name, err := containerName()
 	if err != nil {
@@ -485,7 +533,6 @@ func (e *Engine) Run(ctx context.Context, s Spec) (*Result, error) {
 	if err != nil {
 		return nil, err
 	}
-	args = e.sameOnEveryEngine(args)
 	// The container user may not map to the caller's UID (SiegeKit running as
 	// root, user-namespace remapping, rootless engines), so the output
 	// directory is opened up for the run. This is only safe because its
@@ -493,6 +540,21 @@ func (e *Engine) Run(ctx context.Context, s Spec) (*Result, error) {
 	if err := requirePrivateParent(s.OutDir); err != nil {
 		return nil, err
 	}
+	entry := []string{s.Entrypoint}
+	if s.Entrypoint == "" {
+		if entry, err = e.entrypoint(ctx, s.Image); err != nil {
+			return nil, err
+		}
+	}
+	wdir, err := installWaiter(filepath.Dir(s.OutDir))
+	if err != nil {
+		return nil, err
+	}
+	defer os.RemoveAll(wdir)
+	if args, err = withWaiter(args, s, entry, wdir); err != nil {
+		return nil, err
+	}
+	args = e.sameOnEveryEngine(args)
 	if err := os.Chmod(s.OutDir, 0o777); err != nil { // #nosec G302 -- the container user may differ from the caller; the parent is checked to be private (0700) first
 		return nil, err
 	}
@@ -550,6 +612,8 @@ func (e *Engine) Run(ctx context.Context, s Spec) (*Result, error) {
 		}
 		res.Status = TimedOut
 		res.ExitCode = -1
+		_ = os.Remove(filepath.Join(s.OutDir, StatusFile)) // not read: the run is stopped already
+		res.stopped(StopTimeLimit, fmt.Sprintf("stopped after %d seconds, its time limit", int(s.Timeout.Seconds())))
 		return res, nil
 	}
 	if ctx.Err() != nil {
@@ -571,6 +635,27 @@ func (e *Engine) Run(ctx context.Context, s Spec) (*Result, error) {
 	default:
 		return nil, runErr
 	}
+	usage, uerr := readStatus(s.OutDir)
+	res.Usage = usage
+	switch {
+	case res.Status == Failed:
+		// The engine or the waiter could not start the tool; the reason is
+		// its last line.
+	case uerr != nil && res.ExitCode == 137:
+		res.stopped(StopKilled, "the container was killed (exit 137) before SiegeKit's waiter could read the kernel's counters; the most common cause is running out of memory")
+	case uerr != nil:
+		res.stopped(StopCountersUnread, "SiegeKit could not read the kernel's counters for this run, so it cannot tell whether the run was cut short: "+uerr.Error())
+	default:
+		if usage.MemoryKills > 0 {
+			res.stopped(StopMemoryKill, fmt.Sprintf("the kernel killed %d process(es) of the tool for using more than the %d MiB memory limit", usage.MemoryKills, s.MemoryMiB))
+		}
+		if usage.ProcessesRefused > 0 {
+			res.stopped(StopProcessLimit, fmt.Sprintf("the kernel refused %d new process(es) at the limit of %d processes and threads", usage.ProcessesRefused, s.ProcessLimit()))
+		}
+		if len(usage.Errors) > 0 {
+			res.stopped(StopCountersUnread, "SiegeKit could not read the kernel's counters for this run, so it cannot tell whether the run was cut short: "+strings.Join(usage.Errors, "; "))
+		}
+	}
 
 	limit := s.OutputLimit
 	if limit == 0 {
@@ -581,10 +666,134 @@ func (e *Engine) Run(ctx context.Context, s Spec) (*Result, error) {
 		return nil, err
 	}
 	if size > limit {
-		res.Status = Failed
-		res.Stderr = fmt.Sprintf("output exceeded %d bytes (%d written)\n", limit, size) + res.Stderr
+		res.stopped(StopOutputLimit, fmt.Sprintf("the tool's output exceeded the limit of %d bytes (%d written)", limit, size))
 	}
 	return res, nil
+}
+
+// ProcessLimit is the limit of processes and threads the run gets.
+func (s *Spec) ProcessLimit() int {
+	if s.PidsLimit == 0 {
+		return 256
+	}
+	return s.PidsLimit
+}
+
+// Waiter settings (ADR 0067).
+const (
+	// WaiterMount is where the waiter's directory is mounted, read-only.
+	WaiterMount = "/siegekit/waiter"
+	waiterFile  = "wait"
+	// StatusFile is the waiter's status file in the output directory. It
+	// is written after the tool exits and removed by SiegeKit before the
+	// output is read or measured.
+	StatusFile = ".siegekit-waiter.json"
+)
+
+// installWaiter writes the waiter for this machine's CPU type into a new
+// directory in parent, which must be private (checked by the caller).
+func installWaiter(parent string) (string, error) {
+	bin, err := waiterbin.Binary(runtime.GOARCH)
+	if err != nil {
+		return "", err
+	}
+	dir, err := os.MkdirTemp(parent, "waiter-")
+	if err != nil {
+		return "", err
+	}
+	// The container user may be any user: traverse only, as for the relay.
+	if err := os.Chmod(dir, 0o711); err != nil { // #nosec G302 -- traverse only; the parent is private
+		_ = os.RemoveAll(dir)
+		return "", err
+	}
+	f, err := os.OpenFile(filepath.Join(dir, waiterFile), os.O_WRONLY|os.O_CREATE|os.O_EXCL|syscall.O_NOFOLLOW, 0o755) // #nosec G302 G304 -- the tool's user (another UID) must run it; dir is new and private to SiegeKit
+	if err == nil {
+		_, err = f.Write(bin)
+		err = errors.Join(err, f.Chmod(0o755), f.Close())
+	}
+	if err != nil {
+		_ = os.RemoveAll(dir)
+		return "", fmt.Errorf("install waiter: %w", err)
+	}
+	return dir, nil
+}
+
+// withWaiter changes engine arguments made by EngineArgs so the waiter in
+// dir runs first and starts entry (the image's entrypoint, or the spec's)
+// with the spec's arguments, as the engine itself would have.
+func withWaiter(args []string, s Spec, entry []string, dir string) ([]string, error) {
+	if err := checkMountPath(dir); err != nil {
+		return nil, fmt.Errorf("waiter directory: %w", err)
+	}
+	img := len(args) - len(s.Args) - 1
+	if img < 0 || args[img] != s.Image {
+		return nil, errors.New("waiter: image not where expected in the engine arguments")
+	}
+	var out []string
+	for i := 0; i < img; i++ {
+		if args[i] == "--entrypoint" {
+			i++ // replaced below
+			continue
+		}
+		out = append(out, args[i])
+	}
+	out = append(out,
+		"--mount", "type=bind,source="+dir+",target="+WaiterMount+",readonly",
+		"--entrypoint", WaiterMount+"/"+waiterFile,
+		s.Image, OutMount+"/"+StatusFile)
+	for _, e := range entry {
+		if e != "" {
+			out = append(out, e)
+		}
+	}
+	return append(out, s.Args...), nil
+}
+
+// entrypoint reads image's entrypoint, which the waiter starts.
+func (e *Engine) entrypoint(ctx context.Context, image string) ([]string, error) {
+	if !reImage.MatchString(image) {
+		return nil, fmt.Errorf("image %q must be pinned by digest", image)
+	}
+	cmd := e.command(ctx, "image", "inspect", "--format", "{{json .Config.Entrypoint}}", image) // image is checked against reImage above
+	var out, errOut tailBuffer
+	cmd.Stdout, cmd.Stderr = &out, &errOut
+	if err := cmd.Run(); err != nil {
+		return nil, fmt.Errorf("read the image's entrypoint: %s", lastLine(errOut.String(), err))
+	}
+	var entry []string
+	if err := json.Unmarshal([]byte(strings.TrimSpace(out.String())), &entry); err != nil {
+		return nil, fmt.Errorf("read the image's entrypoint: %v", err)
+	}
+	if len(entry) > 32 {
+		return nil, errors.New("read the image's entrypoint: more than 32 parts")
+	}
+	return entry, nil
+}
+
+// readStatus reads and removes the waiter's status file in dir.
+func readStatus(dir string) (*waiter.Status, error) {
+	p := filepath.Join(dir, StatusFile)
+	defer os.Remove(p)
+	f, err := os.OpenFile(p, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0) // #nosec G304 -- fixed name in SiegeKit's private output directory; links refused
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, errors.New("the waiter wrote no counters")
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	if st, err := f.Stat(); err != nil || !st.Mode().IsRegular() {
+		return nil, errors.New("the waiter's status is not a regular file")
+	}
+	b, err := io.ReadAll(io.LimitReader(f, waiter.MaxStatusSize+1))
+	if err != nil {
+		return nil, err
+	}
+	st, err := waiter.ParseStatus(b)
+	if err != nil {
+		return nil, err
+	}
+	return &st, nil
 }
 
 // requirePrivateParent fails unless dir's parent grants no access to group or
