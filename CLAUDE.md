@@ -32,6 +32,7 @@ Real-app tests run in `.github/workflows/gate.yml` (Juice Shop, Gitea and others
 - Before asking to merge: CI and gate green, the critical review sweep run on the full diff against main (project threads: `review-critical-checklist.md` in the project files), and everything labelled unverified verified. Report a weakened test or gate to the maintainer instead of fixing it quietly.
 - Merge one PR at a time; update the next from main and re-run its checks.
 - Sign off every commit (DCO) and never force-push.
+- `main` requires the four Linux `Test (...)` jobs and `DCO sign-off` to pass. Renaming a CI job or matrix entry blocks every merge until the maintainer updates the ruleset, so ask first.
 
 ## Testing
 - Record the environment (OS, chip, engine, rootless or not, cgroup version, versions) with each result. A result holds only where it ran.
