@@ -19,6 +19,7 @@ import (
 
 	"github.com/Gobbuwu/SiegeKit/internal/bandit"
 	"github.com/Gobbuwu/SiegeKit/internal/checks"
+	"github.com/Gobbuwu/SiegeKit/internal/egress"
 	"github.com/Gobbuwu/SiegeKit/internal/ffuf"
 	"github.com/Gobbuwu/SiegeKit/internal/files"
 	"github.com/Gobbuwu/SiegeKit/internal/findings"
@@ -159,6 +160,7 @@ type Unavailable struct {
 	Status report.Status // report.Skipped or report.Failed
 	Cause  report.Cause  // required when skipped (ADR 0041)
 	Reason string
+	Stop   report.Stop // why a failed plugin's input was cut short, or ""
 }
 
 // Skip is a plugin skipped for cause, explained by reason.
@@ -175,7 +177,7 @@ func Fail(cause report.Cause, reason string) Unavailable {
 func (u Unavailable) Result(m *manifest.Manifest) report.PluginResult {
 	return report.PluginResult{
 		ID: m.ID, Family: m.Family, Tool: m.Tool.Name, Version: m.Tool.Version,
-		Status: u.Status, Cause: u.Cause, Reason: u.Reason,
+		Status: u.Status, Cause: u.Cause, Reason: u.Reason, Stop: u.Stop,
 	}
 }
 
@@ -518,6 +520,29 @@ func stopped(pr report.PluginResult, status sandbox.Status, stop report.Stop, re
 		pr.Reason += fmt.Sprintf("; the %d finding(s) reported before the stop are kept", len(fs))
 	}
 	return pr, fs
+}
+
+// HostBlocked fails a check that the host stopped serving partway through
+// (ADR 0071): its stop is host-blocked, and of the findings it reported,
+// those read from any answer like the block page are dropped (F2); the
+// others were found before the block and are kept. Findings that carry no
+// answers, such as Nuclei's and ZAP's, cannot be told apart and are kept.
+func HostBlocked(pr report.PluginResult, b *egress.Block, fs []findings.Finding) (report.PluginResult, []findings.Finding) {
+	pr.Status, pr.Stop, pr.Reason = report.Failed, report.StopHostBlocked, "stopped by SiegeKit: "+b.Reason
+	kept := fs[:0:0]
+	for _, f := range fs {
+		if !slices.ContainsFunc(f.Answers, func(a findings.Answer) bool { return b.Matches(a.Status, a.Length) }) {
+			kept = append(kept, f)
+		}
+	}
+	if n := len(fs) - len(kept); n > 0 {
+		pr.Reason += fmt.Sprintf("; %d finding(s) read from answers like the block page dropped", n)
+	}
+	pr.Findings = len(kept)
+	if len(kept) > 0 {
+		pr.Reason += fmt.Sprintf("; the %d finding(s) reported before the stop are kept", len(kept))
+	}
+	return pr, kept
 }
 
 // usage is what a run's container used against its limits, or nil when

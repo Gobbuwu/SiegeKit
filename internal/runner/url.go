@@ -73,6 +73,10 @@ type URLOptions struct {
 	// Header is added to every request the plugins send to the target, by
 	// the host-side proxy, so it never enters a tool container (ADR 0070).
 	Header http.Header
+	// Watch watches the host for the run (ADR 0071): each plugin is a
+	// check of its own, stopped when the host stops serving the app. Nil
+	// watches nothing.
+	Watch *egress.Watch
 }
 
 // RunURL runs each selected active plugin against the target in turn, each
@@ -223,7 +227,14 @@ func runActive(ctx context.Context, run ActiveRunner, m *manifest.Manifest, opt 
 	if err != nil {
 		return fail(report.Failed, "create output directory: %v", err)
 	}
+	// The start page first (ADR 0071): a host that already answers with
+	// another page gets no requests from this plugin.
+	watch := opt.Watch.Begin(ctx)
+	if b := watch.Block(); b != nil {
+		return HostBlocked(pr, b, nil)
+	}
 	cfg := egress.Config{
+		Watch:  watch,
 		Target: opt.Target, Addrs: opt.Addrs, VerifyTLS: opt.Deployed,
 		Rate: opt.Limits.Rate, Burst: opt.Limits.Burst, MaxConns: opt.Limits.MaxConns,
 		MaxServerErrors: opt.Limits.MaxServerErrors, Version: opt.Version, Header: opt.Header,
@@ -247,7 +258,23 @@ func runActive(ctx context.Context, run ActiveRunner, m *manifest.Manifest, opt 
 	readFindings := func() ([]findings.Finding, error) {
 		return readReport(filepath.Join(outDir, m.Output.File), m, nil, rc)
 	}
+	blocked := res.Block
+	if blocked == nil && res.Stopped == "" {
+		// The start page again, after the plugin (D1, ADR 0071): a block
+		// in its last answers is too short for the proxy to see.
+		blocked = watch.End(ctx)
+	}
 	switch {
+	case blocked != nil:
+		fs, err := readFindings()
+		pr, fs = HostBlocked(pr, blocked, fs)
+		if err != nil {
+			pr.Reason += "; no findings kept: " + err.Error()
+		}
+		if res.Stop != "" {
+			pr.Reason += "; the tool was also cut short: " + res.StopReason
+		}
+		return pr, fs
 	case res.Stopped != "":
 		// SiegeKit's proxy stopped the run: the target kept failing (ADR
 		// 0018). A run cut short (ADR 0067).

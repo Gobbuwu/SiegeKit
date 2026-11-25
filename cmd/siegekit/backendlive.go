@@ -92,6 +92,9 @@ type collected struct {
 	work, files string
 	res         served.Result
 	err         error
+	// block is set when the host stopped serving the app while the files
+	// were fetched (ADR 0071): every check that reads them is stopped.
+	block *egress.Block
 }
 
 // collect fetches the served files into a private directory. cfg allows

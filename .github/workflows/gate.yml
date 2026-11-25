@@ -13,7 +13,8 @@ name: Real-repo gate
 # forms calling Supabase Auth on the server.
 # ADR 0063: the planted secrets of the owner's Porchlet run.
 # ADR 0070: the Juice Shop URL scan behind a preview login, with the bypass
-# header in SIEGEKIT_EXTRA_HEADERS.
+# header in SIEGEKIT_EXTRA_HEADERS. ADR 0071: Juice Shop while its host
+# starts answering with a block page.
 on:
   workflow_dispatch:
   schedule:
@@ -549,6 +550,176 @@ jobs:
         run: |
           docker logs juice-shop 2>&1 | tail -50
           tail -n 20 "$RUNNER_TEMP/login-gate.out" "$RUNNER_TEMP/gate-requests.log"
+
+  block:
+    # ADR 0071 (issue #86): Juice Shop behind a stand-in for a host that
+    # stops serving the app partway through a scan (.github/gate/block), as
+    # Vercel's Security Checkpoint did on Porchlet's R1p run: a 403 page of
+    # about 25 KB, its length a few bytes different on every answer. Three
+    # scans, each checked against what SiegeKit must do:
+    #   A. The block begins at ffuf's 1,000th request and stays: ffuf is
+    #      stopped (host-blocked) with no finding from the block page, and
+    #      Nuclei, which starts after, sends nothing.
+    #   B. The same block ends right after ffuf's stop: Nuclei then runs on
+    #      the app, with no finding from the block page.
+    #   C. The block begins in access-control's last 6 requests, too few for
+    #      the proxy's rule, so the start page after the check shows it: the
+    #      check is stopped and keeps the web job's 4 cross-account reads
+    #      (measured locally on Docker 29.9.3, 2026-11-25), and the read the
+    #      block page made look refused to a request with no login is dropped.
+    # The other jobs are the false-stop check: they scan with the same
+    # detector and must meet their known answers.
+    name: Scan Juice Shop while its host starts blocking (${{ matrix.engine }}${{ matrix.os == 'ubuntu-24.04-arm' && ', arm64' || '' }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        engine: [podman, docker]
+        os: [ubuntu-latest, ubuntu-24.04-arm]
+    env:
+      SIEGEKIT_ENGINE: ${{ matrix.engine }}
+      EXPECT_ENGINE: ${{ matrix.engine == 'podman' && 'podman rootless' || 'docker rootful' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Platform
+        # The runner is the matrix's architecture (ADR 0060).
+        run: test "$(uname -m)" = "${{ matrix.os == 'ubuntu-24.04-arm' && 'aarch64' || 'x86_64' }}"
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: false
+      - name: Build
+        run: |
+          CGO_ENABLED=0 go build -o "$RUNNER_TEMP/siegekit" ./cmd/siegekit
+          go build -o "$RUNNER_TEMP/block-gate" ./.github/gate/block
+      - name: Start Juice Shop
+        # On 3001; the stand-in listens on 3000 for each scan.
+        run: |
+          docker run -d --name juice-shop -p 127.0.0.1:3001:3000 \
+            docker.io/bkimminich/juice-shop@sha256:9bbaecc41791f00b002bc65931cc5ff355fbdb941fa72b06558c18dace43197b
+          for i in $(seq 1 60); do
+            curl -sf -o /dev/null http://127.0.0.1:3001/ && exit 0
+            sleep 2
+          done
+          docker logs juice-shop
+          exit 1
+      - name: A. Block from ffuf's 1,000th request
+        run: |
+          set -euo pipefail
+          nohup "$RUNNER_TEMP/block-gate" -addr 127.0.0.1:3000 -app http://127.0.0.1:3001 -ua 'Fuzz Faster U Fool' -after 1000 -log "$RUNNER_TEMP/a.log" > "$RUNNER_TEMP/a.out" 2>&1 &
+          echo $! > "$RUNNER_TEMP/gate.pid"
+          sleep 1
+          set +e
+          "$RUNNER_TEMP/siegekit" scan --yes --authorized-host 127.0.0.1 --no-save --report-dir "$RUNNER_TEMP/a" --only ffuf,nuclei,public-maps http://127.0.0.1:3000/
+          code=$?
+          set -e
+          kill "$(cat "$RUNNER_TEMP/gate.pid")"
+          r="$RUNNER_TEMP/a/report.json"
+          jq '.plugins[] | {id, status, stop, reason, requests, findings}' "$r"
+          echo "exit code $code"
+          test "$code" -eq 4
+          jq -e --arg e "$EXPECT_ENGINE" '.environment.engine | (.name + (if .rootless then " rootless" else " rootful" end)) == $e' "$r"
+          jq -e '[.plugins[] | select(.id == "public-maps" and .status == "ran" and .findings == 1)] | length == 1' "$r"
+          jq -e '[.plugins[] | select(.id == "ffuf" and .status == "failed" and .stop == "host-blocked" and (.reason | contains("10 answers in a row and the start page were the same page, 403 (text/html,")))] | length == 1' "$r"
+          jq -e '[.plugins[] | select(.id == "nuclei" and .status == "failed" and .stop == "host-blocked" and (.requests // 0) == 0 and (.reason | contains("before this check: the start page answered 403")))] | length == 1' "$r"
+          # No finding from the block page (403, about 25 KB).
+          jq -e '[.findings[] | select(.message | test("answered 403 \\(2[45][0-9]{3} bytes"))] | length == 0' "$r"
+          # Block pages the checks got before the stop: the proxy's rule
+          # needs 10 in a row, and ffuf (-t 8) has at most 8 requests in
+          # flight when it stops, plus those answered during the one
+          # start-page fetch: at most 20.
+          blocked=$(grep -c 'page=no blocked=yes' "$RUNNER_TEMP/a.log" || true)
+          echo "block pages answered to the checks: $blocked"
+          test "$blocked" -ge 10
+          test "$blocked" -le 20
+      - name: B. The same block, ending after ffuf's stop
+        run: |
+          set -euo pipefail
+          nohup "$RUNNER_TEMP/block-gate" -addr 127.0.0.1:3000 -app http://127.0.0.1:3001 -ua 'Fuzz Faster U Fool' -after 1000 -lift-after-pages 1 -log "$RUNNER_TEMP/b.log" > "$RUNNER_TEMP/b.out" 2>&1 &
+          echo $! > "$RUNNER_TEMP/gate.pid"
+          sleep 1
+          set +e
+          "$RUNNER_TEMP/siegekit" scan --yes --authorized-host 127.0.0.1 --no-save --report-dir "$RUNNER_TEMP/b" --only ffuf,nuclei http://127.0.0.1:3000/
+          code=$?
+          set -e
+          kill "$(cat "$RUNNER_TEMP/gate.pid")"
+          r="$RUNNER_TEMP/b/report.json"
+          jq '.plugins[] | {id, status, stop, reason, requests, findings}' "$r"
+          echo "exit code $code"
+          if [ "$code" -ne 3 ] && [ "$code" -ne 4 ]; then exit 1; fi
+          jq -e '[.plugins[] | select(.id == "ffuf" and .status == "failed" and .stop == "host-blocked")] | length == 1' "$r"
+          jq -e '[.plugins[] | select(.id == "nuclei" and .status == "ran" and .requests > 1000)] | length == 1' "$r"
+          # Nuclei's tech templates named the block page's Astro markup on
+          # R1p; nothing may come from it here.
+          jq -e '[.findings[] | select((.title + " " + .message + " " + (.snippet // "")) | test("(?i)astro|checkpoint"))] | length == 0' "$r"
+      - name: Accounts for the access-control check
+        # As in the web job; made on the app directly, recorded at 3000.
+        run: |
+          set -euo pipefail
+          app=http://127.0.0.1:3001
+          base=http://127.0.0.1:3000
+          pw='Gate-access-control-1'
+          for who in a b c; do
+            curl -sf -o /dev/null -H 'Content-Type: application/json' \
+              -d "{\"email\":\"gate-$who@siegekit.test\",\"password\":\"$pw\",\"passwordRepeat\":\"$pw\",\"securityQuestion\":{\"id\":1},\"securityAnswer\":\"x\"}" "$app/api/Users"
+          done
+          login() { curl -sf -H 'Content-Type: application/json' -d "{\"email\":\"gate-$1@siegekit.test\",\"password\":\"$pw\"}" "$app/rest/user/login"; }
+          la=$(login a); lb=$(login b); lc=$(login c)
+          ta=$(jq -r .authentication.token <<<"$la"); bid=$(jq -r .authentication.bid <<<"$la"); tb=$(jq -r .authentication.token <<<"$lb"); tc=$(jq -r .authentication.token <<<"$lc")
+          uid=$(curl -sf -H "Cookie: token=$ta" "$app/rest/user/whoami" | jq -r .user.id)
+          jq -n --arg base "$base" --arg t "$ta" --arg bid "$bid" --arg uid "$uid" --arg pw "$pw" '{log: {entries: (([
+            "/rest/basket/\($bid)", "/api/Users/\($uid)", "/api/Users", "/api/Complaints", "/api/Cards", "/api/Addresss",
+            "/rest/order-history", "/rest/wallet/balance", "/api/Products", "/rest/user/whoami", "/rest/memories/",
+            "/rest/products/search?q=apple"
+            ] | map({request: {method: "GET", url: ($base + .), headers: [{name: "Authorization", value: "Bearer \($t)"}, {name: "Cookie", value: "token=\($t)"}]}}))
+            + [{request: {method: "POST", url: ($base + "/rest/user/login"), headers: [{name: "Content-Type", value: "application/json"}],
+                postData: {mimeType: "application/json", text: ({email: "gate-a@siegekit.test", password: $pw} | tojson)}}}])}}' > "$RUNNER_TEMP/a.har"
+          printf 'Authorization: Bearer %s\nCookie: token=%s\n' "$tb" "$tb" > "$RUNNER_TEMP/session-b"
+          printf 'Authorization: Bearer %s\nCookie: token=%s\n' "$tc" "$tc" > "$RUNNER_TEMP/session-c"
+          echo "A_USER=$uid" >> "$GITHUB_ENV"
+          echo "A_BASKET=$bid" >> "$GITHUB_ENV"
+      - name: C. Block in access-control's last 6 requests
+        # SiegeKit's own requests are counted (User-Agent "SiegeKit/<version>"
+        # alone): the reachability GET, the 11 spec paths, then
+        # access-control's 48, so the 55th is its 43rd. A's replays that get
+        # the block page are not sent as the other accounts, so 3 requests
+        # get it (measured locally).
+        run: |
+          set -euo pipefail
+          nohup "$RUNNER_TEMP/block-gate" -addr 127.0.0.1:3000 -app http://127.0.0.1:3001 -ua '^SiegeKit/[^ ]+$' -after 55 -log "$RUNNER_TEMP/c.log" > "$RUNNER_TEMP/c.out" 2>&1 &
+          echo $! > "$RUNNER_TEMP/gate.pid"
+          sleep 1
+          cat > "$RUNNER_TEMP/gate-scan.sh" <<'SH'
+          #!/bin/bash
+          exec "$RUNNER_TEMP/siegekit" scan --no-save --report-dir "$RUNNER_TEMP/c" \
+            --har "$RUNNER_TEMP/a.har" --har-user gate-a@siegekit.test --only access-control http://127.0.0.1:3000/
+          SH
+          chmod +x "$RUNNER_TEMP/gate-scan.sh"
+          SIEGEKIT_SESSION_B="$(cat "$RUNNER_TEMP/session-b")"
+          SIEGEKIT_SESSION_C="$(cat "$RUNNER_TEMP/session-c")"
+          export SIEGEKIT_SESSION_B SIEGEKIT_SESSION_C
+          set +e
+          printf 'test accounts\n' | script -qec "$RUNNER_TEMP/gate-scan.sh" "$RUNNER_TEMP/c-scan.log"
+          code=$?
+          set -e
+          kill "$(cat "$RUNNER_TEMP/gate.pid")"
+          r="$RUNNER_TEMP/c/report.json"
+          jq '.plugins[] | {id, status, stop, reason, requests, findings}' "$r"
+          echo "exit code $code"
+          test "$code" -eq 3
+          blocked=$(grep -c 'page=no blocked=yes' "$RUNNER_TEMP/c.log" || true)
+          echo "block pages answered to the check: $blocked"
+          test "$blocked" -eq 3
+          jq -e '[.plugins[] | select(.id == "access-control" and .status == "failed" and .stop == "host-blocked" and .requests == 45 and .findings == 4 and (.reason | contains("during this check: after it, the start page answered 403")) and (.reason | contains("; 1 finding(s) read from answers like the block page dropped; the 4 finding(s) reported before the stop are kept")))] | length == 1' "$r"
+          jq -e --arg b "/rest/basket/$A_BASKET" --arg u "/api/Users/$A_USER" '[.findings[] | .ruleId + " " + (.location.uri | ltrimstr("http://127.0.0.1:3000"))] | sort == (["cross-account-read " + $b, "cross-account-read " + $u, "cross-account-read /api/Users", "cross-account-read /api/Complaints"] | sort)' "$r"
+      - name: Logs
+        if: failure()
+        run: |
+          docker logs juice-shop 2>&1 | tail -50
+          tail -n 20 "$RUNNER_TEMP"/*.out "$RUNNER_TEMP"/*.log || true
 
   writes:
     # ADR 0054: access-control-write (ADR 0049) on real apps, from a real

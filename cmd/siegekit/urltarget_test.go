@@ -88,6 +88,10 @@ type fakeActive struct {
 	servedCfg []egress.Config
 	// content holds the bodies of collected files by name; others are "x".
 	content map[string]string
+	// watch makes the run's watch on the host (ADR 0071); nil means none.
+	// watchCfg lists the configs it was asked for.
+	watch    func(egress.Config) *egress.Watch
+	watchCfg []egress.Config
 }
 
 // noLeaks is an empty Gitleaks report.
@@ -152,8 +156,17 @@ func useActive(t *testing.T) *fakeActive {
 	// These tests check the Linux path on every host; macOS is refused
 	// (TestScanURLNotRun).
 	f.served = map[string]string{"/openapi.json": testSpec}
-	oldReach, oldFetch, oldOS, oldGet := reachable, deps.FetchFile, hostOS, specGet
+	oldReach, oldFetch, oldOS, oldGet, oldWatch := reachable, deps.FetchFile, hostOS, specGet, newWatch
 	reachable, hostOS = func(context.Context, egress.Config) error { return nil }, "linux"
+	// No watch on the host unless a test sets one (ADR 0071): the fake
+	// target has no start page.
+	newWatch = func(c egress.Config) *egress.Watch {
+		f.watchCfg = append(f.watchCfg, c)
+		if f.watch != nil {
+			return f.watch(c)
+		}
+		return nil
+	}
 	specGet = func(_ context.Context, _ egress.Config, p string, _ int64) (int, []byte, error) {
 		f.got = append(f.got, p)
 		if b, ok := f.served[p]; ok {
@@ -165,7 +178,7 @@ func useActive(t *testing.T) *fakeActive {
 		return errors.New("tests download nothing")
 	}
 	t.Cleanup(func() {
-		activeRunner, reachable, deps.FetchFile, hostOS, specGet = old, oldReach, oldFetch, oldOS, oldGet
+		activeRunner, reachable, deps.FetchFile, hostOS, specGet, newWatch = old, oldReach, oldFetch, oldOS, oldGet, oldWatch
 	})
 	t.Chdir(t.TempDir()) // reports go to ./siegekit-report
 	return f

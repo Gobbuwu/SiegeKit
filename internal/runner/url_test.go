@@ -6,13 +6,16 @@ import (
 	"encoding/json"
 	"errors"
 	"maps"
+	"net"
 	"net/http"
+	"net/http/httptest"
 	"net/netip"
 	"os"
 	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/Gobbuwu/SiegeKit/internal/authz"
@@ -162,10 +165,9 @@ func TestSkipReason(t *testing.T) {
 	}
 }
 
-// TestWordlist checks that a URL plugin gets the shipped list for the
-// target's mode, mounted read-only at {wordlist} (ADR 0027).
-func TestWordlist(t *testing.T) {
-	m := builtin(t, "ffuf")
+// installed is a files root holding m's pinned files, marked installed.
+func installed(t *testing.T, m *manifest.Manifest) string {
+	t.Helper()
 	root := t.TempDir()
 	for _, a := range FilesFor(m) {
 		if err := os.MkdirAll(files.Dir(root, a), 0o700); err != nil {
@@ -175,6 +177,14 @@ func TestWordlist(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	return root
+}
+
+// TestWordlist checks that a URL plugin gets the shipped list for the
+// target's mode, mounted read-only at {wordlist} (ADR 0027).
+func TestWordlist(t *testing.T) {
+	m := builtin(t, "ffuf")
+	root := installed(t, m)
 	for _, deployed := range []bool{false, true} {
 		opt := urlOpts(t)
 		opt.FilesRoot, opt.Deployed = root, deployed
@@ -387,5 +397,144 @@ func TestRecordedRequests(t *testing.T) {
 		if strings.Contains(k, "import") || s.har != nil {
 			t.Errorf("without recorded requests: %s", k)
 		}
+	}
+}
+
+// startPage is a target's start page whose answer a test switches between
+// 200 and a 25,000-byte 403 block page (ADR 0071).
+type startPage struct {
+	srv     *httptest.Server
+	blocked atomic.Bool
+	fetches atomic.Int32
+}
+
+func newStartPage(t *testing.T) (*startPage, *egress.Watch) {
+	t.Helper()
+	s := &startPage{}
+	s.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		s.fetches.Add(1)
+		w.Header().Set("Content-Type", "text/html")
+		if s.blocked.Load() {
+			w.WriteHeader(http.StatusForbidden)
+			w.Write(bytes.Repeat([]byte("c"), 25000))
+			return
+		}
+		w.Write([]byte("the app"))
+	}))
+	t.Cleanup(s.srv.Close)
+	port := s.srv.Listener.Addr().(*net.TCPAddr).Port
+	u, err := target.Parse("http://app.test:" + strconv.Itoa(port) + "/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return s, egress.NewWatch(egress.Config{Target: u, Addrs: []netip.Addr{netip.MustParseAddr("127.0.0.1")}, Version: "test"})
+}
+
+// TestRunURLHostBlocked checks how a plugin ends when the host stops
+// serving the app (ADR 0071): stopped by the proxy (D3) or found after the
+// plugin (D1), its findings read from block-page answers are dropped (F2)
+// and the others kept; a plugin that starts while the host still blocks
+// is not run.
+func TestRunURLHostBlocked(t *testing.T) {
+	ffufM, zap := builtin(t, "ffuf"), builtin(t, "zap")
+	ffufReport := `{"results":[
+{"url":"http://app.test:8000/admin","status":200,"length":1234,"content-type":"text/html"},
+{"url":"http://app.test:8000/a","status":403,"length":25004,"content-type":"text/html"},
+{"url":"http://app.test:8000/b","status":403,"length":24996,"content-type":"text/html"},
+{"url":"http://app.test:8000/forbidden","status":403,"length":120,"content-type":"text/html"}]}`
+	block := &egress.Block{Page: egress.Shape{Status: 403, Type: "text/html", Len: 25000}, Reason: "the host stopped serving the app: 10 answers in a row and the start page were the same page"}
+	for name, tc := range map[string]struct {
+		res     *ActiveResult
+		blockIn bool // the start page turns into the block page during the run
+		reason  string
+	}{
+		"proxy":              {&ActiveResult{Result: &sandbox.Result{Status: sandbox.Failed, ExitCode: -1}, Stats: egress.Stats{Requests: 1010}, Stopped: block.Reason, Block: block}, false, "10 answers in a row"},
+		"after":              {&ActiveResult{Result: &sandbox.Result{Status: sandbox.Completed}, Stats: egress.Stats{Requests: 4758}}, true, "during this check: after it, the start page answered 403 (text/html, 25000 bytes)"},
+		"after a time limit": {&ActiveResult{Result: &sandbox.Result{Status: sandbox.TimedOut, Stop: sandbox.StopTimeLimit, StopReason: "stopped after 600 seconds, its time limit"}, Stats: egress.Stats{Requests: 4758}}, true, "the tool was also cut short: stopped after 600 seconds"},
+	} {
+		sp, w := newStartPage(t)
+		opt := urlOpts(t)
+		opt.Watch, opt.FilesRoot = w, installed(t, ffufM)
+		ran := 0
+		r, err := RunURL(context.Background(), func(_ context.Context, s sandbox.Spec, c egress.Config) (*ActiveResult, error) {
+			ran++
+			if c.Watch == nil || c.Watch.Block() != nil {
+				t.Errorf("%s: plugin config watch %v", name, c.Watch)
+			}
+			os.WriteFile(filepath.Join(s.OutDir, "ffuf.json"), []byte(ffufReport), 0o600)
+			sp.blocked.Store(tc.blockIn || tc.res.Block != nil)
+			return tc.res, nil
+		}, []*manifest.Manifest{ffufM, zap}, opt)
+		if err != nil {
+			t.Fatal(err)
+		}
+		p := r.Plugins[0]
+		if p.Status != report.Failed || p.Stop != report.StopHostBlocked || !strings.Contains(p.Reason, tc.reason) || !strings.Contains(p.Reason, "; 2 finding(s) read from answers like the block page dropped; the 2 finding(s) reported before the stop are kept") || p.Findings != 2 {
+			t.Errorf("%s: %+v", name, p)
+		}
+		var uris []string
+		for _, f := range r.Findings {
+			uris = append(uris, f.Location.URI)
+		}
+		slices.Sort(uris)
+		if !slices.Equal(uris, []string{"http://app.test:8000/admin", "http://app.test:8000/forbidden"}) {
+			t.Errorf("%s: findings %v", name, uris)
+		}
+		// ZAP starts while the host still blocks: not run.
+		z := r.Plugins[1]
+		if ran != 1 || z.Status != report.Failed || z.Stop != report.StopHostBlocked || z.Requests != 0 || !strings.Contains(z.Reason, "stopped by SiegeKit: the host stopped serving the app before this check: the start page answered 403") {
+			t.Errorf("%s: %d runs, zap %+v", name, ran, z)
+		}
+		want := int32(3) // before ffuf, after it, before ZAP
+		if tc.res.Block != nil {
+			want = 2 // the proxy's stop needs no fetch after
+		}
+		if n := sp.fetches.Load(); n != want {
+			t.Errorf("%s: %d start-page fetches, want %d", name, n, want)
+		}
+	}
+
+	// No block: both run, ffuf keeps all four findings.
+	sp, w := newStartPage(t)
+	opt := urlOpts(t)
+	opt.Watch, opt.FilesRoot = w, installed(t, ffufM)
+	r, err := RunURL(context.Background(), func(_ context.Context, s sandbox.Spec, c egress.Config) (*ActiveResult, error) {
+		os.WriteFile(filepath.Join(s.OutDir, "ffuf.json"), []byte(ffufReport), 0o600)
+		os.WriteFile(filepath.Join(s.OutDir, "zap.json"), []byte(zapReport), 0o600)
+		return &ActiveResult{Result: &sandbox.Result{Status: sandbox.Completed}, Stats: egress.Stats{Requests: 5}}, nil
+	}, []*manifest.Manifest{ffufM, zap}, opt)
+	if err != nil || r.Plugins[0].Status != report.Ran || r.Plugins[0].Findings != 4 || r.Plugins[1].Status != report.Ran || sp.fetches.Load() != 4 {
+		t.Errorf("no block: %+v %v, %d fetches", r.Plugins, err, sp.fetches.Load())
+	}
+
+	// A plugin whose input was cut short keeps the stop (the spec probe).
+	opt = urlOpts(t)
+	opt.Unavailable = map[string]Unavailable{"zap": {Status: report.Failed, Stop: report.StopHostBlocked, Reason: "stopped by SiegeKit: x"}}
+	r, err = RunURL(context.Background(), nil, []*manifest.Manifest{zap}, opt)
+	if err != nil || r.Plugins[0].Stop != report.StopHostBlocked {
+		t.Errorf("unavailable: %+v %v", r.Plugins, err)
+	}
+}
+
+// TestHostBlockedAccessControl checks F2 on access-control's findings
+// (ADR 0071): a finding is dropped when any answer it was read from was the
+// block page, as when the no-login replay of /rest/memories/ got the block
+// page and the read looked refused (measured on Juice Shop, 2026-11-25);
+// the findings read from the app are kept.
+func TestHostBlockedAccessControl(t *testing.T) {
+	page := bytes.Repeat([]byte("c"), 24987)
+	ok := authz.Answer{Status: 200, Body: []byte(`{"data":{"id":1}}`)}
+	res := authz.Result{BTested: true, CTested: true, Replays: []authz.Replay{
+		{Request: authz.Request{Method: "GET", Path: "/rest/basket/6"}, A: ok, B: ok, C: ok, None: authz.Answer{Status: 401, Body: []byte("no")}, BTested: true, CTested: true},
+		{Request: authz.Request{Method: "GET", Path: "/rest/memories/"}, A: ok, B: ok, C: ok, None: authz.Answer{Status: 403, Body: page[:24990-7]}, BTested: true, CTested: true},
+	}}
+	fs := authz.Findings("http://app.test", res, "")
+	if len(fs) != 2 {
+		t.Fatalf("findings %+v", fs)
+	}
+	b := &egress.Block{Page: egress.Shape{Status: 403, Type: "text/html", Len: 24987}, Reason: "the host stopped serving the app"}
+	pr, kept := HostBlocked(report.PluginResult{ID: authz.ID}, b, fs)
+	if len(kept) != 1 || kept[0].Location.URI != "http://app.test/rest/basket/6" || pr.Findings != 1 || !strings.Contains(pr.Reason, "1 finding(s) read from answers like the block page dropped") {
+		t.Errorf("%+v %+v", pr, kept)
 	}
 }

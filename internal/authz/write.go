@@ -1301,7 +1301,7 @@ func WriteFindings(origin string, res WriteResult) []findings.Finding {
 			}
 		}
 		pathOnly, _, _ := strings.Cut(r.Path, "?")
-		f := findings.Finding{Severity: sev, Location: findings.Location{URI: origin + pathOnly}, Family: Family}
+		f := findings.Finding{Severity: sev, Location: findings.Location{URI: origin + pathOnly}, Family: Family, Answers: answered(r.Answer, r.Before, r.After)}
 		readOf := "the same URL"
 		if pathOf(r.ReadPath) != pathOf(r.Sent) {
 			readOf = pathOf(r.ReadPath) + ", which A's earlier recorded writes prepared and A read twice, the same both times, before the replay"
