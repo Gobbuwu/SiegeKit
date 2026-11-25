@@ -90,3 +90,28 @@ func FuzzDotenv(f *testing.F) {
 		g.ignored(rel)
 	})
 }
+
+// git negates a class with "[!...]" (as with "[^...]"); path.Match reads
+// "!" as a plain character. Expected answers from git 2.43 check-ignore.
+func TestIgnoreNegatedClass(t *testing.T) {
+	for _, c := range []struct {
+		pattern string
+		ignored map[string]bool
+	}{
+		{"[!a].log", map[string]bool{"a.log": false, "b.log": true, "!.log": true}},
+		{"[^a].log", map[string]bool{"a.log": false, "b.log": true}},
+		{`\[!a].log`, map[string]bool{"[!a].log": true, "b.log": false}},
+		{".env[!.]*", map[string]bool{".envx": true, ".env.local": false}},
+	} {
+		r, ok := parseIgnore(c.pattern)
+		if !ok {
+			t.Fatalf("%q not parsed", c.pattern)
+		}
+		g := &ignores{root: t.TempDir(), cache: map[string][]ignoreRule{"": {r}}}
+		for name, want := range c.ignored {
+			if got := g.ignored(name); got != want {
+				t.Errorf("%q on %q: %v, want %v", c.pattern, name, got, want)
+			}
+		}
+	}
+}

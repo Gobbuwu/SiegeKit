@@ -48,7 +48,10 @@ Local: Docker 29.9.3 rootful, cgroup v1, linux/amd64, gitleaks 8.30.1 at the pin
 - **N1 as info, or dropped.** Measured: hides the image path above.
 - **N1 from the `.gitignore` matcher only** (the round-2 prototype): wrong for ignored files that are tracked, as above.
 
-## Not verified
+## Also fixed: the matcher's `[!…]` and escapes
 
-- Trivy looks for `.trivyignore` and `trivy.yaml` in its working directory by default (`--ignorefile` and `--config` defaults in the pinned image's `filesystem --help`); its plugin still runs from `/tmp` and does not list them as repository settings, so a repository's `.trivyignore` is probably not applied today. Not measured; whether it should be is a separate decision.
-- The `.gitignore` matcher treats `[!…]` as Go's `path.Match` does (a literal `!`), not as git's negated class; such a pattern can add or leave out a note, never change a severity.
+The `.gitignore` matcher this note relies on (shared with `dotenv-gitignore`) read `[!a]` as `path.Match` does, a class holding `!` and `a`, where git negates it, and it dropped a leading backslash, so `\[!a].log` became a class too. Both are fixed: `[!` becomes `[^` outside escapes, and a leading backslash stays (`path.Match` reads `\c` as `c`). Answers checked against `git check-ignore` (git 2.43) for `[!a].log`, `[^a].log`, `\[!a].log` and `.env[!.]*`.
+
+## Follow-up outside this decision
+
+Trivy looks for `.trivyignore` and `trivy.yaml` in its working directory by default (`--ignorefile` and `--config` defaults in the pinned image's `filesystem --help`); its plugin still runs from `/tmp` and does not list them as repository settings, so a repository's `.trivyignore` is probably not applied today. Not measured (this sandbox cannot download Trivy's data), and whether it should be is a separate decision for the M2 milestone check.

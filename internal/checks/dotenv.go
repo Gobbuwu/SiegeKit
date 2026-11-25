@@ -135,7 +135,7 @@ func parseIgnore(line string) (ignoreRule, bool) {
 	if strings.HasPrefix(line, "!") {
 		r.negate, line = true, line[1:]
 	}
-	line = strings.TrimPrefix(line, "\\")
+	// A leading "\#" or "\!" stays escaped: path.Match reads "\c" as c.
 	if strings.HasSuffix(line, "/") {
 		r.dirOnly, line = true, strings.TrimRight(line, "/")
 	}
@@ -148,8 +148,36 @@ func parseIgnore(line string) (ignoreRule, bool) {
 	if line == "" {
 		return ignoreRule{}, false
 	}
-	r.pattern = line
+	r.pattern = gitClasses(line)
 	return r, true
+}
+
+// gitClasses rewrites git's negated class "[!...]" as path.Match's
+// "[^...]": path.Match reads "!" there as a plain character, the opposite
+// of git (measured with git check-ignore, ADR 0068).
+func gitClasses(p string) string {
+	b := []byte(p)
+	for i := 0; i < len(b); i++ {
+		switch b[i] {
+		case '\\':
+			i++ // the next character is literal
+		case '[':
+			if i+1 < len(b) && b[i+1] == '!' {
+				b[i+1] = '^'
+			}
+			// Skip to the end of the class, so that "[" or "!" inside it
+			// is left as it is.
+			j := i + 2
+			for j < len(b) && b[j] != ']' {
+				if b[j] == '\\' {
+					j++
+				}
+				j++
+			}
+			i = j
+		}
+	}
+	return string(b)
 }
 
 // ignored reports whether the file at rel (slash-separated) is ignored. As
