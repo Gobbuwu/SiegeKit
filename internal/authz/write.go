@@ -26,11 +26,11 @@ import (
 	"strconv"
 	"strings"
 	"time"
-	"unicode"
 
 	"github.com/Gobbuwu/SiegeKit/internal/egress"
 	"github.com/Gobbuwu/SiegeKit/internal/findings"
 	"github.com/Gobbuwu/SiegeKit/internal/target"
+	"github.com/Gobbuwu/SiegeKit/internal/webform"
 )
 
 // WriteID, WriteName and Family describe the check in plans and reports.
@@ -792,7 +792,7 @@ func lockoutWord(s string) string {
 	if lockoutWords[joined] {
 		return joined
 	}
-	ws := splitWords(s)
+	ws := webform.Words(s)
 	for i, w := range ws {
 		if lockoutWords[w] {
 			return w
@@ -802,34 +802,6 @@ func lockoutWord(s string) string {
 		}
 	}
 	return ""
-}
-
-// splitWords splits s into lower-case words at characters other than
-// letters and digits, and where a lower-case letter meets an upper-case one.
-func splitWords(s string) []string {
-	var out []string
-	var cur []rune
-	var prev rune
-	flush := func() {
-		if len(cur) > 0 {
-			out = append(out, strings.ToLower(string(cur)))
-			cur = cur[:0]
-		}
-	}
-	for _, r := range s {
-		switch {
-		case !unicode.IsLetter(r) && !unicode.IsDigit(r):
-			flush()
-		case unicode.IsUpper(r) && unicode.IsLower(prev):
-			flush()
-			cur = append(cur, r)
-		default:
-			cur = append(cur, r)
-		}
-		prev = r
-	}
-	flush()
-	return out
 }
 
 // Who replayed a write.
@@ -1201,27 +1173,12 @@ func echoed(loc, sent string, body []byte) bool {
 	return false
 }
 
-// loginWords in a redirect's path mean "log in first".
-var loginWords = map[string]bool{"login": true, "logon": true, "signin": true, "auth": true, "sso": true, "oauth": true, "oauth2": true, "authorize": true}
-
-// toLogin reports whether a redirect leads to a login page, or nowhere.
+// toLogin reports whether a redirect leads to a login page
+// (webform.LoginPage), or nowhere: a redirect with no Location, or one
+// that does not parse, does not show that the write was taken.
 func toLogin(loc string) bool {
-	u, err := url.Parse(loc)
-	if loc == "" || err != nil {
-		return true
-	}
-	for _, seg := range strings.Split(u.Path, "/") {
-		joined := strings.NewReplacer("-", "", "_", "").Replace(strings.ToLower(seg))
-		if loginWords[joined] {
-			return true
-		}
-		for _, w := range splitWords(seg) {
-			if loginWords[w] {
-				return true
-			}
-		}
-	}
-	return false
+	_, err := url.Parse(loc)
+	return loc == "" || err != nil || webform.LoginPage(loc)
 }
 
 // Severity is the replay's tier (ADR 0049 item 1), and false when it is

@@ -18,6 +18,8 @@ import (
 	"net/url"
 	"regexp"
 	"strings"
+
+	"github.com/Gobbuwu/SiegeKit/internal/webform"
 )
 
 // RPC kinds.
@@ -58,7 +60,7 @@ func readName(name string) bool {
 	for _, part := range strings.FieldsFunc(name, func(r rune) bool {
 		return !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9')
 	}) {
-		ws := splitWords(part)
+		ws := webform.Words(part)
 		if len(ws) > 0 && readVerbs[ws[0]] {
 			read = true
 		}
@@ -401,7 +403,7 @@ func createName(name string) bool {
 	for _, part := range strings.FieldsFunc(name, func(r rune) bool {
 		return !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9')
 	}) {
-		if ws := splitWords(part); len(ws) > 0 && createVerbs[ws[0]] {
+		if ws := webform.Words(part); len(ws) > 0 && createVerbs[ws[0]] {
 			return true
 		}
 	}
@@ -425,7 +427,7 @@ func scalarID(v any) (string, bool) {
 // went to the latest, the comment, before this rule (measured
 // 2026-11-22).
 func sameNoun(w Write, value, createMethod string) bool {
-	cw := splitWords(createMethod)
+	cw := webform.Words(createMethod)
 	if len(cw) < 2 {
 		return false
 	}
@@ -439,9 +441,9 @@ func sameNoun(w Write, value, createMethod string) bool {
 		if v != value || found {
 			return
 		}
-		nouns := splitWords(k)
+		nouns := webform.Words(k)
 		if l := strings.ToLower(k); l == "id" || l == "_id" {
-			nouns = splitWords(w.RPC)
+			nouns = webform.Words(w.RPC)
 			if len(nouns) > 0 {
 				nouns = nouns[1:]
 			}

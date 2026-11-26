@@ -397,3 +397,80 @@ func TestSaid(t *testing.T) {
 		}
 	}
 }
+
+// A first answer that redirects to a login page is a login wall, not the
+// URL's own answer (issue #94: Porchlet's invite page answered 20 × 307 to
+// /login?next=..., and the check reported "no limit"). A redirect to a
+// page that is not a login page stays the baseline, and a login page that
+// redirects back to a login page reached the app's login code.
+func TestCheckLoginWall(t *testing.T) {
+	tu := mustTarget(t, "http://localhost:3000/")
+	cfg := egress.Config{Target: tu, Addrs: []netip.Addr{netip.MustParseAddr("127.0.0.1")}, Version: "test"}
+	for _, c := range []struct {
+		name, url, body string
+		status          int
+		loc, want       string // want "" means the run goes on: no limit seen
+	}{
+		{"307 to login", "/w/3f1e2d4c-aaaa-bbbb-cccc-0123456789ab", "workspace_id=x&email=a%40example.test", 307, "/login?next=%2Fw%2F3f1e2d4c-aaaa-bbbb-cccc-0123456789ab", "redirected to a login page (/login?next=%2Fw%*)"},
+		{"302 to signin", "/search?q=x", "", 302, "/signin", "redirected to a login page (/signin)"},
+		{"302 to SSO host", "/report", "", 302, "https://sso.example.test/oauth2/authorize?client_id=x", "redirected to a login page"},
+		{"303 to dashboard", "/search?q=x", "q=apple", 303, "/dashboard", ""},
+		{"login posts to itself", "/login", "user=a&pass=b", 302, "/login?error=1", ""},
+		{"302 with no Location", "/search?q=x", "", 302, "", ""},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			e, err := Parse("http://localhost:3000"+c.url, c.body, tu)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var f fake
+			f.install(t, e, func(int) (*egress.Answer, error) {
+				h := http.Header{}
+				if c.loc != "" {
+					h.Set("Location", c.loc)
+				}
+				return answer(c.status, h), nil
+			})
+			r, err := Check(context.Background(), cfg, e, DefaultRequests)
+			if c.want == "" {
+				if err != nil || r.Limited || r.Requests != DefaultRequests || r.Baseline != c.status {
+					t.Errorf("%+v %v", r, err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), c.want) || !strings.Contains(err.Error(), "needs a login, which this check does not send") || f.sent != 1 {
+				t.Errorf("%v, %d sent; want %q after 1", err, f.sent, c.want)
+			}
+			if fs := Findings(e, r, DefaultRequests); len(fs) != 0 {
+				t.Errorf("findings %+v", fs)
+			}
+		})
+	}
+}
+
+// The code page is checked the same way (a wrong code with no pending
+// login is a login wall too); a reset or sign-up is not, since its success
+// may redirect to the login page and guard G1 holds back its "no limit"
+// (ADR 0069, ADR 0072).
+func TestCheckLoginWallPages(t *testing.T) {
+	login := func(int) *egress.Answer { return answer(302, http.Header{"Location": {"/users/sign_in"}}) }
+	e, cfg := pageEndpoint(t, Code, `{"otp":"{wrong}"}`)
+	sent := installPage(t, e, login)
+	if _, err := Check(context.Background(), cfg, e, DefaultRequests); err == nil || !strings.Contains(err.Error(), "redirected to a login page (/users/sign_in): it needs a login") || len(*sent) != 1 {
+		t.Errorf("code page: %v, %d sent", err, len(*sent))
+	}
+	for p, body := range map[Page]string{Reset: `{"email":"me@x.test"}`, SignUp: `{"email":"{new}@x.test"}`} {
+		e, cfg := pageEndpoint(t, p, body)
+		installPage(t, e, login)
+		page := send
+		send = func(ctx context.Context, cfg egress.Config, method, path string, h http.Header, body []byte, max int64) (*egress.Answer, error) {
+			if method == http.MethodGet && path == "/users/sign_in" {
+				return answer(200, nil), nil // the redirect, followed (ADR 0069)
+			}
+			return page(ctx, cfg, method, path, h, body, max)
+		}
+		if r, err := Check(context.Background(), cfg, e, DefaultRequests); err != nil || r.Requests != DefaultRequests || r.Baseline != 302 {
+			t.Errorf("%s: %+v %v", p, r, err)
+		}
+	}
+}

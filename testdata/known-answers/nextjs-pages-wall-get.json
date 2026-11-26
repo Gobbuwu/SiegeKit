@@ -1,0 +1,12 @@
+{
+  "fixture": "Next.js 16.4.6 app (.github/gate/logins, React 19.3.1) whose workspace page /w/[id] is behind a login wall: proxy.js answers a request with no Supabase auth cookie with 307 to /login?next=..., as Porchlet's proxy does (issue #94); its invite Server Action emails Mailpit axllent/mailpit@sha256:e22dce5b36f93c77082e204a3942fb6b283b7896e057458400a4c88344c3df68 (v1.27.11) on each run (gate.yml job logins); this scan: --rate-limit-url /w/gate, GET",
+  "measured": "local runs on 2026-11-26 (Docker 29.9.3 rootful, cgroup v1, linux/amd64, Node 22.23.5): the same reason and 1 request each time, 0 emails; main at 05373ff reported rate-not-limited (low) after 20 requests all answered 307; to be confirmed by the CI gate on both engines and both architectures",
+  "checks": {
+    "rate-limit": {
+      "status": "failed",
+      "reason": "the URL redirected to a login page (/login?next=%2Fw%2Fgate): it needs a login, which this check does not send",
+      "minRequests": 1,
+      "why": "issue #94, ADR 0072: the first answer is a redirect to a login page from a URL that is not one, so the check stops instead of reporting rate-not-limited for a URL it never reached"
+    }
+  }
+}

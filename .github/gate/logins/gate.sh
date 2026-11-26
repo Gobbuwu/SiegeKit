@@ -12,7 +12,8 @@
 # The same app's sign-up and reset pages (ADR 0069, issue #81) are Server
 # Action forms too: each scan of them is checked the same way, and the
 # action runs under each page's limit are counted at Mailpit, where every
-# such run sends one email.
+# such run sends one email. Its workspace invite page /w/... is behind a
+# login wall (proxy.js, ADR 0072, issue #94), for the rate-limit check.
 #
 #   gate.sh start   start Supabase Auth and the app (APP_ENGINE)
 #   gate.sh scan    run the scans; exit 1 if any differs
@@ -181,7 +182,10 @@ mails() { curl -sf "${MAILPIT}api/v1/messages?limit=1" | jq .total; }
 # #81's case: the action never runs, so nothing may be reported. --page
 # scans send the page's form; /signup2 answers 200 with no limit, so only
 # the emails show the sign-ups reached it. {SID} and {FID} are the
-# action IDs of this build's /signup and /forgot forms.
+# action IDs of this build's /signup and /forgot forms. The wall scans are
+# issue #94's case: /w/gate is behind a login wall (proxy.js answers 307 to
+# /login?next=...), so rate-limit must fail with "needs a login" after one
+# request, not report "no limit", and the invite action never runs.
 MC="--mail-catcher $MAILPIT"
 SIGNUP='email={new}%40example.com&password=Gate-page-1'
 PAGE_SCANS=(
@@ -191,6 +195,8 @@ PAGE_SCANS=(
   "reset-page|--only reset-limit $MC --reset-page $APP/forgot --reset-body email=gate-user%40siegekit.test|5"
   "signup2-page|--only signup-limit --signup-page $APP/signup2 --signup-body $SIGNUP|20"
   "signup2-mail|--only signup-limit $MC --signup-page $APP/signup2 --signup-body $SIGNUP|20"
+  "wall|--only rate-limit --rate-limit-url $APP/w/gate --rate-limit-body workspace_id=gate&email=gate-wall%40example.com|0"
+  "wall-get|--only rate-limit --rate-limit-url $APP/w/gate|0"
 )
 
 pages() {
