@@ -38,4 +38,4 @@ CI and the gate on rootless Podman and Docker, amd64 and arm64: see `docs/milest
 ## Consequences
 
 - A URL behind a login wall that redirects is reported as needing a login, not as "no limit". `rate-limit` still sends no session, so a limit on an action that needs a login (Porchlet's invite cap) is not tested (`docs/coverage.md`).
-- Not caught (gaps): a login page answered with 200 at the same URL (no redirect); a wall that redirects to a page whose path has no login word (`/`, `/welcome`); a code page on a login path that answers a wrong code with no pending login by redirecting to the login page (kept as the baseline by item 3).
+- Not caught (gaps): a login page answered with 200 at the same URL (no redirect); a wall that redirects to a page whose path has no login word (`/`, `/welcome`); any URL whose own path has a login word (a code page at `/login/2fa`, an API under `/api/auth/`) that redirects to the login page, which item 3 keeps as the baseline.
