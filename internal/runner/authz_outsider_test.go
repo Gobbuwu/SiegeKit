@@ -42,7 +42,8 @@ func TestAuthzOutsiderFindsPlantedIssues(t *testing.T) {
 	}
 	cfg := egress.Config{Target: tu, Addrs: []netip.Addr{netip.MustParseAddr("127.0.0.1")}, Version: "test", ReadOnly: true}
 	res, err := authz.Check(context.Background(), cfg, h.Requests, acc, 100)
-	if err != nil || res.Requests != 32 || !res.CWorks() {
+	// 32, and A's /api/my/orders again (issue #95).
+	if err != nil || res.Requests != 33 || !res.CWorks() {
 		t.Fatalf("%+v %v", res, err)
 	}
 	checkPlanted(t, srv.URL, authz.Findings(srv.URL, res, "alice@shop.test"), vulnAppOutsiderIssues[authz.ID])

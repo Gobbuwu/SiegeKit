@@ -452,10 +452,10 @@ func TestWriteCheck(t *testing.T) {
 		}
 	}
 	// B fetched its own CSRF token for the form and changed A's
-	// organisation (a redirect, as A's recorded write got), so the request
-	// with no login is not sent on that recorded object.
+	// organisation (a redirect, as A's recorded write got); the request
+	// with no login went first and was sent to the login page.
 	for _, r := range res.Replays {
-		if pathOf(r.Path) == "/orgs/3/settings" && (r.Who == AsB && (!r.CSRFSwapped || r.Answer.Status != http.StatusSeeOther || !r.Accepted()) || r.Who == AsNoLogin && r.NotSent == "") {
+		if pathOf(r.Path) == "/orgs/3/settings" && (r.Who == AsB && (!r.CSRFSwapped || r.Answer.Status != http.StatusSeeOther || !r.Accepted()) || r.Who == AsNoLogin && (r.NotSent != "" || r.Accepted())) {
 			t.Errorf("form replay %+v", r)
 		}
 	}
@@ -478,7 +478,7 @@ func TestWriteCheck(t *testing.T) {
 	for _, part := range []string{
 		"replayed 7 write(s) from the HAR file and 3 not in it (PUT, PATCH or DELETE on objects account A read or made) as account B and with no login",
 		"2 high, 1 medium",
-		"3 accepted and may have changed data: PUT /api/items/8 as account B, DELETE /api/items/10 as account B, POST /orgs/3/settings as account B",
+		"3 accepted and may have changed data: PUT /api/items/9 as account B, DELETE /api/items/11 as account B, POST /orgs/3/settings as account B",
 		"12 object(s) made for account A with POST /api/items/, POST /api/cards/, 11 of them deleted again by A",
 		"1 not replayed because they could log in, log out or lock an account out: POST /logout",
 		"1 write(s) were sent with the sender's own CSRF token, taken from a page",
@@ -495,20 +495,21 @@ func TestWriteCheckWithoutCopies(t *testing.T) {
 	noSleep(t)
 	tu := mustTarget(t, srv.URL+"/")
 	cfg := egress.Config{Target: tu, Addrs: []netip.Addr{netip.MustParseAddr("127.0.0.1")}, Version: "test"}
-	// No recorded create: B's accepted DELETE hit A's recorded item (8,
-	// made here), so the request with no login is not sent.
+	// No recorded create: the request with no login goes first and is
+	// refused, then B's accepted DELETE hits A's recorded item (8, made
+	// here).
 	if a, err := egress.SendHeader(context.Background(), cfg, "POST", "/api/items/", http.Header{"Authorization": {"Bearer A"}}, []byte(`{"Product":3}`), 1<<10); err != nil || a.Status != 201 {
 		t.Fatal(a, err)
 	}
 	ws := []Write{{Method: "DELETE", Path: "/api/items/8", Header: http.Header{"Authorization": {"Bearer A"}}}}
 	res, err := WriteCheck(context.Background(), cfg, ws, Accounts{B: http.Header{"Authorization": {"Bearer B"}}}, "", 10, target.Local)
-	if err != nil || len(res.Replays) != 2 || res.Replays[1].NotSent == "" || res.Replays[0].Recreated {
+	if err != nil || len(res.Replays) != 2 || res.Replays[0].Who != AsNoLogin || res.Replays[0].NotSent != "" || res.Replays[0].Accepted() || res.Replays[1].Who != AsB || res.Replays[1].Recreated {
 		t.Fatalf("%+v %v", res, err)
 	}
 	if fs := WriteFindings(srv.URL, res); len(fs) != 1 || fs[0].Severity != findings.High || !strings.Contains(fs[0].Message, "recorded object") {
 		t.Errorf("%+v", fs)
 	}
-	if s := res.WriteSummary(nil); !strings.Contains(s, "not tested with no login, because B's replay was accepted on A's recorded object: DELETE /api/items/8") {
+	if s := res.WriteSummary(nil); strings.Contains(s, "not sent") || strings.HasSuffix(s, "; ") {
 		t.Errorf("%q", s)
 	}
 	// With no login, the form gets the anonymous page's token and cookie;
@@ -553,9 +554,9 @@ func TestWriteCheckMedium(t *testing.T) {
 	}
 	fs := WriteFindings(srv.URL, res)
 	// Accepted, but A's read did not change (PUT) or was not checked
-	// (POST): medium, for a person to check. B's PUT was accepted on A's
-	// recorded object, so the request with no login is not sent for it.
-	if len(fs) != 3 || fs[0].RuleID != "cross-account-write" || fs[0].Severity != findings.Medium || fs[1].RuleID != "no-login-write" || fs[1].CWEs[0] != "CWE-306" || !strings.Contains(fs[0].Message, "check it by hand") {
+	// (POST): medium, for a person to check. The request with no login
+	// goes first, and its acceptance does not keep B from being sent.
+	if len(fs) != 4 || fs[0].RuleID != "no-login-write" || fs[0].CWEs[0] != "CWE-306" || fs[1].RuleID != "cross-account-write" || fs[1].Severity != findings.Medium || fs[3].RuleID != "cross-account-write" || !strings.Contains(fs[1].Message, "check it by hand") {
 		t.Errorf("%+v", fs)
 	}
 	if !slices.Equal(got[:3], []string{"POST /repos/alice/pub/issues", "POST /repos/alice/pub/issues", "GET /user/starred/alice/pub"}) {
@@ -783,7 +784,10 @@ func TestWriteCheckGraphQL(t *testing.T) {
 // B's checkout, and A's read of the basket shows the change (high), unless
 // that read differs on its own (medium).
 func TestWriteCheckTriesAndSteps(t *testing.T) {
-	for _, noisy := range []bool{false, true} {
+	// noise: none; a counter that changes on every read (lined up word by
+	// word and left out, so the checkout's change still shows, issue #95);
+	// or a layout that changes on every read (nothing can be told apart).
+	for _, noise := range []string{"none", "counter", "layout"} {
 		var mu sync.Mutex
 		notes, basket, next, reads := map[int]string{}, []int{}, 7, 0
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -823,8 +827,12 @@ func TestWriteCheckTriesAndSteps(t *testing.T) {
 				fmt.Fprint(w, `{"ok":true}`)
 			case r.Method == "GET" && r.URL.Path == "/rest/basket/5":
 				reads++
-				if noisy {
+				switch noise {
+				case "counter":
 					fmt.Fprintf(w, `{"items":%d,"at":%d}`, len(basket), reads)
+					return
+				case "layout":
+					fmt.Fprintf(w, `{"items":%d,"at":[%s]}`, len(basket), strings.TrimSuffix(strings.Repeat("1,", reads), ","))
 					return
 				}
 				fmt.Fprintf(w, `{"items":%d}`, len(basket))
@@ -869,16 +877,16 @@ func TestWriteCheckTriesAndSteps(t *testing.T) {
 			got = append(got, fmt.Sprintf("%s %s %v", f.RuleID, strings.TrimPrefix(f.Location.URI, u), f.Severity))
 		}
 		checkout := "cross-account-write /rest/basket/5/checkout high"
-		if noisy {
+		if noise == "layout" {
 			checkout = "cross-account-write /rest/basket/5/checkout medium"
 		}
 		wantF := []string{checkout, "cross-account-write /api/notes/7 high"}
 		if !slices.Equal(got, wantF) {
-			t.Errorf("noisy %v: findings %q, want %q", noisy, got, wantF)
+			t.Errorf("noise %s: findings %q, want %q", noise, got, wantF)
 		}
-		// Sent once, before B's checkout: B's was accepted on A's recorded
-		// basket, so the checkout is not sent with no login.
-		if res.StepsSent != 1 || !strings.Contains(res.WriteSummary(ws), "1 of account A's earlier recorded writes sent again first") {
+		// Sent before each sender's checkout: with no login first (refused),
+		// then B (accepted).
+		if res.StepsSent != 2 || !strings.Contains(res.WriteSummary(ws), "2 of account A's earlier recorded writes sent again first") {
 			t.Errorf("steps %d: %s", res.StepsSent, res.WriteSummary(ws))
 		}
 	}

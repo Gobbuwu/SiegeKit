@@ -46,6 +46,7 @@ env:
 
 jobs:
   scan:
+    if: false # PROTOTYPE (issues #95/#96): runs no access check; the final run has every job
     name: Scan ${{ matrix.repo }} (${{ matrix.engine }}${{ matrix.os == 'ubuntu-24.04-arm' && ', arm64' || '' }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 40
@@ -149,6 +150,7 @@ jobs:
           exit $code
 
   planted:
+    if: false # PROTOTYPE (issues #95/#96): runs no access check; the final run has every job
     # ADR 0063: the secret and dependency cases of the owner's Porchlet run,
     # in a repository .github/gate/planted/make.sh builds at run time, so
     # that no key is stored in SiegeKit's repository: a Supabase secret key
@@ -228,6 +230,7 @@ jobs:
         # GitHub's ARM Linux runner too (ADR 0060, owner 2026-11-23).
         os: [ubuntu-latest, ubuntu-24.04-arm]
     env:
+      SIEGEKIT_PROTO_MEASURE: /tmp/siegekit-measure.txt
       SIEGEKIT_ENGINE: ${{ matrix.engine }}
       EXPECT_ENGINE: ${{ matrix.engine == 'podman' && 'podman rootless' || 'docker rootful' }}
     steps:
@@ -388,6 +391,9 @@ jobs:
           cat "$RUNNER_TEMP/observed.json"
           echo "::endgroup::"
           exit $code
+      - name: MEASURE (prototype)
+        if: always()
+        run: cat /tmp/siegekit-measure.txt || true
       - name: Juice Shop log
         if: failure()
         run: docker logs juice-shop 2>&1 | tail -50
@@ -760,7 +766,7 @@ jobs:
     # an account B that may write (a collaborator) next to an outsider C.
     # The check runs in SiegeKit's own process and starts no container, so
     # the engine in the matrix is the one the app runs under.
-    name: Write replay on ${{ matrix.app }} (app on ${{ matrix.engine }}${{ matrix.os == 'ubuntu-24.04-arm' && ', arm64' || '' }})
+    name: Write replay on ${{ matrix.app }} (app on ${{ matrix.engine }}${{ matrix.os == 'ubuntu-24.04-arm' && ', arm64' || '' }}) ${{ matrix.accept }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 20
     strategy:
@@ -770,8 +776,11 @@ jobs:
         engine: [podman, docker]
         # GitHub's ARM Linux runner too (ADR 0060, owner 2026-11-23).
         os: [ubuntu-latest, ubuntu-24.04-arm]
+        accept: [A0, A1, A2, A3, A4] # PROTOTYPE: card 1's rules
     env:
       APP_ENGINE: ${{ matrix.engine }}
+      SIEGEKIT_PROTO_ACCEPT: ${{ matrix.accept }}
+      SIEGEKIT_PROTO_MEASURE: /tmp/siegekit-measure.txt
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -904,11 +913,67 @@ jobs:
           cat "$RUNNER_TEMP/observed.json"
           echo "::endgroup::"
           exit $code
+      - name: MEASURE (prototype)
+        if: always()
+        run: cat /tmp/siegekit-measure.txt || true
       - name: App log
         if: failure()
         run: $APP_ENGINE logs app 2>&1 | tail -50
 
+  nextjs:
+    # Issues #95 and #96: access-control and access-control-write on the
+    # login gate's Next.js 16 app (ADR 0062), whose workspace pages are a
+    # Porchlet-like owner's space: writes are Server Actions posted to the
+    # page's URL, refusals answer 200 with the form's state, every answer
+    # carries a fresh CSP nonce, and the browser prefetches routes (RSC).
+    # Three writes and two reads are flawed on purpose.
+    name: Access checks on Next.js Server Actions (auth on ${{ matrix.engine }}${{ matrix.os == 'ubuntu-24.04-arm' && ', arm64' || '' }}) ${{ matrix.accept }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        engine: [podman, docker]
+        os: [ubuntu-latest, ubuntu-24.04-arm]
+        accept: [A0, A1, A2, A3, A4] # PROTOTYPE: card 1's rules
+    env:
+      APP_ENGINE: ${{ matrix.engine }}
+      SIEGEKIT_PROTO_ACCEPT: ${{ matrix.accept }}
+      SIEGEKIT_PROTO_MEASURE: /tmp/siegekit-measure.txt
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Platform
+        run: test "$(uname -m)" = "${{ matrix.os == 'ubuntu-24.04-arm' && 'aarch64' || 'x86_64' }}"
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: false
+      - name: Build
+        run: CGO_ENABLED=0 go build -o "$RUNNER_TEMP/siegekit" ./cmd/siegekit
+      - name: App dependencies
+        working-directory: .github/gate/logins
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Recorder
+        # As in the writes job: Playwright 1.63.0 and its own Chromium.
+        working-directory: .github/gate
+        run: |
+          npm ci --ignore-scripts --no-audit --no-fund
+          npx --no-install playwright install chromium
+      - name: Start Supabase Auth and the app
+        run: SK="$RUNNER_TEMP/siegekit" W="$RUNNER_TEMP/logins" REPO="$GITHUB_WORKSPACE" .github/gate/logins/gate.sh start
+      - name: Record and scan the workspace pages
+        run: SK="$RUNNER_TEMP/siegekit" W="$RUNNER_TEMP/logins" REPO="$GITHUB_WORKSPACE" .github/gate/logins/gate.sh writes
+      - name: MEASURE (prototype)
+        if: always()
+        run: cat /tmp/siegekit-measure.txt || true
+      - name: Logs
+        if: failure()
+        run: SK="$RUNNER_TEMP/siegekit" W="$RUNNER_TEMP/logins" REPO="$GITHUB_WORKSPACE" .github/gate/logins/gate.sh logs
+
   mail:
+    if: false # PROTOTYPE (issues #95/#96): runs no access check; the final run has every job
     # ADR 0056: reset-limit and signup-limit count the emails the app sends
     # to a mail catcher (--mail-catcher). Gitea 1.24.6 answers every reset
     # the same but emails an account once in a few minutes, so its reset
@@ -1036,6 +1101,7 @@ jobs:
           $APP_ENGINE logs mailpit 2>&1 | tail -20
 
   pages:
+    if: false # PROTOTYPE (issues #95/#96): runs no access check; the final run has every job
     # ADR 0057: reset-limit, signup-limit and code-limit (ADR 0055) on Juice
     # Shop, with the pages found in a Chromium recording as a person would
     # make one: a sign-up, a password reset with the right security answer,
@@ -1146,6 +1212,7 @@ jobs:
         run: $APP_ENGINE logs app 2>&1 | tail -50
 
   storage:
+    if: false # PROTOTYPE (issues #95/#96): runs no access check; the final run has every job
     # ADR 0059: the storage write test (ADR 0058) against the Firebase
     # Storage emulator and a local Supabase Storage, 7 rule or policy sets
     # each, with the storage on the matrix's engine. The check runs in

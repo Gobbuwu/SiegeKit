@@ -255,11 +255,13 @@ func TestCheck(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// 10 requests answered A with 2xx and were sent three times; /down once.
-	if res.ATried != 11 || res.AFailed != 1 || res.Requests != 31 || len(*seen) != 31 || res.BRefused != 0 || !res.BTested {
+	// 10 requests answered A with 2xx and were sent three times; /down once;
+	// /rest/user/whoami once more as A, because B's answer lines up with
+	// A's word by word (Replay.Again, issue #95).
+	if res.ATried != 11 || res.AFailed != 1 || res.Requests != 32 || len(*seen) != 32 || res.BRefused != 0 || !res.BTested {
 		t.Errorf("%+v", res)
 	}
-	if len(*waits) != 30 || (*waits)[0] != 100*time.Millisecond {
+	if len(*waits) != 31 || (*waits)[0] != 100*time.Millisecond {
 		t.Errorf("waits %v", *waits)
 	}
 	// A's own headers stay for B and no login; only the session changes.

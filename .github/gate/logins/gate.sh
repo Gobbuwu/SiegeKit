@@ -112,6 +112,11 @@ start() {
   done
   curl -sf -o /dev/null -H "apikey: $anon" -H 'Content-Type: application/json' \
     -d "{\"email\":\"$USER_EMAIL\",\"password\":\"$(cat "$W/password")\"}" $AUTH/auth/v1/signup
+  # Accounts A, B and C of the write-replay case (issues #95 and #96).
+  for who in a b c; do
+    curl -sf -o /dev/null -H "apikey: $anon" -H 'Content-Type: application/json' \
+      -d "{\"email\":\"gate-ws-$who@siegekit.test\",\"password\":\"$(cat "$W/password")\"}" $AUTH/auth/v1/signup
+  done
   # The app, built and served by the runner's Node; Supabase's URL and key
   # are read on the server only.
   cd "$H"
@@ -217,9 +222,40 @@ pages() {
   return $fail
 }
 
+# The workspace pages (issues #95 and #96): A's Chromium recording, then
+# access-control and access-control-write with B (a member of A's
+# workspace) and C (an outsider). Needs the recorder's dependencies in
+# .github/gate (Playwright and its Chromium).
+writes() {
+  local code
+  $E restart gt >/dev/null
+  authup
+  node "$H/../record-workspaces.js" $APP gate-ws-a@siegekit.test gate-ws-b@siegekit.test gate-ws-c@siegekit.test \
+    "$(cat "$W/password")" "$W/a.har" "$W/session-b" "$W/session-c"
+  # The scan asks a person to type that the accounts are test accounts and
+  # then "change test data" (ADR 0049 item 8); the gate made the accounts
+  # and the app, so it types both through a pseudo-terminal (ADR 0044).
+  cat > "$W/ws-scan.sh" <<SH
+#!/bin/bash
+exec "$SK" scan --yes --authorized-host 127.0.0.1 --no-save --report-dir "$W/report-ws" \
+  --only access-control,access-control-write --har "$W/a.har" --har-user gate-ws-a@siegekit.test --replay-writes $APP/
+SH
+  chmod +x "$W/ws-scan.sh"
+  set +e
+  printf 'test accounts\nchange test data\n' | SIEGEKIT_SESSION_B="$(cat "$W/session-b")" SIEGEKIT_SESSION_C="$(cat "$W/session-c")" \
+    script -qec "$W/ws-scan.sh" "$W/ws-scan.log" >/dev/null
+  code=$?
+  set -e
+  echo "exit code $code"
+  if [ "$code" -ne 0 ] && [ "$code" -ne 3 ]; then tail -30 "$W/ws-scan.log"; return 1; fi
+  jq -r '.plugins[] | "  \(.id): \(.status), \(.requests // 0) requests, \(.findings // 0) findings: \(.result // .reason)"' "$W/report-ws/report.json"
+  jq -r '.findings[] | "  \(.severity) \(.ruleId) \(.message[0:220])"' "$W/report-ws/report.json"
+}
+
 case ${1:-} in
   start) start ;;
   scan) scan ;;
+  writes) writes ;;
   logs) $E logs gt 2>&1 | tail -40; $E logs lgmail 2>&1 | tail -10; tail -40 "$W/next.log" "$W/gateway.log" 2>/dev/null || true ;;
-  *) echo "usage: gate.sh start|scan|logs" >&2; exit 2 ;;
+  *) echo "usage: gate.sh start|scan|writes|logs" >&2; exit 2 ;;
 esac
