@@ -116,7 +116,8 @@ type PluginResult struct {
 	Result string `json:"result,omitempty"`
 	// Stop says, as a fixed word, why the check was cut short (ADR 0067,
 	// decision 1). The check is failed (timed-out for StopTimeLimit) and
-	// its findings up to the stop are kept.
+	// its findings up to the stop are kept, except for StopHostBlocked,
+	// which drops those read from the host's block page (ADR 0071).
 	Stop Stop `json:"stop,omitempty"`
 	// Gaps names what the check could not read, each with a typed cause
 	// (ADR 0067, decision 1); at most MaxGaps are listed and GapCount
@@ -144,6 +145,10 @@ const (
 	StopCountersUnread Stop = "counters-unread"
 	StopTargetStopped  Stop = "target-stopped" // SiegeKit's proxy stopped the run: the target kept failing
 	StopFileLimit      Stop = "file-limit"     // the tree has more files than a check reads
+	// StopHostBlocked: the host stopped serving the app partway through
+	// and answered with its own page, such as a security checkpoint
+	// (ADR 0071). Findings read from answers like that page are dropped.
+	StopHostBlocked Stop = "host-blocked"
 )
 
 // Completeness says whether a check that ran showed it checked everything

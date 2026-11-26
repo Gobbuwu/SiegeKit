@@ -49,6 +49,6 @@ A header the person gives replaces a header of the same name that a tool or chec
 
 ## Limits
 
-- Vercel's **Security Checkpoint** (a 403 bot-challenge page of about 25 KB) is not a login, and the bypass header does not get past it: on Porchlet's preview it started after one run of 246 requests at 10 requests a second or less. A scan that hits it is cut short; SiegeKit does not detect that yet (issue #86).
+- Vercel's **Security Checkpoint** (a 403 bot-challenge page of about 25 KB) is not a login, and the bypass header does not get past it: on Porchlet's preview it started after one run of 246 requests at 10 requests a second or less. When a scan hits it, SiegeKit stops the checks it affects (`stop: host-blocked`, ADR 0071), drops findings read from the checkpoint page, and does not start later checks while it lasts (verified on Vercel's Attack Challenge Mode page, 2026-11-25); scan in smaller runs (`--only`), or a local copy, to stay under it.
 - A value is hidden in the reports as typed. A tool that quoted it encoded (URL- or HTML-escaped) would not be caught; a value of letters, digits and `-._~` reads the same in every encoding.
 - Like every environment variable, other processes of the same user can read it while SiegeKit runs.

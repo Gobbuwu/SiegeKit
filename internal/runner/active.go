@@ -18,6 +18,9 @@ type ActiveResult struct {
 	Stats egress.Stats
 	// Stopped is why the proxy stopped the run, or "" (ADR 0005 item 3).
 	Stopped string
+	// Block is set when the proxy stopped because the host stopped serving
+	// the app (ADR 0071); Stopped then holds its reason.
+	Block *egress.Block
 }
 
 // relayStarted is told the name of each relay container RunTargetOnly
@@ -92,7 +95,7 @@ func RunTargetOnly(ctx context.Context, e *sandbox.Engine, s sandbox.Spec, cfg e
 		}
 	}()
 	res, err := e.Run(runCtx, s)
-	out := &ActiveResult{Result: res, Stats: p.Stats(), Stopped: p.StopReason()}
+	out := &ActiveResult{Result: res, Stats: p.Stats(), Stopped: p.StopReason(), Block: p.Block()}
 	if out.Stopped != "" && errors.Is(err, context.Canceled) && ctx.Err() == nil {
 		// The proxy stopped the run: report it as a result, not an error.
 		out.Result = &sandbox.Result{Status: sandbox.Failed, ExitCode: -1}

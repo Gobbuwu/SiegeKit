@@ -59,6 +59,10 @@ type File struct {
 	Kind Kind
 	// Map is true for a source map whose content is one (IsSourceMap).
 	Map bool
+	// Size is the file's length; it was answered with 200, as every
+	// fetched file was. Its findings carry both, so a stopped run drops
+	// them when they match a block page (F2, ADR 0071).
+	Size int64
 }
 
 // Result is what Collect fetched and left out.
@@ -209,6 +213,10 @@ func Collect(ctx context.Context, cfg egress.Config, rate float64, dir string) (
 		case errors.Is(err, errLimit):
 			c.res.OverLimit += len(queue) - i
 			return c.res, nil
+		case egress.IsBlocked(err):
+			// The host stopped serving the app: the watch reports it, and
+			// the files fetched so far are kept (ADR 0071).
+			return c.res, nil
 		case errors.Is(err, egress.ErrTooLarge):
 			c.res.TooLarge++
 			continue
@@ -335,7 +343,7 @@ func (c *collector) save(u *url.URL, k Kind, body []byte) error {
 	if err := os.WriteFile(filepath.Join(c.dir, name), body, 0o644); err != nil {
 		return err
 	}
-	c.res.Files = append(c.res.Files, File{Name: name, URL: c.cfg.Target.Origin() + u.EscapedPath(), Kind: k, Map: k == SourceMap && IsSourceMap(body)})
+	c.res.Files = append(c.res.Files, File{Name: name, URL: c.cfg.Target.Origin() + u.EscapedPath(), Kind: k, Map: k == SourceMap && IsSourceMap(body), Size: int64(len(body))})
 	return nil
 }
 
@@ -353,6 +361,7 @@ func Findings(fs []findings.Finding, r Result) []findings.Finding {
 			continue // not one of the fetched files; cannot happen with Gitleaks
 		}
 		f.Location.URI = file.URL
+		f.Answers = []findings.Answer{{Status: http.StatusOK, Length: file.Size}}
 		f.Message = strings.TrimSpace(f.Message) + fmt.Sprintf(" Found in the %s served at %s: anyone who opens the site can read it.", file.Kind, file.URL)
 		f.Sources = append([]findings.Source(nil), f.Sources...)
 		for i := range f.Sources {

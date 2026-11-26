@@ -160,3 +160,27 @@ func TestFindings(t *testing.T) {
 		t.Errorf("Summary %q", s)
 	}
 }
+
+// A block stops the spec probe at once (ADR 0071): the later paths are
+// neither sent nor waited for.
+func TestProbeSpecsStopsWhenBlocked(t *testing.T) {
+	waits := 0
+	oldSleep := sleep
+	sleep = func(context.Context, time.Duration) error { waits++; return nil }
+	t.Cleanup(func() { sleep = oldSleep })
+	var got []string
+	get := func(_ context.Context, _ egress.Config, path string, _ int64) (int, []byte, error) {
+		got = append(got, path)
+		if len(got) == 3 {
+			return 403, nil, &egress.BlockedError{Block: &egress.Block{Reason: "test block"}}
+		}
+		return 404, []byte("not found"), nil
+	}
+	p, err := ProbeSpecs(context.Background(), get, cfgFor(t), 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 3 || waits != 2 || p.Tried != 3 || p.Requests != 3 || len(Paths()) <= 3 {
+		t.Errorf("sent %v, %d waits, %+v", got, waits, p)
+	}
+}

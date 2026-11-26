@@ -947,10 +947,15 @@ func WriteCheck(ctx context.Context, cfg egress.Config, ws []Write, acc Accounts
 		if ctx.Err() != nil {
 			return Answer{}, ctx.Err()
 		}
+		if a != nil {
+			res.Requests++
+		}
+		if egress.IsBlocked(err) {
+			return Answer{}, err // the replay ends; what it read so far is kept
+		}
 		if a == nil {
 			return Answer{Err: errString(err)}, nil
 		}
-		res.Requests++
 		lastHeader = a.Header
 		if err != nil {
 			return Answer{Status: a.Status, Err: errString(err)}, nil
@@ -1301,7 +1306,7 @@ func WriteFindings(origin string, res WriteResult) []findings.Finding {
 			}
 		}
 		pathOnly, _, _ := strings.Cut(r.Path, "?")
-		f := findings.Finding{Severity: sev, Location: findings.Location{URI: origin + pathOnly}, Family: Family}
+		f := findings.Finding{Severity: sev, Location: findings.Location{URI: origin + pathOnly}, Family: Family, Answers: answered(r.Answer, r.Before, r.After)}
 		readOf := "the same URL"
 		if pathOf(r.ReadPath) != pathOf(r.Sent) {
 			readOf = pathOf(r.ReadPath) + ", which A's earlier recorded writes prepared and A read twice, the same both times, before the replay"

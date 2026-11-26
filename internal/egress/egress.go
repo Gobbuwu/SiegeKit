@@ -2,7 +2,8 @@
 // (ADR 0006, ADR 0018). It accepts requests only for the target origin,
 // connects only to the pinned addresses, caps the request rate, labels the
 // traffic, inspects HTTPS with a per-run certificate authority, and stops
-// after repeated server errors.
+// after repeated server errors or when the host stops serving the app
+// (ADR 0071).
 package egress
 
 import (
@@ -57,6 +58,11 @@ type Config struct {
 	// ParseExtraHeaders. It is set only for the target's own origin, never
 	// for another host such as a backend or a mail catcher.
 	Header http.Header
+	// Watch is the check's watch on the host (ADR 0071): every answer is
+	// shown to it, and once it sees the host's own block page instead of
+	// the app, the proxy stops and Send refuses. Nil watches nothing; it is
+	// set only for the target's own origin.
+	Watch *Unit
 
 	// Dial and RootCAs replace the network and system roots in tests.
 	Dial    func(ctx context.Context, network, addr string) (net.Conn, error)
@@ -90,7 +96,10 @@ type Proxy struct {
 	stats       Stats
 	consecutive int
 	stopReason  string
+	block       *Block
 	stop        chan struct{}
+	ctx         context.Context // ends at Close, for the watch's fetches
+	cancel      context.CancelFunc
 	hijacked    map[net.Conn]struct{}
 	closed      bool
 	listener    net.Listener
@@ -131,6 +140,7 @@ func New(cfg Config) (*Proxy, error) {
 		p.ca, p.leaf = ca, leaf
 	}
 	p.transport = newTransport(cfg)
+	p.ctx, p.cancel = context.WithCancel(context.Background())
 	return p, nil
 }
 
@@ -145,6 +155,13 @@ func (p *Proxy) CACertPEM() []byte {
 
 // Stopped is closed when the proxy stops forwarding after repeated errors.
 func (p *Proxy) Stopped() <-chan struct{} { return p.stop }
+
+// Block is what the watch saw when it stopped the proxy, or nil.
+func (p *Proxy) Block() *Block {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.block
+}
 
 // StopReason says why the proxy stopped, or "".
 func (p *Proxy) StopReason() string {
@@ -290,6 +307,9 @@ func SendHeader(ctx context.Context, cfg Config, method, path string, header htt
 	}
 	req.Header.Set("User-Agent", "SiegeKit/"+cfg.Version)
 	addExtra(req.Header, cfg.Header)
+	if b := cfg.Watch.Block(); b != nil {
+		return nil, &BlockedError{Block: b}
+	}
 	start := time.Now()
 	resp, err := tr.RoundTrip(req)
 	if err != nil {
@@ -299,14 +319,40 @@ func SendHeader(ctx context.Context, cfg Config, method, path string, header htt
 	a := &Answer{Status: resp.StatusCode, Header: resp.Header}
 	b, err := io.ReadAll(io.LimitReader(resp.Body, max+1))
 	a.Took = time.Since(start)
+	shape := Shape{Status: a.Status, Type: mediaType(a.Header), Len: int64(len(b))}
+	if err != nil || shape.Len > maxShapeBody {
+		shape.Len = -1
+	}
 	if err != nil {
+		cfg.Watch.answer(ctx, shape)
 		return a, err
 	}
 	if int64(len(b)) > max {
+		cfg.Watch.answer(ctx, Shape{Status: a.Status, Type: shape.Type, Len: -1})
 		return a, fmt.Errorf("%w %d bytes", ErrTooLarge, max)
 	}
 	a.Body = b
+	if blk := cfg.Watch.answer(ctx, shape); blk != nil {
+		// This answer was the block page too: the check gets the stop,
+		// not the page, and the answer without its body, so the request
+		// is counted as answered by the target.
+		return &Answer{Status: a.Status, Header: a.Header, Took: a.Took}, &BlockedError{Block: blk}
+	}
 	return a, nil
+}
+
+// BlockedError is returned by Send once the check's watch saw the host stop
+// serving the app (ADR 0071).
+type BlockedError struct{ Block *Block }
+
+func (e *BlockedError) Error() string { return "stopped by SiegeKit: " + e.Block.Reason }
+
+// IsBlocked reports whether err is or wraps a BlockedError. A check whose
+// request got one must stop: every later request is refused too, and its
+// pacing would only wait (ADR 0071).
+func IsBlocked(err error) bool {
+	var b *BlockedError
+	return errors.As(err, &b)
 }
 
 // fixedHeader are request headers SendHeader never takes from its caller:
@@ -359,6 +405,7 @@ func (p *Proxy) Close() error {
 		_ = c.Close()
 	}
 	p.transport.CloseIdleConnections()
+	p.cancel()
 	if srv != nil {
 		return srv.Close()
 	}
@@ -490,6 +537,11 @@ func (p *Proxy) forward(w http.ResponseWriter, r *http.Request) {
 			ua := strings.TrimSpace(pr.In.Header.Get("User-Agent") + " SiegeKit/" + p.cfg.Version)
 			pr.Out.Header.Set("User-Agent", ua)
 			addExtra(pr.Out.Header, p.cfg.Header)
+			// Answers come uncompressed, as to the watch's start-page
+			// fetch, so their lengths can be compared (ADR 0071): a
+			// compressed block page never matched the start page, and Go's
+			// client, in ffuf and Nuclei, asks for gzip by itself.
+			pr.Out.Header.Del("Accept-Encoding")
 		},
 		Transport: p.transport,
 		ModifyResponse: func(resp *http.Response) error {
@@ -499,6 +551,20 @@ func (p *Proxy) forward(w http.ResponseWriter, r *http.Request) {
 			p.stats.Requests++
 			p.mu.Unlock()
 			p.result(resp.StatusCode >= 500, fmt.Sprintf("the target answered %s", resp.Status))
+			if p.cfg.Watch != nil && resp.StatusCode != http.StatusSwitchingProtocols {
+				// The answer's shape is known once its body was copied to
+				// the tool (an upgraded connection has no answer to measure).
+				shape := Shape{Status: resp.StatusCode, Type: mediaType(resp.Header)}
+				resp.Body = &countingBody{ReadCloser: resp.Body, done: func(n int64, complete bool) {
+					shape.Len = n
+					if !complete || n > maxShapeBody {
+						shape.Len = -1
+					}
+					if b := p.cfg.Watch.answer(p.ctx, shape); b != nil {
+						p.halt(b)
+					}
+				}}
+			}
 			return nil
 		},
 		ErrorHandler: func(w http.ResponseWriter, _ *http.Request, err error) {
@@ -523,6 +589,17 @@ func (p *Proxy) result(failed bool, what string) {
 	p.consecutive++
 	if p.consecutive >= p.cfg.MaxServerErrors && p.stopReason == "" {
 		p.stopReason = fmt.Sprintf("%d server errors in a row (last: %s)", p.consecutive, what)
+		close(p.stop)
+	}
+}
+
+// halt stops the proxy because the watch saw the host stop serving the
+// app (ADR 0071).
+func (p *Proxy) halt(b *Block) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.stopReason == "" {
+		p.stopReason, p.block = b.Reason, b
 		close(p.stop)
 	}
 }

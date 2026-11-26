@@ -56,6 +56,9 @@ var activeRunner runner.ActiveRunner
 // tests replace it.
 var reachable = egress.Reachable
 
+// newWatch is egress.NewWatch; tests replace it.
+var newWatch = egress.NewWatch
+
 // specGet fetches an OpenAPI spec from the target; tests replace it.
 var specGet = egress.Get
 
@@ -1202,9 +1205,22 @@ func runURL(ctx context.Context, u *target.URL, addrs []netip.Addr, mode target.
 	// and for public-maps (ADR 0046).
 	var probe *publicmaps.Probe
 	var probeErr error
+	// The run's watch on the host (ADR 0071), set once the target answered.
+	var watch *egress.Watch
+	// probeBlock is set when the host stopped serving the app during the
+	// spec probe: what the probe found cannot be told from the block.
+	var probeBlock *egress.Block
 	probeSpecs := func() (publicmaps.Probe, error) {
 		if probe == nil {
-			p, err := publicmaps.ProbeSpecs(ctx, specGet, egress.Config{Target: u, Addrs: addrs, Header: o.extraHeaders, VerifyTLS: o.deployed, Version: version, ReadOnly: true}, limits.Rate)
+			w := watch.Begin(ctx)
+			p, err := publicmaps.Probe{}, error(nil)
+			if probeBlock = w.Block(); probeBlock == nil {
+				p, err = publicmaps.ProbeSpecs(ctx, specGet, egress.Config{Target: u, Addrs: addrs, Header: o.extraHeaders, VerifyTLS: o.deployed, Version: version, ReadOnly: true, Watch: w}, limits.Rate)
+				probeBlock = w.End(ctx)
+			}
+			if probeBlock != nil {
+				p, err = publicmaps.Probe{Requests: p.Requests}, &egress.BlockedError{Block: probeBlock}
+			}
 			probe, probeErr = &p, err
 		}
 		return *probe, probeErr
@@ -1231,6 +1247,7 @@ func runURL(ctx context.Context, u *target.URL, addrs []netip.Addr, mode target.
 		if err := reachable(ctx, cfg); err != nil {
 			return fail(fmt.Errorf("%s: %w; no test was sent. Check that the app is running at this address", u, err))
 		}
+		watch = newWatch(cfg)
 		needSpec := slices.ContainsFunc(selected, func(m *manifest.Manifest) bool {
 			return slices.Contains(planned, m.ID) && runner.UsesOpenAPI(m)
 		})
@@ -1247,6 +1264,9 @@ func runURL(ctx context.Context, u *target.URL, addrs []netip.Addr, mode target.
 				for _, m := range selected {
 					if runner.UsesOpenAPI(m) {
 						unavailable[m.ID] = runner.Fail("", reason)
+						if probeBlock != nil {
+							unavailable[m.ID] = runner.Unavailable{Status: report.Failed, Stop: report.StopHostBlocked, Reason: reason}
+						}
 					}
 				}
 			case needSpec:
@@ -1267,6 +1287,8 @@ func runURL(ctx context.Context, u *target.URL, addrs []netip.Addr, mode target.
 		pr := report.PluginResult{ID: login.ID, Family: login.Family, Tool: "siegekit", Version: version}
 		if r, ok := unavailable[login.ID]; ok {
 			pr.Status, pr.Cause, pr.Reason = r.Status, r.Cause, r.Reason
+		} else if b := watch.Begin(ctx).Block(); b != nil {
+			pr, _ = runner.HostBlocked(pr, b, nil)
 		} else {
 			pr.Input = fmt.Sprintf("%s as %q", loginTarget(lg), lg.User)
 			fmt.Fprintf(stdout, "%s: sending 1 login with the right password, then %d with a wrong one, one per second.\n", login.ID, o.login.attempts)
@@ -1303,6 +1325,10 @@ func runURL(ctx context.Context, u *target.URL, addrs []netip.Addr, mode target.
 		case !loginRes.Limited:
 			pr.Status, pr.Cause, pr.Reason = report.Skipped, report.CauseNoInput, "login-throttle saw no limit on one account, so many accounts from the same address cannot be limited either; nothing to add"
 		default:
+			if b := watch.Begin(ctx).Block(); b != nil {
+				pr, _ = runner.HostBlocked(pr, b, nil)
+				break
+			}
 			pr.Input = fmt.Sprintf("%s as %s and on", loginTarget(lg), login.SprayUser(lg, 1))
 			fmt.Fprintf(stdout, "%s: sending %d logins for invented user names, one per second.\n", login.SprayID, o.login.attempts)
 			res, err := sprayCheck(ctx, egress.Config{Target: u, Addrs: addrs, Header: o.extraHeaders, VerifyTLS: o.deployed, Version: version, ReadOnly: o.deployed}, lg, o.login.attempts, loginRes)
@@ -1326,6 +1352,8 @@ func runURL(ctx context.Context, u *target.URL, addrs []netip.Addr, mode target.
 		pr := report.PluginResult{ID: ratelimit.ID, Family: ratelimit.Family, Tool: "siegekit", Version: version}
 		if r, ok := unavailable[ratelimit.ID]; ok {
 			pr.Status, pr.Cause, pr.Reason = r.Status, r.Cause, r.Reason
+		} else if b := watch.Begin(ctx).Block(); b != nil {
+			pr, _ = runner.HostBlocked(pr, b, nil)
 		} else {
 			e := o.rateEndpoint
 			pr.Input = e.Method + " " + e.URL
@@ -1354,6 +1382,8 @@ func runURL(ctx context.Context, u *target.URL, addrs []netip.Addr, mode target.
 		pr := report.PluginResult{ID: p.ID(), Family: ratelimit.Family, Tool: "siegekit", Version: version}
 		if r, ok := unavailable[p.ID()]; ok {
 			pr.Status, pr.Cause, pr.Reason = r.Status, r.Cause, r.Reason
+		} else if b := watch.Begin(ctx).Block(); b != nil {
+			pr, _ = runner.HostBlocked(pr, b, nil)
 		} else {
 			e, n := o.pageEndpoints[p], ratelimit.DefaultRequests
 			pr.Input = pageInput(e)
@@ -1410,7 +1440,13 @@ func runURL(ctx context.Context, u *target.URL, addrs []netip.Addr, mode target.
 	storageRuns := storageSelected && !storageOff
 	var col *collected
 	if servedRuns || backendRuns || mapsRuns || storageRuns {
-		col = collect(ctx, egress.Config{Target: u, Addrs: addrs, Header: o.extraHeaders, VerifyTLS: o.deployed, Version: version, ReadOnly: true}, limits.Rate)
+		w := watch.Begin(ctx)
+		if b := w.Block(); b != nil {
+			col = &collected{err: &egress.BlockedError{Block: b}, block: b}
+		} else {
+			col = collect(ctx, egress.Config{Target: u, Addrs: addrs, Header: o.extraHeaders, VerifyTLS: o.deployed, Version: version, ReadOnly: true, Watch: w}, limits.Rate)
+			col.block = w.End(ctx)
+		}
 		defer col.cleanup()
 		if ctx.Err() != nil {
 			return fail(errors.New("interrupted; no report written"))
@@ -1425,6 +1461,9 @@ func runURL(ctx context.Context, u *target.URL, addrs []netip.Addr, mode target.
 		} else {
 			fmt.Fprintf(stdout, "%s: scanning the start page and the files it links.\n", served.ID)
 			pr, servedFindings = runServed(ctx, ex, gitleaks, u.String(), col, rootsIn(dir).Files, pr)
+			if col.block != nil {
+				pr, servedFindings = runner.HostBlocked(pr, col.block, servedFindings)
+			}
 			if ctx.Err() != nil {
 				return fail(errors.New("interrupted; no report written"))
 			}
@@ -1447,10 +1486,17 @@ func runURL(ctx context.Context, u *target.URL, addrs []netip.Addr, mode target.
 				extra = col.res.Requests
 			}
 			collectCounted = true
-			fmt.Fprintf(stdout, "%s: reading %s.\n", backend.ID, o.backend)
-			pr, backendFindings = runBackend(ctx, bp, col, o.repo, o.supabaseKey, extra, pr)
-			if ctx.Err() != nil {
-				return fail(errors.New("interrupted; no report written"))
+			if col.block != nil {
+				// Its input, the app's scripts, may be the host's page
+				// (ADR 0071): the backend is not contacted.
+				pr, _ = runner.HostBlocked(pr, col.block, nil)
+				pr.Requests = extra
+			} else {
+				fmt.Fprintf(stdout, "%s: reading %s.\n", backend.ID, o.backend)
+				pr, backendFindings = runBackend(ctx, bp, col, o.repo, o.supabaseKey, extra, pr)
+				if ctx.Err() != nil {
+					return fail(errors.New("interrupted; no report written"))
+				}
 			}
 		}
 		backendResult = &pr
@@ -1468,13 +1514,19 @@ func runURL(ctx context.Context, u *target.URL, addrs []netip.Addr, mode target.
 				extra = col.res.Requests
 			}
 			collectCounted = true
-			var interrupted bool
-			pr, storageFindings, interrupted = o.runStorage(ctx, storageRun{
-				plan: sp, col: col, repo: o.repo, supabaseKey: o.supabaseKey, backendConfirmed: backendConfirmed,
-				auditLog: filepath.Join(dir, "audit.log"), mode: string(mode), env: env.String(), extraRequests: extra,
-			}, stdout)
-			if interrupted || ctx.Err() != nil {
-				return fail(errors.New("interrupted; no report written"))
+			if col.block != nil {
+				// As for backend-live: nothing is written to storage.
+				pr, _ = runner.HostBlocked(pr, col.block, nil)
+				pr.Requests = extra
+			} else {
+				var interrupted bool
+				pr, storageFindings, interrupted = o.runStorage(ctx, storageRun{
+					plan: sp, col: col, repo: o.repo, supabaseKey: o.supabaseKey, backendConfirmed: backendConfirmed,
+					auditLog: filepath.Join(dir, "audit.log"), mode: string(mode), env: env.String(), extraRequests: extra,
+				}, stdout)
+				if interrupted || ctx.Err() != nil {
+					return fail(errors.New("interrupted; no report written"))
+				}
 			}
 		}
 		storageResult = &pr
@@ -1498,6 +1550,10 @@ func runURL(ctx context.Context, u *target.URL, addrs []netip.Addr, mode target.
 				collectCounted = true
 			}
 			switch {
+			case probeBlock != nil:
+				pr, _ = runner.HostBlocked(pr, probeBlock, nil)
+			case col.block != nil:
+				pr, _ = runner.HostBlocked(pr, col.block, nil)
 			case err != nil:
 				pr.Status, pr.Reason = report.Failed, err.Error()
 			case col.err != nil:
@@ -1527,17 +1583,34 @@ func runURL(ctx context.Context, u *target.URL, addrs []netip.Addr, mode target.
 			}
 			pr.Input += o.codeInput(inSpec)
 			pr.Input += o.accountsInput()
-			fmt.Fprintf(stdout, "%s: replaying %d request(s).\n", authz.ID, len(o.harRequests.Requests))
-			res, err := authzCheck(ctx, egress.Config{Target: u, Addrs: addrs, Header: o.extraHeaders, VerifyTLS: o.deployed, Version: version, ReadOnly: true}, o.harRequests.Requests, authz.Accounts{B: o.sessionB, C: o.sessionC}, limits.Rate)
-			if ctx.Err() != nil {
-				return fail(errors.New("interrupted; no report written"))
+			var w *egress.Unit
+			if probeBlock == nil {
+				w = watch.Begin(ctx)
 			}
-			pr.Requests = res.Requests
-			if err != nil {
-				pr.Status, pr.Reason = report.Failed, err.Error()
-			} else {
-				authzFindings = authz.Findings(u.Origin(), res, o.harUser)
-				pr.Status, pr.Result, pr.Findings = report.Ran, res.Summary(o.harRequests, o.harUser, authz.Count(res, o.harUser)), len(authzFindings)
+			switch {
+			case probeBlock != nil:
+				// The spec's routes could not be read (ADR 0071).
+				pr, _ = runner.HostBlocked(pr, probeBlock, nil)
+			case w.Block() != nil:
+				pr, _ = runner.HostBlocked(pr, w.Block(), nil)
+			default:
+				fmt.Fprintf(stdout, "%s: replaying %d request(s).\n", authz.ID, len(o.harRequests.Requests))
+				res, err := authzCheck(ctx, egress.Config{Target: u, Addrs: addrs, Header: o.extraHeaders, VerifyTLS: o.deployed, Version: version, ReadOnly: true, Watch: w}, o.harRequests.Requests, authz.Accounts{B: o.sessionB, C: o.sessionC}, limits.Rate)
+				if ctx.Err() != nil {
+					return fail(errors.New("interrupted; no report written"))
+				}
+				pr.Requests = res.Requests
+				// A block ends the replay early; End below reports it and
+				// F2 drops what was read from the block page (ADR 0071).
+				if err != nil && !egress.IsBlocked(err) {
+					pr.Status, pr.Reason = report.Failed, err.Error()
+				} else {
+					authzFindings = authz.Findings(u.Origin(), res, o.harUser)
+					pr.Status, pr.Result, pr.Findings = report.Ran, res.Summary(o.harRequests, o.harUser, authz.Count(res, o.harUser)), len(authzFindings)
+				}
+				if b := w.End(ctx); b != nil {
+					pr, authzFindings = runner.HostBlocked(pr, b, authzFindings)
+				}
 			}
 		}
 		authzResult = &pr
@@ -1553,17 +1626,25 @@ func runURL(ctx context.Context, u *target.URL, addrs []netip.Addr, mode target.
 			recorded, tried := o.writes.Recorded()
 			pr.Input = fmt.Sprintf("%s, %d write(s) recorded as account A, %d tried on A's objects", filepath.Base(o.har), recorded, tried)
 			pr.Input += o.accountsInput()
-			fmt.Fprintf(stdout, "%s: replaying %d write(s).\n", authz.WriteID, len(o.writes.Writes))
-			res, err := writeCheck(ctx, egress.Config{Target: u, Addrs: addrs, Header: o.extraHeaders, Version: version}, o.writes.Writes, authz.Accounts{B: o.sessionB, C: o.sessionC}, o.harUser, limits.Rate, mode)
-			if ctx.Err() != nil {
-				return fail(errors.New("interrupted; no report written"))
-			}
-			pr.Requests = res.Requests
-			if err != nil {
-				pr.Status, pr.Reason = report.Failed, err.Error()
+			w := watch.Begin(ctx)
+			if b := w.Block(); b != nil {
+				pr, _ = runner.HostBlocked(pr, b, nil)
 			} else {
-				writeFindings = authz.WriteFindings(u.Origin(), res)
-				pr.Status, pr.Result, pr.Findings = report.Ran, res.WriteSummary(o.writes), len(writeFindings)
+				fmt.Fprintf(stdout, "%s: replaying %d write(s).\n", authz.WriteID, len(o.writes.Writes))
+				res, err := writeCheck(ctx, egress.Config{Target: u, Addrs: addrs, Header: o.extraHeaders, Version: version, Watch: w}, o.writes.Writes, authz.Accounts{B: o.sessionB, C: o.sessionC}, o.harUser, limits.Rate, mode)
+				if ctx.Err() != nil {
+					return fail(errors.New("interrupted; no report written"))
+				}
+				pr.Requests = res.Requests
+				if err != nil && !egress.IsBlocked(err) {
+					pr.Status, pr.Reason = report.Failed, err.Error()
+				} else {
+					writeFindings = authz.WriteFindings(u.Origin(), res)
+					pr.Status, pr.Result, pr.Findings = report.Ran, res.WriteSummary(o.writes), len(writeFindings)
+				}
+				if b := w.End(ctx); b != nil {
+					pr, writeFindings = runner.HostBlocked(pr, b, writeFindings)
+				}
 			}
 		}
 		writeResult = &pr
@@ -1583,7 +1664,7 @@ func runURL(ctx context.Context, u *target.URL, addrs []netip.Addr, mode target.
 	run, err := runner.RunURL(ctx, active, selected, runner.URLOptions{
 		Version: version, Target: u, Addrs: addrs, Deployed: o.deployed, Limits: limits, Unavailable: unavailable,
 		FilesRoot: rootsIn(dir).Files, OpenAPI: spec, NoOpenAPI: noSpec, Environment: env,
-		Recorded: recordedRequests, RecordedFrom: filepath.Base(o.har), Header: o.extraHeaders,
+		Recorded: recordedRequests, RecordedFrom: filepath.Base(o.har), Header: o.extraHeaders, Watch: watch,
 	})
 	if errors.Is(err, context.Canceled) {
 		return fail(errors.New("interrupted; no report written"))

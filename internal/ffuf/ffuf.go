@@ -90,6 +90,7 @@ func ToFindings(r io.Reader, opt Options) ([]findings.Finding, error) {
 			Location: findings.Location{URI: res.URL},
 			Family:   opt.Family,
 			Sources:  []findings.Source{{Plugin: opt.Plugin, RuleID: RuleID}},
+			Answers:  []findings.Answer{{Status: res.Status, Length: res.Length}},
 		}
 		f.ComputeFingerprint()
 		out = append(out, f)

@@ -105,6 +105,8 @@ func useSite(t *testing.T, s site) *[]string {
 			return nil, errors.New("the target did not answer")
 		case a.Status == -1:
 			return &egress.Answer{Status: 200, Header: http.Header{}}, egress.ErrTooLarge
+		case a.Status == -2: // the watch saw the host stop serving the app
+			return &egress.Answer{Status: 403, Header: http.Header{}}, &egress.BlockedError{Block: &egress.Block{Reason: "test block"}}
 		}
 		return a, nil
 	}
@@ -272,7 +274,7 @@ func TestCollectCanceled(t *testing.T) {
 }
 
 func TestFindings(t *testing.T) {
-	r := Result{Files: []File{{"001-page.html", "http://app.test/", Page, false}, {"002-script.js", "http://app.test/app.js", Script, false}}}
+	r := Result{Files: []File{{"001-page.html", "http://app.test/", Page, false, 900}, {"002-script.js", "http://app.test/app.js", Script, false, 25003}}}
 	in := []findings.Finding{
 		{RuleID: "github-pat", Message: "GitHub token", Severity: findings.High, Family: "secrets", Location: findings.Location{URI: "002-script.js", StartLine: 3}, Sources: []findings.Source{{Plugin: "gitleaks", RuleID: "github-pat"}}},
 		{RuleID: "x", Location: findings.Location{URI: "elsewhere.js"}},
@@ -289,6 +291,10 @@ func TestFindings(t *testing.T) {
 	}
 	if !strings.Contains(f.Message, "script served at http://app.test/app.js") {
 		t.Errorf("message %q", f.Message)
+	}
+	// The file's answer, for F2 (ADR 0071).
+	if len(f.Answers) != 1 || f.Answers[0] != (findings.Answer{Status: 200, Length: 25003}) {
+		t.Errorf("answers %+v", f.Answers)
 	}
 	if in[0].Sources[0].Plugin != "gitleaks" {
 		t.Error("input changed")
@@ -313,6 +319,32 @@ func TestIsSourceMap(t *testing.T) {
 	} {
 		if got := IsSourceMap([]byte(in)); got != want {
 			t.Errorf("IsSourceMap(%q) = %v", in, got)
+		}
+	}
+}
+
+// A block stops the collect at once (ADR 0071): later files are neither
+// fetched nor waited for, and the files fetched before it are kept.
+func TestCollectStopsWhenBlocked(t *testing.T) {
+	got := useSite(t, site{
+		"/":     page(`<script src="/a.js"></script><script src="/b.js"></script><script src="/c.js"></script><script src="/d.js"></script>`),
+		"/a.js": page("var a = 1;"),
+		"/b.js": {Status: -2},
+		"/c.js": page("var c = 1;"),
+		"/d.js": page("var d = 1;"),
+	})
+	waits := 0
+	sleep = func(context.Context, time.Duration) error { waits++; return nil }
+	res, err := Collect(context.Background(), cfgFor(t, "http://app.test/"), 10, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(*got, []string{"/", "/a.js", "/b.js"}) || waits != 2 || res.Requests != 3 {
+		t.Errorf("fetched %v, %d waits, %d requests", *got, waits, res.Requests)
+	}
+	for _, f := range res.Files {
+		if f.URL != "http://app.test/" && f.URL != "http://app.test/a.js" {
+			t.Errorf("kept %s", f.URL)
 		}
 	}
 }

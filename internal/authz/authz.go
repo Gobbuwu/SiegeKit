@@ -493,12 +493,17 @@ func Check(ctx context.Context, cfg egress.Config, reqs []Request, acc Accounts,
 		if ctx.Err() != nil {
 			return Answer{}, ctx.Err()
 		}
+		if a != nil {
+			res.Requests++
+			if a.Status == http.StatusTooManyRequests {
+				res.Rate429++
+			}
+		}
+		if egress.IsBlocked(err) {
+			return Answer{}, err // the replay ends; what it read so far is kept
+		}
 		if a == nil {
 			return Answer{Err: errString(err)}, nil
-		}
-		res.Requests++
-		if a.Status == http.StatusTooManyRequests {
-			res.Rate429++
 		}
 		if err != nil {
 			return Answer{Status: a.Status, Err: errString(err)}, nil
@@ -859,6 +864,7 @@ func Findings(origin string, res Result, loginName string) []findings.Finding {
 				CWEs:     []string{cwe},
 				Location: loc,
 				Family:   Family,
+				Answers:  answered(r.A, r.B, r.C, r.None),
 			})
 		case r.BOnly(cWorks):
 			out = append(out, findings.Finding{
@@ -869,6 +875,7 @@ func Findings(origin string, res Result, loginName string) []findings.Finding {
 				CWEs:     []string{cwe},
 				Location: loc,
 				Family:   Family,
+				Answers:  answered(r.A, r.B, r.C, r.None),
 			})
 		case r.CrossAccount():
 			if r.CTested {
@@ -887,6 +894,7 @@ func Findings(origin string, res Result, loginName string) []findings.Finding {
 				CWEs:     []string{cwe},
 				Location: loc,
 				Family:   Family,
+				Answers:  answered(r.A, r.B, r.None),
 			})
 		case r.NoLogin(loginName):
 			out = append(out, findings.Finding{
@@ -897,6 +905,7 @@ func Findings(origin string, res Result, loginName string) []findings.Finding {
 				CWEs:     []string{"CWE-306"},
 				Location: loc,
 				Family:   Family,
+				Answers:  answered(r.A, r.None),
 			})
 		}
 		if fields := r.NoLoginSecrets(); len(fields) > 0 {
@@ -908,12 +917,26 @@ func Findings(origin string, res Result, loginName string) []findings.Finding {
 				CWEs:     []string{"CWE-200"},
 				Location: loc,
 				Family:   Family,
+				Answers:  answered(r.None),
 			})
 		}
 	}
 	for i := range out {
 		out[i].Sources = []findings.Source{{Plugin: ID, RuleID: out[i].RuleID}}
 		out[i].ComputeFingerprint()
+	}
+	return out
+}
+
+// answered lists the answers a finding was read from, for SiegeKit to drop
+// it when one of them was a host's block page (ADR 0071). Requests that got
+// no answer are left out.
+func answered(as ...Answer) []findings.Answer {
+	var out []findings.Answer
+	for _, a := range as {
+		if a.Status != 0 {
+			out = append(out, findings.Answer{Status: a.Status, Length: int64(len(a.Body))})
+		}
 	}
 	return out
 }

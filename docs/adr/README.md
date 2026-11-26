@@ -74,6 +74,7 @@ Each significant design decision is recorded as a short ADR before code is writt
 | [0068](0068-tools-run-from-repo-root.md) | Gitleaks and Bandit run from the repository's top level, so its allowlists, `.gitleaksignore` and `.bandit` apply as in its own runs; findings in git-ignored, untracked files say so, read from git's index (amends 0020, 0063) | Accepted |
 | [0069](0069-reset-and-signup-page-forms.md) | Reset and sign-up pages given as their forms (`--reset-page`, `--signup-page`), limits seen in the redirect on 3xx only, and a guard that the requests reached the app (amends 0055, 0056, 0062) | Accepted |
 | [0070](0070-extra-headers.md) | `SIEGEKIT_EXTRA_HEADERS`: headers such as a preview host's bypass header, sent on every request to the target's origin (proof fetch, own checks, proxy), never to another host; login and connection headers refused; values hidden in every report (amends 0005, 0018) | Accepted |
+| [0071](0071-host-block-detector.md) | A check is stopped (`host-blocked`) when the host stops serving the app partway through: the start page before and after each check (D1) and when 10 answers in a row share a shape (D3); findings read from the block page dropped (F2) (amends 0007, 0018, 0067) | Accepted |
 
 ADRs 0002 to 0011 were accepted at the M0 design sign-off on 2026-11-18.
 

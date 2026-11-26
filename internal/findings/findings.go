@@ -84,6 +84,16 @@ type Finding struct {
 	HelpURI string `json:"helpUri,omitempty"`
 	// Fingerprint identifies the same issue across runs and tools.
 	Fingerprint string `json:"fingerprint"`
+	// Answers are the answers a URL finding was read from, when the check
+	// knows them (ffuf, access-control). They are not saved: SiegeKit uses
+	// them to drop findings read from a host's block page (ADR 0071).
+	Answers []Answer `json:"-"`
+}
+
+// Answer is the status and body length of an answer behind a finding.
+type Answer struct {
+	Status int
+	Length int64
 }
 
 // key is what makes two findings "the same issue": the location plus the
