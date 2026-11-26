@@ -1079,7 +1079,7 @@ func WriteCheck(ctx context.Context, cfg egress.Config, ws []Write, acc Accounts
 				rp.Read, rp.ReadPath = true, w.Parent
 				readHeader = w.ParentHeader.Clone()
 				readHeader.Del("Content-Type")
-			} else if w.Method == http.MethodPost && w.PageRead != "" && (acceptRule == acceptState || acceptRule == acceptHybrid && !(WriteReplay{Write: w}).hadSignal()) {
+			} else if w.Method == http.MethodPost && w.PageRead != "" && (acceptRule == acceptState || (acceptRule == acceptHybrid || acceptRule == acceptAction && w.Action != "") && !(WriteReplay{Write: w}).hadSignal()) {
 				rp.Read, rp.ReadPath = true, w.PageRead
 				readHeader = w.PageReadHeader.Clone()
 				readHeader.Del("Content-Type")
@@ -1256,6 +1256,11 @@ func (r WriteReplay) acceptedBy(rule string) bool {
 		return r.redirectSignals()
 	case acceptState:
 		return r.readChanged()
+	case acceptAction:
+		if r.Action == "" {
+			return true
+		}
+		return r.acceptedBy(acceptHybrid)
 	case acceptHybrid:
 		if r.hadSignal() {
 			return r.anySignal()
@@ -1323,6 +1328,7 @@ const (
 	acceptSignal = "A2" // any write needs the redirect-type header A's answer had
 	acceptState  = "A3" // A's read changed
 	acceptHybrid = "A4" // A's success header if it had one, else A's read changed when it was read
+	acceptAction = "A5" // A4 for a Server Action (a Next-Action header), A0 for every other write
 )
 
 var acceptRule = func() string {

@@ -779,7 +779,7 @@ jobs:
         engine: [podman, docker]
         # GitHub's ARM Linux runner too (ADR 0060, owner 2026-11-23).
         os: [ubuntu-latest, ubuntu-24.04-arm]
-        accept: [A0, A1, A2, A3, A4] # PROTOTYPE: card 1's rules
+        accept: [A0, A4, A5] # PROTOTYPE: card 1's rules
     env:
       APP_ENGINE: ${{ matrix.engine }}
       SIEGEKIT_PROTO_ACCEPT: ${{ matrix.accept }}
@@ -940,7 +940,7 @@ jobs:
       matrix:
         engine: [podman, docker]
         os: [ubuntu-latest, ubuntu-24.04-arm]
-        accept: [A0, A1, A2, A3, A4] # PROTOTYPE: card 1's rules
+        accept: [A0, A4, A5] # PROTOTYPE: card 1's rules
     env:
       APP_ENGINE: ${{ matrix.engine }}
       SIEGEKIT_PROTO_ACCEPT: ${{ matrix.accept }}

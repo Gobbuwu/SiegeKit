@@ -270,7 +270,7 @@ func measureWrites(res WriteResult) {
 	fmt.Fprintf(out, "MEASURE write active=%s requests=%d\n", acceptRule, res.Requests)
 	for _, r := range res.Replays {
 		line := fmt.Sprintf("MEASURE write %s who=%s notsent=%v status=%d sig=%v rec=%v read=%v noisy=%v once=%v changed=%v ignored=%v", r.Label(), whoName(r.Who), r.NotSent != "", r.Answer.Status, r.Signals, r.RecordedSignals, r.Read, r.Noisy, r.changedOnce(), r.readChanged(), r.MethodIgnored)
-		for _, rule := range []string{acceptAny, acceptNext, acceptSignal, acceptState, acceptHybrid} {
+		for _, rule := range []string{acceptAny, acceptNext, acceptSignal, acceptState, acceptHybrid, acceptAction} {
 			line += fmt.Sprintf(" %s=%v", rule, r.NotSent == "" && r.acceptedBy(rule))
 		}
 		fmt.Fprintln(out, line)
