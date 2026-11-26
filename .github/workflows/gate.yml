@@ -309,9 +309,10 @@ jobs:
         # it links (9 requests, measured 2026-11-20; ADR 0032), plus a
         # <file>.map for each of the 8, none of them a source map (17
         # requests, measured 2026-11-21; ADR 0046).
-        # access-control must replay the 12 GET requests (48 sent: A, C, B
-        # and no login), report exactly 4 reads by C, which B gets too: A's
-        # basket and user record, the user list and the complaints, and the
+        # access-control must replay the 12 GET requests (49 sent: A, C, B
+        # and no login, plus A's second read of /rest/user/whoami, whose
+        # answer to B and C lines up with A's word by word), report exactly
+        # 4 reads by C, which B gets too: A's basket and user record, the user list and the complaints, and the
         # password hashes /rest/memories/ gives anyone (measured 2026-11-20,
         # ADR 0035; with C 2026-11-22, ADR 0051).
         # Juice Shop's product search has no rate limit (20 requests all
@@ -362,7 +363,7 @@ jobs:
           jq -e '[.plugins[] | select(.id == "login-throttle" and .requests == 21 and .result == "no limit seen in 20 attempts, all answered 401; the right password answered 200")] | length == 1' "$r"
           jq -e '[.plugins[] | select(.id == "served-secrets" and .requests >= 9 and (.result | startswith("scanned ")) and (.result | contains("tried <file>.map for 8 file(s) naming no source map, 8 not one")))] | length == 1' "$r"
           jq -e '[.findings[] | select(.ruleId == "login-not-limited" and .location.uri == "http://127.0.0.1:3000/rest/user/login")] | length == 1' "$r"
-          jq -e '[.plugins[] | select(.id == "access-control" and .requests == 48 and (.result | contains(": 4 readable by account C or B, 0 only by account B (low),")))] | length == 1' "$r"
+          jq -e '[.plugins[] | select(.id == "access-control" and .requests == 49 and (.result | contains(": 4 readable by account C or B, 0 only by account B (low),")))] | length == 1' "$r"
           jq -e '[.plugins[] | select(.id == "zap-active" and .input == "13 recorded request(s) from a.har")] | length == 1' "$r"
           for u in /rest/products/search /rest/user/login; do
             jq -e --arg u "http://127.0.0.1:3000$u" '[.findings[] | select(.ruleId == "40018" and .severity == "high" and (.location.uri | startswith($u)))] | length > 0' "$r" > /dev/null || { echo "zap-active: no 40018 on $u"; exit 1; }
@@ -511,7 +512,7 @@ jobs:
           jq '.plugins[] | {id, status, cause, reason, input, result, requests, refused, findings}' "$r"
           jq -e '[.plugins[] | select(.status == "ran" and .requests > 0) | .id] | sort == ["access-control", "ffuf", "login-throttle", "nuclei", "nuclei-default-login", "nuclei-intrusive", "public-maps", "rate-limit", "schemathesis", "served-secrets", "zap", "zap-active"]' "$r"
           jq -e '[.plugins[] | select(.id == "login-throttle" and .requests == 21 and .result == "no limit seen in 20 attempts, all answered 401; the right password answered 200")] | length == 1' "$r"
-          jq -e '[.plugins[] | select(.id == "access-control" and .requests == 48 and (.result | contains(": 4 readable by account C or B, 0 only by account B (low),")))] | length == 1' "$r"
+          jq -e '[.plugins[] | select(.id == "access-control" and .requests == 49 and (.result | contains(": 4 readable by account C or B, 0 only by account B (low),")))] | length == 1' "$r"
           jq -e '[.plugins[] | select(.id == "zap-active" and .input == "13 recorded request(s) from a.har")] | length == 1' "$r"
       - name: Every request carried the header
         # Each check's requests, the reachability GET and the spec probes
