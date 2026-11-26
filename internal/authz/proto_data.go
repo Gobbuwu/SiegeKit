@@ -223,7 +223,7 @@ func measureReads(res Result, loginName string) {
 	}
 	measureMu.Lock()
 	defer measureMu.Unlock()
-	out, err := os.OpenFile(f, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600) // #nosec G703 -- PROTOTYPE: the gate's measure file, removed before merge
+	out, err := os.OpenFile(f, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600) // #nosec G304 G703 -- PROTOTYPE: the gate's measure file, removed before merge
 	if err != nil {
 		return
 	}
@@ -262,7 +262,7 @@ func measureWrites(res WriteResult) {
 	}
 	measureMu.Lock()
 	defer measureMu.Unlock()
-	out, err := os.OpenFile(f, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600) // #nosec G703 -- PROTOTYPE: the gate's measure file, removed before merge
+	out, err := os.OpenFile(f, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600) // #nosec G304 G703 -- PROTOTYPE: the gate's measure file, removed before merge
 	if err != nil {
 		return
 	}
@@ -294,8 +294,6 @@ func measureWrites(res WriteResult) {
 			} else {
 				fmt.Fprintf(out, "DIFF settle words=%d unsettled=%v\n", len(w3), r.unsettled)
 			}
-			_ = os.WriteFile(f+"."+r.Method+".before", r.Before.Body, 0o600)
-			_ = os.WriteFile(f+"."+r.Method+".after", r.After.Body, 0o600)
 		}
 	}
 }
