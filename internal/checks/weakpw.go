@@ -102,8 +102,8 @@ var (
 	// A SQL or PL/pgSQL assignment at a line's start: only a single-quoted
 	// literal is a string ("x" is an identifier, anything else an
 	// expression), and the line may end with ";" or "," and a "--" or
-	// MySQL "#" comment (#93).
-	reConfSQLLine = regexp.MustCompile(`(?im)^[ \t]*(?P<k>` + keyRE + `)[ \t]*(?::=|=)[ \t]*'(?P<v>[^'\n]*)'[ \t]*[;,]?[ \t]*(?:(?:--|#).*)?$`)
+	// MySQL "#" comment (#93), and "\r" (CRLF).
+	reConfSQLLine = regexp.MustCompile(`(?im)^[ \t]*(?P<k>` + keyRE + `)[ \t]*(?::=|=)[ \t]*'(?P<v>[^'\n]*)'[ \t]*[;,]?[ \t]*(?:(?:--|#).*)?\r?$`)
 	reConfJSON    = regexp.MustCompile(`(?i)"(?P<k>` + keyRE + `)"\s*:\s*"(?P<v>[^"]*)"`)
 	reConfXML     = regexp.MustCompile(`(?i)<(?P<k>` + keyRE + `)>(?P<v>[^<]*)</`)
 	reConfAttr    = regexp.MustCompile(`(?i)\b(?P<k>` + keyRE + `)\s*=\s*"(?P<v>[^"]*)"`)
@@ -134,8 +134,10 @@ var (
 
 // confLine is the key = value line pattern; unquoted is the pattern's
 // last value alternative for an unquoted value, or "" for none.
+// Line patterns end with an optional "\r": files saved on Windows end
+// lines with CRLF.
 func confLine(unquoted string) *regexp.Regexp {
-	return regexp.MustCompile(`(?im)^[ \t]*(?:-[ \t]+)?(?:export[ \t]+)?(?:ENV[ \t]+|ARG[ \t]+)?(?P<k>` + keyRE + `)[ \t]*(?::=|[=:])[ \t]*(?:"(?P<v>[^"\n]*)"|'(?P<v2>[^'\n]*)'` + unquoted + `)[ \t]*(?:#.*)?$`)
+	return regexp.MustCompile(`(?im)^[ \t]*(?:-[ \t]+)?(?:export[ \t]+)?(?:ENV[ \t]+|ARG[ \t]+)?(?P<k>` + keyRE + `)[ \t]*(?::=|[=:])[ \t]*(?:"(?P<v>[^"\n]*)"|'(?P<v2>[^'\n]*)'` + unquoted + `)[ \t]*(?:#.*)?\r?$`)
 }
 
 var notPasswords = map[string]bool{"true": true, "false": true, "null": true, "none": true, "nil": true, "yes": true, "no": true}

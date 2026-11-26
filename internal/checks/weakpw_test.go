@@ -117,6 +117,10 @@ func TestWeakHitsValueGrammar(t *testing.T) {
 		{"toml := literal", "config.toml", "password := \"admin\"\n", []hit{{1, "admin"}}},
 		{":= in a key = value file", ".env", "DB_PASSWORD := admin\nPASS:=root\n", []hit{{1, "admin"}, {2, "root"}}},
 		{":= with nothing after it", "a.yml", "password :=\npassword: =\n", nil},
+		// Files saved on Windows: lines end with CRLF.
+		{"crlf sql", "a.sql", "v_pass := 'abc';\r\nnew.encrypted_password := '';\r\n", []hit{{1, "abc"}}},
+		{"crlf key = value", ".env", "A_PASSWORD='admin'\r\nB_PASSWORD=root\r\nC_PASSWORD=\"guest\" # x\r\n", []hit{{1, "admin"}, {2, "root"}, {3, "guest"}}},
+		{"crlf toml", "config.toml", "password = 'admin'\r\n", []hit{{1, "admin"}}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var got []hit
