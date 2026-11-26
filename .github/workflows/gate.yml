@@ -697,12 +697,14 @@ jobs:
       - name: C. Block in access-control's last 6 requests
         # SiegeKit's own requests are counted (User-Agent "SiegeKit/<version>"
         # alone): the reachability GET, the 11 spec paths, then
-        # access-control's 48, so the 55th is its 43rd. A's replays that get
-        # the block page are not sent as the other accounts, so 3 requests
-        # get it (measured locally).
+        # access-control's 49 (4 per replay, plus A's second read of
+        # /rest/user/whoami, whose answer to B and C lines up with A's word
+        # by word), so the 56th is its 44th: /rest/memories/ as B. A's
+        # replays that get the block page are not sent as the other
+        # accounts, so 3 requests get it (measured locally).
         run: |
           set -euo pipefail
-          nohup "$RUNNER_TEMP/block-gate" -addr 127.0.0.1:3000 -app http://127.0.0.1:3001 -ua '^SiegeKit/[^ ]+$' -after 55 -log "$RUNNER_TEMP/c.log" > "$RUNNER_TEMP/c.out" 2>&1 &
+          nohup "$RUNNER_TEMP/block-gate" -addr 127.0.0.1:3000 -app http://127.0.0.1:3001 -ua '^SiegeKit/[^ ]+$' -after 56 -log "$RUNNER_TEMP/c.log" > "$RUNNER_TEMP/c.out" 2>&1 &
           echo $! > "$RUNNER_TEMP/gate.pid"
           sleep 1
           cat > "$RUNNER_TEMP/gate-scan.sh" <<'SH'
@@ -726,7 +728,7 @@ jobs:
           blocked=$(grep -c 'page=no blocked=yes' "$RUNNER_TEMP/c.log" || true)
           echo "block pages answered to the check: $blocked"
           test "$blocked" -eq 3
-          jq -e '[.plugins[] | select(.id == "access-control" and .status == "failed" and .stop == "host-blocked" and .requests == 45 and .findings == 4 and (.reason | contains("during this check: after it, the start page answered 403")) and (.reason | contains("; 1 finding(s) read from answers like the block page dropped; the 4 finding(s) reported before the stop are kept")))] | length == 1' "$r"
+          jq -e '[.plugins[] | select(.id == "access-control" and .status == "failed" and .stop == "host-blocked" and .requests == 46 and .findings == 4 and (.reason | contains("during this check: after it, the start page answered 403")) and (.reason | contains("; 1 finding(s) read from answers like the block page dropped; the 4 finding(s) reported before the stop are kept")))] | length == 1' "$r"
           jq -e --arg b "/rest/basket/$A_BASKET" --arg u "/api/Users/$A_USER" '[.findings[] | .ruleId + " " + (.location.uri | ltrimstr("http://127.0.0.1:3000"))] | sort == (["cross-account-read " + $b, "cross-account-read " + $u, "cross-account-read /api/Users", "cross-account-read /api/Complaints"] | sort)' "$r"
       - name: D. Block from ffuf's 1,000th request, on a host that gzips
         run: |
