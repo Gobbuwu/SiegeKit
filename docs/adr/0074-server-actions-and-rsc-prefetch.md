@@ -1,6 +1,6 @@
 # 0074. Server Actions, RSC prefetches and page noise in the access checks
 
-- Status: Proposed (decision cards 1 and 2 posted 2026-11-26 in the thread "Build PR C"; this ADR follows the recommended options A5 and R3 until the owner answers)
+- Status: Accepted (owner, 2026-11-26 03:43Z: "A5: hybrid for Server Actions only" on card 1 and "R3: skip RSC prefetch requests" on card 2, all options measured through SiegeKit; Porchlet on Docker amd64 only)
 - Date: 2026-11-26
 - Amends: [0049](0049-write-replay.md) (item 1: when a write is accepted; item 3 and [0051](0051-outsider-account-c.md) item 2: the order of senders; item 6: the caps), [0035](0035-access-control-replay.md) (what is compared), [0007](0007-findings-format.md) (a finding's key can hold a variant; a merged finding keeps one finding's own text)
 - Related: issues [#95](https://github.com/Gobbuwu/SiegeKit/issues/95) and [#96](https://github.com/Gobbuwu/SiegeKit/issues/96) (`from-porchlet`), threat model T26
@@ -54,14 +54,14 @@ Every rule kept both Next.js leaks (the notes page and `/latest`'s RSC answer). 
 5. **A method the page ignored.** A PUT, PATCH or DELETE answered 2xx with a body, whose read did not change, is followed by the sender's GET of the same URL (at most 4 for an HTML page, until one lines up; once otherwise). When the GET's answer is the same page with only fresh random values (16 bytes or more, two of lower case, upper case and digits, at most 8, each swapped the same way everywhere), the write is not accepted.
 6. **Order: no login first**, then C, then B (amends ADR 0051 item 2). A no-login acceptance no longer stops C or B, and C's acceptance no longer keeps no login from being sent. Gate run 45738560116 found 2 real Juice Shop no-login writes this way (a review posted and a product changed, checked by hand). The "C's session may have expired" note is given only when a write was sent both as C and with no login.
 7. **One finding per operation.** A finding's key holds a variant: the Server Action ID for writes, the query's names and the RSC kind for reads. A merged finding keeps the most severe finding's own text and lists every source.
-8. **Caps.** At most 23 requests per replay (A's copy, 3 earlier steps, 3 reads before, a form page, the write, 8 reads after, a settle read, 4 method reads and a DELETE), sent as no login, C and B: at most 6,900 for 100 writes and tries (ADR 0049 item 6 said 2,000 for 10 per replay and two senders). Measured: Juice Shop 418 with every new read, Gitea 42 to 51, the Next.js app 51.
+8. **Caps.** At most 23 requests per replay (A's copy, 3 earlier steps, 3 reads before, a form page, the write, 8 reads after, a settle read, 4 method reads and a DELETE), sent as no login, C and B: at most 6,900 for 100 writes and tries (ADR 0049 item 6 said 2,000 for 10 per replay and two senders). Measured (gate run [45750387112](https://github.com/Gobbuwu/SiegeKit/actions/runs/45750387112), the final build): Juice Shop 384 (372 before the settle and layout reads, 418 with layout reads on JSON too), Gitea 42 to 52, the Next.js app 51 writes and 68 reads.
 
 ## Consequences
 
 - Porchlet's R2 false findings are gone (0 write and 0 read findings on Porchlet, which has no true write or read leak to keep), and the Next.js app keeps all 4 true writes and both true reads.
 - A Server Action refused in a way that still sends A's success header, or that changes A's page for another reason, is still accepted (medium unless A's read changed).
 - Fingerprints of access-control and access-control-write findings change (the variant is part of the key).
-- More requests: the second read, the settle read and the layout and method reads (Juice Shop 372 to about 375 expected with item 4; to be measured on the gate).
+- More requests: the second read, the settle read and the layout and method reads (Juice Shop's writes 384 requests, 12 more than gate run 1's prototype).
 - Gaps: a router prefetch that holds data is not compared (none seen; Next.js 16.4.6's value 1 prefetches the skeleton); on the read side a page in another layout than A's does not line up, so C's read of it is missed (a false negative, not measured on a real app); a Server Action whose page has no recorded GET is judged by the 2xx rule; a page whose random values are under 16 bytes or more than 8 still differs.
 
 ## Alternatives considered
