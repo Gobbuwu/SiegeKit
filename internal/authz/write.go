@@ -895,6 +895,8 @@ type WriteReplay struct {
 	Settle      Answer
 	settleNoise []bool
 	unsettled   bool
+	// Reads counts A's reads of ReadPath for this replay.
+	Reads int
 	// Signals are the write answer's success headers (successSignals).
 	Signals http.Header
 	// MethodIgnored: the PUT, PATCH or DELETE got the page a GET of its URL
@@ -902,6 +904,7 @@ type WriteReplay struct {
 	// (sameButNoise, issue #95).
 	MethodIgnored bool
 	Page          Answer
+	PageReads     int
 	// StepsSent counts A's earlier writes sent again before this replay.
 	StepsSent int
 	// NotSent says why this identity was not sent, or "".
@@ -1093,13 +1096,28 @@ func WriteCheck(ctx context.Context, cfg egress.Config, ws []Write, acc Accounts
 			if rp.Read {
 				// Two reads before on every write that reads: a page can
 				// change on every answer (a nonce), and then only the words
-				// that stayed the same can show a change (issue #95).
-				if rp.Before, err = do(http.MethodGet, rp.ReadPath, readHeader, nil); err != nil {
-					return res, err
+				// that stayed the same can show a change. A streamed page
+				// can also come in more than one layout (Porchlet's
+				// workspace page: two, at random), so A reads it until two
+				// reads line up, at most maxBaseReads times (issue #95).
+				var reads []Answer
+				for paired := false; !paired && len(reads) < maxBaseReads; {
+					a, err := do(http.MethodGet, rp.ReadPath, readHeader, nil)
+					if err != nil {
+						return res, err
+					}
+					for _, b := range reads {
+						if linedUp(b, a) {
+							rp.Before, rp.Again, paired = b, a, true
+							break
+						}
+					}
+					reads = append(reads, a)
 				}
-				if rp.Again, err = do(http.MethodGet, rp.ReadPath, readHeader, nil); err != nil {
-					return res, err
+				if rp.Before.Status == 0 {
+					rp.Before, rp.Again = reads[0], reads[1]
 				}
+				rp.Reads = len(reads)
 				var ok bool
 				rp.noise, ok = pageNoise(rp.Before, rp.Again)
 				rp.Noisy = !ok
@@ -1148,11 +1166,23 @@ func WriteCheck(ctx context.Context, cfg egress.Config, ws []Write, acc Accounts
 				if rp.After, err = do(http.MethodGet, rp.ReadPath, readHeader, nil); err != nil {
 					return res, err
 				}
+				rp.Reads++
+				// In another layout than the reads before, with the same
+				// status: A reads again, at most maxLayoutReads more times,
+				// for one that lines up. A change of layout that stays is a
+				// change.
+				for n := 0; n < maxLayoutReads && rp.After.Status == rp.Before.Status && !linedUp(rp.Before, rp.After); n++ {
+					if rp.After, err = do(http.MethodGet, rp.ReadPath, readHeader, nil); err != nil {
+						return res, err
+					}
+					rp.Reads++
+				}
 				if rp.changedOnce() {
 					if rp.Settle, err = do(http.MethodGet, rp.ReadPath, readHeader, nil); err != nil {
 						return res, err
 					}
 					var ok bool
+					rp.Reads++
 					rp.settleNoise, ok = pageNoise(rp.After, rp.Settle)
 					rp.unsettled = !ok
 				}
@@ -1165,10 +1195,20 @@ func WriteCheck(ctx context.Context, cfg egress.Config, ws []Write, acc Accounts
 				ActionReason(sw.Path) == "" && !rp.readChanged() {
 				gh := h.Clone()
 				gh.Del("Content-Type")
-				if rp.Page, err = do(http.MethodGet, sw.Path, gh, nil); err != nil {
-					return res, err
+				// A streamed page can come in more than one layout (Porchlet's
+				// workspace page: two, at random, for GET and DELETE alike),
+				// so the sender reads it until one lines up, at most
+				// maxPageReads times, while the status stays the same.
+				for rp.PageReads < maxPageReads && !rp.MethodIgnored {
+					if rp.Page, err = do(http.MethodGet, sw.Path, gh, nil); err != nil {
+						return res, err
+					}
+					rp.PageReads++
+					rp.MethodIgnored = sameButNoise(rp.Answer, rp.Page)
+					if rp.Page.Status != rp.Answer.Status {
+						break
+					}
 				}
-				rp.MethodIgnored = sameButNoise(rp.Answer, rp.Page)
 			}
 			// A deletes the copy it made, so A's create works again for the
 			// next replay on apps that refuse a second identical object
@@ -1320,6 +1360,19 @@ func (r WriteReplay) acceptedAny() bool {
 	return r.Answer.Err == "" && r.Answer.Status >= 300 && r.Answer.Status < 400 &&
 		r.RecordedStatus >= 300 && r.RecordedStatus < 400 && !toLogin(r.Location) && !echoed(r.Location, r.Sent, r.Body)
 }
+
+// maxPageReads is how many times the sender reads a PUT, PATCH or DELETE's
+// URL to see whether the app ignored the method.
+const maxPageReads = 4
+
+// maxBaseReads is how many times A reads a page before a replay for two
+// reads that line up; maxLayoutReads how many more times after it for a
+// read in the layout of those (a streamed page with two layouts that come
+// at random misses with odds 1 in 2^(maxLayoutReads+1)).
+const (
+	maxBaseReads   = 3
+	maxLayoutReads = 7
+)
 
 // Card 1's rules (prototype, issue #95).
 const (

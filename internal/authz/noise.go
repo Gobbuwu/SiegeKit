@@ -67,16 +67,44 @@ func changedFrom(before Answer, noise []bool, after Answer) bool {
 	return false
 }
 
-// maxNoiseValues is how many different values sameButNoise lets differ:
-// a nonce and one more per-answer value.
-const maxNoiseValues = 2
+// maxNoiseValues is how many different values sameButNoise lets differ.
+const maxNoiseValues = 8
+
+// tokenLike reports whether a word looks like a per-answer random value: at
+// least 16 bytes with two of lower case, upper case and digits (a base64
+// nonce, React's per-request IDs, a hex token). A name, a count or "true"
+// is not one.
+func tokenLike(w string) bool {
+	if len(w) < 16 {
+		return false
+	}
+	var lower, upper, digit bool
+	for _, c := range w {
+		switch {
+		case c >= 'a' && c <= 'z':
+			lower = true
+		case c >= 'A' && c <= 'Z':
+			upper = true
+		case c >= '0' && c <= '9':
+			digit = true
+		}
+	}
+	n := 0
+	for _, b := range []bool{lower, upper, digit} {
+		if b {
+			n++
+		}
+	}
+	return n >= 2
+}
 
 // sameButNoise reports whether two answers to the same sender are one page
-// with a fresh value or two: the same status, the same bytes between
-// words, and the words that differ are at most maxNoiseValues values,
-// each replaced the same way wherever it appears. Next.js answers a
-// DELETE, PUT or PATCH on a page's URL with the page, differing from a GET
-// only in its nonce (measured on the gate's workspace page, issue #95).
+// with fresh values or two: the same status, the same bytes between words,
+// and the words that differ are random-looking values (tokenLike), at most
+// maxNoiseValues of them, each replaced the same way wherever it appears.
+// Next.js answers a DELETE, PUT or PATCH on a page's URL with the page,
+// differing from a GET in its nonce (the gate's workspace page) and React's
+// per-request IDs (Porchlet's, issue #95).
 func sameButNoise(x, y Answer) bool {
 	if x.Err != "" || y.Err != "" || x.Status != y.Status {
 		return false
@@ -84,11 +112,11 @@ func sameButNoise(x, y Answer) bool {
 	if bytes.Equal(x.Body, y.Body) {
 		return true
 	}
-	r1, w1 := pageWords(x.Body)
-	r2, w2 := pageWords(y.Body)
-	if !bytes.Equal(r1, r2) || len(w1) != len(w2) {
+	if !linedUp(x, y) {
 		return false
 	}
+	_, w1 := pageWords(x.Body)
+	_, w2 := pageWords(y.Body)
 	swap := map[string]string{}
 	for i := range w1 {
 		a, b := string(w1[i]), string(w2[i])
@@ -101,10 +129,21 @@ func sameButNoise(x, y Answer) bool {
 			}
 			continue
 		}
-		if len(swap) == maxNoiseValues {
+		if len(swap) == maxNoiseValues || !tokenLike(a) || !tokenLike(b) {
 			return false
 		}
 		swap[a] = b
 	}
 	return true
+}
+
+// linedUp reports whether two answers have the same status and can be
+// compared word by word: the same bytes between words and as many words.
+func linedUp(x, y Answer) bool {
+	if x.Err != "" || y.Err != "" || x.Status != y.Status {
+		return false
+	}
+	r1, w1 := pageWords(x.Body)
+	r2, w2 := pageWords(y.Body)
+	return bytes.Equal(r1, r2) && len(w1) == len(w2)
 }

@@ -1195,3 +1195,143 @@ func TestWriteCheckSettle(t *testing.T) {
 		t.Errorf("findings %q, want %q", got, want)
 	}
 }
+
+// TestWriteCheckMethodIgnored: a Next.js page answers any method with the
+// page, with a fresh nonce, and streams it in one of two layouts. A PUT,
+// PATCH or DELETE that gets the page a GET gets is not accepted, though the
+// first GET after it may come in the other layout (issue #95, measured on
+// Porchlet's workspace page).
+func TestWriteCheckMethodIgnored(t *testing.T) {
+	var mu sync.Mutex
+	n, bGets := 0, 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		defer mu.Unlock()
+		if r.Header.Get("Authorization") == "" {
+			http.Error(w, "log in", http.StatusUnauthorized)
+			return
+		}
+		if r.URL.Path != "/items/7" {
+			http.NotFound(w, r)
+			return
+		}
+		n++
+		nonce := fmt.Sprintf("Kq%020dZw==", n) // base64-like, as a real nonce
+		// B's DELETE gets the one-script layout; B's first GET after it
+		// the two-script one, the next the one-script one again.
+		if r.Header.Get("Authorization") == "Bearer B" && r.Method == "GET" {
+			bGets++
+		}
+		if r.Header.Get("Authorization") != "Bearer B" || r.Method != "GET" || bGets%2 == 0 {
+			fmt.Fprintf(w, `<script nonce="%s">push("a")</script><p>item 7</p>`, nonce)
+			return
+		}
+		fmt.Fprintf(w, `<script nonce="%s">push("a");</script><script nonce="%s">push("b")</script><p>item 7</p>`, nonce, nonce)
+	}))
+	defer srv.Close()
+	noSleep(t)
+	a := map[string]string{"Authorization": "Bearer A"}
+	u := srv.URL
+	har := writeHAR(t, []writeEntry{
+		{method: "GET", url: u + "/items/7", headers: a, status: 200, answer: `<p>item 7</p>`},
+	})
+	tu := mustTarget(t, u+"/")
+	ws, err := ParseWrites(har, tu)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := egress.Config{Target: tu, Addrs: []netip.Addr{netip.MustParseAddr("127.0.0.1")}, Version: "test"}
+	res, err := WriteCheck(context.Background(), cfg, ws.Writes, Accounts{B: http.Header{"Authorization": {"Bearer B"}}}, "alice", 10, target.Local)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tried := 0
+	for _, r := range res.Replays {
+		if r.Who != AsB {
+			continue
+		}
+		tried++
+		if !r.MethodIgnored || r.Accepted() || r.PageReads != 2 {
+			t.Errorf("%s: ignored %v accepted %v page reads %d", r.Label(), r.MethodIgnored, r.Accepted(), r.PageReads)
+		}
+	}
+	if tried != 1 { // a DELETE: a PUT or PATCH is tried only on a JSON read
+		var l []string
+		for _, w := range ws.Writes {
+			l = append(l, w.Label())
+		}
+		t.Errorf("%d tried writes sent as B, want the DELETE: %v", tried, l)
+	}
+	if fs := WriteFindings(u, res); len(fs) != 0 {
+		t.Errorf("findings %v", fs)
+	}
+}
+
+// TestWriteCheckLayouts: a streamed page comes in one of two layouts. After
+// B's DELETE, A's first two reads come in the other layout. When the
+// DELETE changed nothing, a later read in the first layout shows no change
+// (medium); when it deleted the item, that read shows the change (high).
+// Measured on Porchlet's workspace page, issue #95.
+func TestWriteCheckLayouts(t *testing.T) {
+	for _, real := range []bool{false, true} {
+		var mu sync.Mutex
+		deleted, afterB := false, -1
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			mu.Lock()
+			defer mu.Unlock()
+			u := map[string]string{"Bearer A": "alice", "Bearer B": "bob"}[r.Header.Get("Authorization")]
+			if u == "" {
+				http.Error(w, "log in", http.StatusUnauthorized)
+				return
+			}
+			switch {
+			case r.Method == "GET" && r.URL.Path == "/items/7":
+				if afterB >= 0 {
+					afterB++
+				}
+				if afterB == 1 || afterB == 2 {
+					fmt.Fprintf(w, `<s>push("a");</s><s>push("deleted=%v")</s>`, deleted)
+					return
+				}
+				fmt.Fprintf(w, `<s>push("a deleted=%v")</s>`, deleted)
+			case r.Method == "DELETE" && r.URL.Path == "/items/7":
+				if u == "bob" {
+					afterB = 0
+					deleted = deleted || real
+				}
+				fmt.Fprint(w, `{"ok":true}`)
+			default:
+				http.NotFound(w, r)
+			}
+		}))
+		noSleep(t)
+		a := map[string]string{"Authorization": "Bearer A"}
+		u := srv.URL
+		har := writeHAR(t, []writeEntry{
+			{method: "GET", url: u + "/items/7", headers: a, status: 200, answer: `<s>push("a deleted=false")</s>`},
+			{method: "DELETE", url: u + "/items/7", headers: a, status: 200, answer: `{"ok":true}`},
+		})
+		tu := mustTarget(t, u+"/")
+		ws, err := ParseWrites(har, tu)
+		if err != nil {
+			t.Fatal(err)
+		}
+		cfg := egress.Config{Target: tu, Addrs: []netip.Addr{netip.MustParseAddr("127.0.0.1")}, Version: "test"}
+		res, err := WriteCheck(context.Background(), cfg, ws.Writes, Accounts{B: http.Header{"Authorization": {"Bearer B"}}}, "alice", 10, target.Local)
+		srv.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+		var got []string
+		for _, f := range WriteFindings(u, res) {
+			got = append(got, fmt.Sprintf("%s %s %v", f.RuleID, strings.TrimPrefix(f.Location.URI, u), f.Severity))
+		}
+		want := []string{"cross-account-write /items/7 medium"}
+		if real {
+			want = []string{"cross-account-write /items/7 high"}
+		}
+		if !slices.Equal(got, want) {
+			t.Errorf("deleted %v: findings %q, want %q", real, got, want)
+		}
+	}
+}
