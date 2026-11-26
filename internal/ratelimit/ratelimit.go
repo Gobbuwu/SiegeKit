@@ -274,8 +274,9 @@ var (
 // Check sends n requests, at most one per Interval, and stops at the first
 // sign of a limit: a 429 or 503 answer, or a RateLimit-*, X-RateLimit-* or
 // Retry-After header (answer 7a). The first answer must be a success or a
-// client error other than 401, 403, 404, 405 and 501, so a wrong URL or a
-// URL behind a login is reported as such rather than as "not limited". On
+// client error other than 401, 403, 404, 405 and 501, and not a redirect to
+// a login page (wall, ADR 0073), so a wrong URL or a URL behind a login is
+// reported as such rather than as "not limited". On
 // a reset or code page a 401 or 403 is the answer to a wrong guess, so it
 // is a valid first answer there; a sign-up's first answer must be below
 // 400, or no account was made (ADR 0055 item 4). Data-changing requests
@@ -405,6 +406,8 @@ func Check(ctx context.Context, cfg egress.Config, e *Endpoint, n int) (Result, 
 			switch {
 			case (a.Status == http.StatusUnauthorized || a.Status == http.StatusForbidden) && !guess:
 				return r, fmt.Errorf("the URL answered %d: it needs a login, which this check does not send; name a URL that answers without one", a.Status)
+			case e.wall(a):
+				return r, fmt.Errorf("the URL redirected to a login page (%s): it needs a login, which this check does not send; name a URL that answers without one", webform.Redirect(a))
 			case a.Status == http.StatusNotFound || a.Status == http.StatusMethodNotAllowed || a.Status == http.StatusNotImplemented:
 				return r, fmt.Errorf("the URL answered %d to a %s; check %s", a.Status, e.Method, e.source())
 			case a.Status >= 500:
@@ -436,6 +439,22 @@ func Check(ctx context.Context, cfg egress.Config, e *Endpoint, n int) (Result, 
 		}
 	}
 	return r, nil
+}
+
+// wall reports whether a, the first answer, is a login wall rather than
+// the URL's own answer: a redirect to a login page (webform.LoginPage)
+// from a URL that is not one itself (issue #94, ADR 0073). Many apps
+// answer a request with no session so, not with a 401 (Porchlet's invite
+// page: 307 to /login?next=...). A login page redirected back to a login
+// page reached the app's login code, so it stays the baseline. A reset or
+// sign-up may redirect to the login page on success, and guard G1 (ADR
+// 0069) already holds back their "no limit" when the requests did not
+// reach the app, so only --rate-limit-url and the code page are checked.
+func (e *Endpoint) wall(a *egress.Answer) bool {
+	if e.Page != "" && e.Page != Code || a.Status < 300 || a.Status > 399 {
+		return false
+	}
+	return webform.LoginPage(a.Header.Get("Location")) && !webform.LoginPage(e.Path)
 }
 
 // limitWords are words that an answer about a limit uses, in lower case.

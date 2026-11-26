@@ -3,6 +3,8 @@ package authz
 import (
 	"net/url"
 	"strings"
+
+	"github.com/Gobbuwu/SiegeKit/internal/webform"
 )
 
 // An ID's value alone does not say which object it names: per-table
@@ -19,7 +21,7 @@ import (
 // "basket" and "baskets"). Empty when the name has no such word ("id",
 // "_id"). Nouns are compared with nounsMatch.
 func nounOf(s string) string {
-	ws := splitWords(s)
+	ws := webform.Words(s)
 	for i := len(ws) - 1; i >= 0; i-- {
 		w := ws[i]
 		if idRank(w) >= 0 || w == "ids" || reID.MatchString(w) {
