@@ -122,7 +122,6 @@ func TestShapeLike(t *testing.T) {
 		{Shape{Status: 404, Type: "text/html", Len: 25124}, false},
 		{Shape{Status: 403, Type: "application/json", Len: 25124}, false},
 		{Shape{Status: 403, Type: "text/html", Len: -1}, false},
-		{Shape{Status: 403, Type: "text/html", Len: 25124, Enc: "gzip"}, false}, // measured in another encoding
 	} {
 		if got := page.Like(c.s); got != c.want {
 			t.Errorf("%v like %v = %v", page, c.s, got)

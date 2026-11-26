@@ -6,8 +6,6 @@ import (
 	"io"
 	"mime"
 	"net/http"
-	"os"
-	"strings"
 	"sync"
 	"time"
 )
@@ -46,18 +44,11 @@ const maxShapeBody = 2 << 20
 // server log can tell them from the checks' requests.
 const startPageAgent = " (start page check)"
 
-// matchEncoding is a measurement switch for #92's review (prototype, not
-// for merge): "strip" (the default here) forwards tools' requests without
-// Accept-Encoding; SIEGEKIT_PROTO_ENCODING=match keeps it and fetches the
-// start page in the encoding of the answers it is compared with.
-var matchEncoding = os.Getenv("SIEGEKIT_PROTO_ENCODING") == "match"
-
 // Shape is what the watch compares answers by.
 type Shape struct {
 	Status int
 	Type   string // media type, without parameters
 	Len    int64  // body length; -1 when unknown or over 2 MiB
-	Enc    string // Content-Encoding as sent, "" for none
 }
 
 // Like reports whether a and b have the same status and media type and
@@ -65,7 +56,7 @@ type Shape struct {
 // by a few bytes per answer, such as Vercel's checkpoint (10 bytes apart in
 // two fetches, measured 2026-11-25).
 func (a Shape) Like(b Shape) bool {
-	if a.Status != b.Status || a.Type != b.Type || a.Enc != b.Enc {
+	if a.Status != b.Status || a.Type != b.Type {
 		return false
 	}
 	return near(a.Len, b.Len)
@@ -91,10 +82,6 @@ func (a Shape) String() string {
 		return fmt.Sprintf("%d (%s, over %d bytes)", a.Status, t, maxShapeBody)
 	}
 	return fmt.Sprintf("%d (%s, %d bytes)", a.Status, t, a.Len)
-}
-
-func encoding(h http.Header) string {
-	return strings.ToLower(strings.TrimSpace(h.Get("Content-Encoding")))
 }
 
 func mediaType(h http.Header) string {
@@ -145,7 +132,7 @@ func (w *Watch) Begin(ctx context.Context) *Unit {
 		return nil
 	}
 	u := &Unit{w: w}
-	s, err := w.startPage(ctx, "")
+	s, err := w.startPage(ctx)
 	if ctx.Err() != nil {
 		return u // interrupted: the run ends without a report
 	}
@@ -162,9 +149,8 @@ func (w *Watch) Begin(ctx context.Context) *Unit {
 	return u
 }
 
-// startPage fetches the target URL once, without following redirects,
-// asking for the content encoding enc ("" for none).
-func (w *Watch) startPage(ctx context.Context, enc string) (Shape, error) {
+// startPage fetches the target URL once, without following redirects.
+func (w *Watch) startPage(ctx context.Context) (Shape, error) {
 	tr := newTransport(w.cfg)
 	defer tr.CloseIdleConnections()
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
@@ -175,9 +161,6 @@ func (w *Watch) startPage(ctx context.Context, enc string) (Shape, error) {
 	}
 	req.Header.Set("User-Agent", "SiegeKit/"+w.cfg.Version+startPageAgent)
 	addExtra(req.Header, w.cfg.Header)
-	if enc != "" {
-		req.Header.Set("Accept-Encoding", enc)
-	}
 	resp, err := tr.RoundTrip(req)
 	if err != nil {
 		return Shape{}, err
@@ -190,7 +173,7 @@ func (w *Watch) startPage(ctx context.Context, enc string) (Shape, error) {
 	if n > maxShapeBody {
 		n = -1
 	}
-	return Shape{Status: resp.StatusCode, Type: mediaType(resp.Header), Len: n, Enc: encoding(resp.Header)}, nil
+	return Shape{Status: resp.StatusCode, Type: mediaType(resp.Header), Len: n}, nil
 }
 
 // Unit watches one check. Its methods may be called from several
@@ -244,17 +227,14 @@ func (u *Unit) answer(ctx context.Context, s Shape) *Block {
 	u.checking = true
 	u.mu.Unlock()
 
-	page, err := u.w.startPage(ctx, streak.Enc)
+	page, err := u.w.startPage(ctx)
 	base, _ := u.w.baseline()
 
 	u.mu.Lock()
 	defer u.mu.Unlock()
 	u.checking = false
 	u.cleared = append(u.cleared, streak)
-	// The run's first start page was fetched without an encoding: an
-	// encoded streak is compared with it by status and media type only.
-	was := base.Like(streak) || streak.Enc != base.Enc && base.Status == streak.Status && base.Type == streak.Type
-	if err == nil && page.Like(streak) && !was && u.block == nil {
+	if err == nil && page.Like(streak) && !base.Like(streak) && u.block == nil {
 		u.block = &Block{Page: page, Reason: fmt.Sprintf("the host stopped serving the app: %d answers in a row and the start page were the same page, %s; at the run's first check the start page answered %d", StreakAnswers, page, base.Status)}
 	}
 	return u.block
@@ -285,7 +265,7 @@ func (u *Unit) End(ctx context.Context) *Block {
 	}
 	u.ended = true
 	u.mu.Unlock()
-	page, err := u.w.startPage(ctx, "")
+	page, err := u.w.startPage(ctx)
 	if ctx.Err() != nil {
 		return nil
 	}

@@ -567,11 +567,18 @@ jobs:
     #      check is stopped and keeps the web job's 4 cross-account reads
     #      (measured locally on Docker 29.9.3, 2026-11-25), and the read the
     #      block page made look refused to a request with no login is dropped.
+    #   D. A again on a host that gzips every answer whose request accepts
+    #      gzip. ffuf asks for gzip by itself; the proxy forwards its
+    #      requests without Accept-Encoding, so the block pages are measured
+    #      uncompressed, like the start page, and F2 compares the lengths
+    #      ffuf reports. Keeping the header and fetching the start page
+    #      compressed too also stopped ffuf, but kept 10 findings from the
+    #      block page on Podman (run 45719371632, ADR 0071).
     # The other jobs are the false-stop check: they scan with the same
     # detector and must meet their known answers.
     name: Scan Juice Shop while its host starts blocking (${{ matrix.engine }}${{ matrix.os == 'ubuntu-24.04-arm' && ', arm64' || '' }})
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 70
+    timeout-minutes: 40
     strategy:
       fail-fast: false
       matrix:
@@ -715,53 +722,35 @@ jobs:
           test "$blocked" -eq 3
           jq -e '[.plugins[] | select(.id == "access-control" and .status == "failed" and .stop == "host-blocked" and .requests == 45 and .findings == 4 and (.reason | contains("during this check: after it, the start page answered 403")) and (.reason | contains("; 1 finding(s) read from answers like the block page dropped; the 4 finding(s) reported before the stop are kept")))] | length == 1' "$r"
           jq -e --arg b "/rest/basket/$A_BASKET" --arg u "/api/Users/$A_USER" '[.findings[] | .ruleId + " " + (.location.uri | ltrimstr("http://127.0.0.1:3000"))] | sort == (["cross-account-read " + $b, "cross-account-read " + $u, "cross-account-read /api/Users", "cross-account-read /api/Complaints"] | sort)' "$r"
+      - name: D. Block from ffuf's 1,000th request, on a host that gzips
+        run: |
+          set -euo pipefail
+          nohup "$RUNNER_TEMP/block-gate" -addr 127.0.0.1:3000 -app http://127.0.0.1:3001 -ua 'Fuzz Faster U Fool' -after 1000 -gzip -log "$RUNNER_TEMP/d.log" > "$RUNNER_TEMP/d.out" 2>&1 &
+          echo $! > "$RUNNER_TEMP/gate.pid"
+          sleep 1
+          set +e
+          "$RUNNER_TEMP/siegekit" scan --yes --authorized-host 127.0.0.1 --no-save --report-dir "$RUNNER_TEMP/d" --only ffuf,nuclei http://127.0.0.1:3000/
+          code=$?
+          set -e
+          kill "$(cat "$RUNNER_TEMP/gate.pid")"
+          r="$RUNNER_TEMP/d/report.json"
+          jq '.plugins[] | {id, status, stop, reason, requests, findings}' "$r"
+          echo "exit code $code"
+          test "$code" -eq 4
+          jq -e '[.plugins[] | select(.id == "ffuf" and .status == "failed" and .stop == "host-blocked" and (.reason | contains("10 answers in a row and the start page were the same page, 403 (text/html,")))] | length == 1' "$r"
+          jq -e '[.plugins[] | select(.id == "nuclei" and .status == "failed" and .stop == "host-blocked" and (.requests // 0) == 0)] | length == 1' "$r"
+          # No finding from the block page, by the measure that counted 10 of
+          # them when the proxy kept Accept-Encoding (run 45719371632, Podman).
+          jq -e '[.findings[] | select((.title + " " + .message + " " + (.snippet // "")) | test("(?i)astro|checkpoint|answered 403"))] | length == 0' "$r"
+          blocked=$(grep -c 'page=no blocked=yes' "$RUNNER_TEMP/d.log" || true)
+          echo "block pages answered to the checks: $blocked"
+          test "$blocked" -ge 10
+          test "$blocked" -le 20
       - name: Logs
         if: failure()
         run: |
           docker logs juice-shop 2>&1 | tail -50
           tail -n 20 "$RUNNER_TEMP"/*.out "$RUNNER_TEMP"/*.log || true
-      - name: "Measure (#92 review): compressed block page, strip vs match"
-        # Prototype measurement, removed before merge: the same block as A on
-        # a host that gzips its answers, once with tools' Accept-Encoding
-        # removed (strip) and once kept, with the start page fetched in the
-        # answers' encoding (match). Prints the results; asserts nothing.
-        if: success() || failure()
-        run: |
-          set +e -uo pipefail
-          for mode in strip match; do
-            log="$RUNNER_TEMP/d-$mode.log"
-            nohup "$RUNNER_TEMP/block-gate" -addr 127.0.0.1:3000 -app http://127.0.0.1:3001 -ua 'Fuzz Faster U Fool' -after 1000 -gzip -log "$log" > /dev/null 2>&1 &
-            pid=$!
-            sleep 1
-            t0=$(date +%s)
-            SIEGEKIT_PROTO_ENCODING=$mode "$RUNNER_TEMP/siegekit" scan --yes --authorized-host 127.0.0.1 --no-save --report-dir "$RUNNER_TEMP/d-$mode" --only ffuf,nuclei http://127.0.0.1:3000/ > "$RUNNER_TEMP/d-$mode.out" 2>&1
-            code=$?
-            t1=$(date +%s)
-            kill $pid
-            r="$RUNNER_TEMP/d-$mode/report.json"
-            echo "MEASURE D mode=$mode exit=$code seconds=$((t1-t0)) block_pages=$(grep -c 'page=no blocked=yes' "$log") start_page_fetches=$(grep -c 'page=yes' "$log") plugins=$(jq -c '[.plugins[] | {id, status, stop, requests, findings}]' "$r") block_findings=$(jq '[.findings[] | select((.title + " " + .message + " " + (.snippet // "")) | test("(?i)astro|checkpoint|answered 403"))] | length' "$r")"
-          done
-      - name: "Measure (#92 review): no block on a compressing host, strip vs match"
-        # Prototype measurement, removed before merge: ffuf, Nuclei and ZAP
-        # on Juice Shop behind a host that gzips, no block. Compares bytes
-        # on the wire, start-page fetches, requests, findings and time.
-        if: success() || failure()
-        run: |
-          set +e -uo pipefail
-          for mode in strip match; do
-            log="$RUNNER_TEMP/e-$mode.log"
-            nohup "$RUNNER_TEMP/block-gate" -addr 127.0.0.1:3000 -app http://127.0.0.1:3001 -after 0 -gzip -log "$log" > /dev/null 2>&1 &
-            pid=$!
-            sleep 1
-            t0=$(date +%s)
-            SIEGEKIT_PROTO_ENCODING=$mode "$RUNNER_TEMP/siegekit" scan --yes --authorized-host 127.0.0.1 --no-save --report-dir "$RUNNER_TEMP/e-$mode" --only ffuf,nuclei,zap http://127.0.0.1:3000/ > "$RUNNER_TEMP/e-$mode.out" 2>&1
-            code=$?
-            t1=$(date +%s)
-            kill $pid
-            r="$RUNNER_TEMP/e-$mode/report.json"
-            bytes=$(grep 'page=no' "$log" | sed -n 's/.* bytes=\([0-9]*\)$/\1/p' | awk '{s+=$1} END {print s+0}')
-            echo "MEASURE E mode=$mode exit=$code seconds=$((t1-t0)) answers=$(grep -c 'page=no' "$log") bytes=$bytes start_page_fetches=$(grep -c 'page=yes' "$log") plugins=$(jq -c '[.plugins[] | {id, status, stop, requests, findings}]' "$r") rules=$(jq -c '[.findings[] | .ruleId] | group_by(.) | map({(.[0]): length}) | add' "$r")"
-          done
 
   writes:
     # ADR 0054: access-control-write (ADR 0049) on real apps, from a real
