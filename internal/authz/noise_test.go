@@ -13,11 +13,11 @@ func TestSameButNoise(t *testing.T) {
 		want bool
 	}{
 		{"same", `<p>a</p>`, `<p>a</p>`, true},
-		{"nonce", `<s nonce="d1BP6ubL90Ty+o9jGUOi1w==">x</s><s nonce="d1BP6ubL90Ty+o9jGUOi1w==">`, `<s nonce="JvulLOsYqhAEeQpIwge54g==">x</s><s nonce="JvulLOsYqhAEeQpIwge54g==">`, true},
+		{"nonce", `<s nonce="d1BP6ubL90Ty+o9jGUOi1w==">x</s><s nonce="d1BP6ubL90Ty+o9jGUOi1w==">`, `<s nonce="JvulLOsYqhAEeQpIwge54g==">x</s><s nonce="JvulLOsYqhAEeQpIwge54g==">`, true}, // gitleaks:allow (nonces and React IDs from a page, not secrets)
 		// Porchlet: the nonce and React's per-request IDs.
-		{"nonce and IDs", `n="d1BP6ubL90Ty+o9jGUOi1w==" "kAnTlOIUp1dw9U6hkULEiv" "kAnTlOIUp1dw9U6hkULEim"`, `n="JvulLOsYqhAEeQpIwge54g==" "qTrFdTZMZolUZS5fVyVebv" "qTrFdTZMZolUZS5fVyVebm"`, true},
-		{"one token two ways", `"kAnTlOIUp1dw9U6hkULEiv" "kAnTlOIUp1dw9U6hkULEiv"`, `"qTrFdTZMZolUZS5fVyVebv" "JvulLOsYqhAEeQpIwge54g"`, false},
-		{"flag", `{"deleted":false,"n":"d1BP6ubL90Ty+o9jGUOi1w=="}`, `{"deleted":true,"n":"JvulLOsYqhAEeQpIwge54g=="}`, false},
+		{"nonce and IDs", `n="d1BP6ubL90Ty+o9jGUOi1w==" "kAnTlOIUp1dw9U6hkULEiv" "kAnTlOIUp1dw9U6hkULEim"`, `n="JvulLOsYqhAEeQpIwge54g==" "qTrFdTZMZolUZS5fVyVebv" "qTrFdTZMZolUZS5fVyVebm"`, true}, // gitleaks:allow (nonces and React IDs from a page, not secrets)
+		{"one token two ways", `"kAnTlOIUp1dw9U6hkULEiv" "kAnTlOIUp1dw9U6hkULEiv"`, `"qTrFdTZMZolUZS5fVyVebv" "JvulLOsYqhAEeQpIwge54g"`, false},                                                     // gitleaks:allow (nonces and React IDs from a page, not secrets)
+		{"flag", `{"deleted":false,"n":"d1BP6ubL90Ty+o9jGUOi1w=="}`, `{"deleted":true,"n":"JvulLOsYqhAEeQpIwge54g=="}`, false},                                                                      // gitleaks:allow (nonces and React IDs from a page, not secrets)
 		{"name", `<p>Alice</p>`, `<p>Bob</p>`, false},
 		{"layout", `<s>push("a")</s>`, `<s>push("a");</s><s>push("b")</s>`, false},
 	} {
