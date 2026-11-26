@@ -13,7 +13,7 @@
 # Action forms too: each scan of them is checked the same way, and the
 # action runs under each page's limit are counted at Mailpit, where every
 # such run sends one email. Its workspace invite page /w/... is behind a
-# login wall (proxy.js, ADR 0072, issue #94), for the rate-limit check.
+# login wall (proxy.js, ADR 0073, issue #94), for the rate-limit check.
 #
 #   gate.sh start   start Supabase Auth and the app (APP_ENGINE)
 #   gate.sh scan    run the scans; exit 1 if any differs

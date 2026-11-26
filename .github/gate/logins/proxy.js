@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server'
-// Issue #94 (ADR 0072): workspace pages behind a login wall, as Porchlet's
+// Issue #94 (ADR 0073): workspace pages behind a login wall, as Porchlet's
 // proxy sends a request with no session to /login?next=... with a 307
 // before any page or Server Action runs. A session here is any Supabase
 // auth cookie; the gate's scans of /w send none.

@@ -2,7 +2,7 @@
 
 - Status: Accepted
 - Date: 2026-11-20
-- Amended by: [0062](0062-form-logins.md) (what `rate-not-limited` claims, and the 20-request floor)
+- Amended by: [0062](0062-form-logins.md) (what `rate-not-limited` claims, and the 20-request floor), [0073](0073-rate-limit-login-wall.md) (a first redirect to a login page stops the check)
 - Amends: [0011](0011-app-logic-and-ai-checks.md) item 2 (how the URL is given, what counts as a limit, where it runs), [0029](0029-check-selection.md) (what `--profile quick` leaves out)
 
 ## Context

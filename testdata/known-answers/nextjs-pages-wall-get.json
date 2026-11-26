@@ -6,7 +6,7 @@
       "status": "failed",
       "reason": "the URL redirected to a login page (/login?next=%2Fw%2Fgate): it needs a login, which this check does not send",
       "minRequests": 1,
-      "why": "issue #94, ADR 0072: the first answer is a redirect to a login page from a URL that is not one, so the check stops instead of reporting rate-not-limited for a URL it never reached"
+      "why": "issue #94, ADR 0073: the first answer is a redirect to a login page from a URL that is not one, so the check stops instead of reporting rate-not-limited for a URL it never reached"
     }
   }
 }

@@ -451,7 +451,7 @@ func TestCheckLoginWall(t *testing.T) {
 // The code page is checked the same way (a wrong code with no pending
 // login is a login wall too); a reset or sign-up is not, since its success
 // may redirect to the login page and guard G1 holds back its "no limit"
-// (ADR 0069, ADR 0072).
+// (ADR 0069, ADR 0073).
 func TestCheckLoginWallPages(t *testing.T) {
 	login := func(int) *egress.Answer { return answer(302, http.Header{"Location": {"/users/sign_in"}}) }
 	e, cfg := pageEndpoint(t, Code, `{"otp":"{wrong}"}`)

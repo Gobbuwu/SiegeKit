@@ -275,7 +275,7 @@ var (
 // sign of a limit: a 429 or 503 answer, or a RateLimit-*, X-RateLimit-* or
 // Retry-After header (answer 7a). The first answer must be a success or a
 // client error other than 401, 403, 404, 405 and 501, and not a redirect to
-// a login page (wall, ADR 0072), so a wrong URL or a URL behind a login is
+// a login page (wall, ADR 0073), so a wrong URL or a URL behind a login is
 // reported as such rather than as "not limited". On
 // a reset or code page a 401 or 403 is the answer to a wrong guess, so it
 // is a valid first answer there; a sign-up's first answer must be below
@@ -443,7 +443,7 @@ func Check(ctx context.Context, cfg egress.Config, e *Endpoint, n int) (Result, 
 
 // wall reports whether a, the first answer, is a login wall rather than
 // the URL's own answer: a redirect to a login page (webform.LoginPage)
-// from a URL that is not one itself (issue #94, ADR 0072). Many apps
+// from a URL that is not one itself (issue #94, ADR 0073). Many apps
 // answer a request with no session so, not with a 401 (Porchlet's invite
 // page: 307 to /login?next=...). A login page redirected back to a login
 // page reached the app's login code, so it stays the baseline. A reset or

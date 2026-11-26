@@ -15,7 +15,7 @@ var loginWords = map[string]bool{"login": true, "logon": true, "signin": true, "
 // "-" or "_" inside ("sign_in", "signIn"). The query is not read, so
 // "/w/1?next=/login" is not one. An empty or unparsable loc is not one.
 // The write check (internal/authz) and the rate-limit check use it to tell
-// a login wall from the app's own answer (ADR 0072).
+// a login wall from the app's own answer (ADR 0073).
 func LoginPage(loc string) bool {
 	u, err := url.Parse(loc)
 	if loc == "" || err != nil {
