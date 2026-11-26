@@ -87,6 +87,49 @@ func TestWeakHits(t *testing.T) {
 	}
 }
 
+// TestWeakHitsValueGrammar checks that each format reads a value by its
+// own grammar (#93): ":=" is one separator, and SQL, Terraform and TOML
+// take only quoted literals, since an unquoted right-hand side there is an
+// expression.
+func TestWeakHitsValueGrammar(t *testing.T) {
+	type hit struct {
+		line  int
+		value string
+	}
+	for _, tc := range []struct {
+		name, file, body string
+		want             []hit
+	}{
+		// Porchlet's two lines: an empty literal clears a hash column.
+		{"plpgsql clears a column", "supabase/migrations/1_x.sql", "begin\n    new.encrypted_password := '';\n    return new;\nend;\n", nil},
+		{"plpgsql literal", "a.sql", "  v_pass := 'abc';\n", []hit{{1, "abc"}}},
+		{"plpgsql expressions", "a.sql", "v_password := gen_random_uuid()::text;\nnew.encrypted_password := crypt(new.password, gen_salt('bf'));\nv_pass := p_pass;\n", nil},
+		{"sql = literal", "a.sql", "update users set\n  password = 'admin',\n  name = 'x';\n", []hit{{2, "admin"}}},
+		{"sql trailing comments", "a.sql", "  password = 'admin'; -- seed\n  pass = 'root' # mysql\n", []hit{{1, "admin"}, {2, "root"}}},
+		{"sql double quotes are identifiers", "a.sql", "select * from users where\n  password = \"password\";\nselect 1 where password = \"pass\";\n", nil},
+		{"sql comment", "a.sql", "-- password := 'admin';\n", nil},
+		{"sql still reads IDENTIFIED BY", "a.sql", "CREATE USER 'app'@'%' IDENTIFIED BY 'app';\n", []hit{{1, "app"}}},
+		{"terraform reference", "main.tf", "  password = var.pw\n  admin_password = random_password.db.result\n", nil},
+		{"terraform literal", "main.tf", "  administrator_login_password = \"Aa12345678\"\n", []hit{{1, "Aa12345678"}}},
+		{"terraform interpolation", "vars.tfvars", "db_password = \"${var.pw}\"\n", nil},
+		{"toml literals", "config.toml", "password = \"admin\"\n[db]\npass = 'root'\n", []hit{{1, "admin"}, {3, "root"}}},
+		{"toml non-strings", "config.toml", "password = admin\npassword_len = 1234\npassword = { file = \"x\" }\n", nil},
+		{"toml := literal", "config.toml", "password := \"admin\"\n", []hit{{1, "admin"}}},
+		{":= in a key = value file", ".env", "DB_PASSWORD := admin\nPASS:=root\n", []hit{{1, "admin"}, {2, "root"}}},
+		{":= with nothing after it", "a.yml", "password :=\npassword: =\n", nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var got []hit
+			for _, h := range weakHits(tc.file, []byte(tc.body)) {
+				got = append(got, hit{h.line, h.value})
+			}
+			if !slices.Equal(got, tc.want) {
+				t.Errorf("got %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestWeakReason(t *testing.T) {
 	for v, want := range map[string]string{
 		"123456":          "most common",

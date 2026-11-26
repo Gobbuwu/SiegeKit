@@ -91,11 +91,23 @@ var (
 const keyRE = `(?:[A-Za-z0-9_.\-]*(?:passw(?:or)?d|passwd)|(?:[A-Za-z0-9_.\-]*[_.\-])?(?:pass|pwd))`
 
 var (
-	reConfLine = regexp.MustCompile(`(?im)^[ \t]*(?:-[ \t]+)?(?:export[ \t]+)?(?:ENV[ \t]+|ARG[ \t]+)?(?P<k>` + keyRE + `):?[ \t]*[=:][ \t]*(?:"(?P<v>[^"\n]*)"|'(?P<v2>[^'\n]*)'|(?P<v3>[^\s#,"'][^#\n]*?))[ \t]*(?:#.*)?$`)
-	reConfJSON = regexp.MustCompile(`(?i)"(?P<k>` + keyRE + `)"\s*:\s*"(?P<v>[^"]*)"`)
-	reConfXML  = regexp.MustCompile(`(?i)<(?P<k>` + keyRE + `)>(?P<v>[^<]*)</`)
-	reConfAttr = regexp.MustCompile(`(?i)\b(?P<k>` + keyRE + `)\s*=\s*"(?P<v>[^"]*)"`)
-	reConfSQL  = regexp.MustCompile(`(?i)(?P<k>IDENTIFIED\s+BY|PASSWORD)\s+'(?P<v>[^']*)'`)
+	// A key = value line (.env, YAML, INI, .properties, Dockerfile ENV):
+	// an unquoted value is a literal there. ":=" is one separator, and a
+	// value never starts with "=", so "pw := x" never reads "= x" (#93).
+	reConfLine = confLine(`|(?P<v3>[^\s#,"'=][^#\n]*?)`)
+	// The same line in formats whose unquoted right-hand side is an
+	// expression, not a string (Terraform/HCL var.x, TOML numbers and
+	// tables): only a quoted value is a literal (#93).
+	reConfQuoted = confLine("")
+	// A SQL or PL/pgSQL assignment at a line's start: only a single-quoted
+	// literal is a string ("x" is an identifier, anything else an
+	// expression), and the line may end with ";" or "," and a "--" or
+	// MySQL "#" comment (#93).
+	reConfSQLLine = regexp.MustCompile(`(?im)^[ \t]*(?P<k>` + keyRE + `)[ \t]*(?::=|=)[ \t]*'(?P<v>[^'\n]*)'[ \t]*[;,]?[ \t]*(?:(?:--|#).*)?$`)
+	reConfJSON    = regexp.MustCompile(`(?i)"(?P<k>` + keyRE + `)"\s*:\s*"(?P<v>[^"]*)"`)
+	reConfXML     = regexp.MustCompile(`(?i)<(?P<k>` + keyRE + `)>(?P<v>[^<]*)</`)
+	reConfAttr    = regexp.MustCompile(`(?i)\b(?P<k>` + keyRE + `)\s*=\s*"(?P<v>[^"]*)"`)
+	reConfSQL     = regexp.MustCompile(`(?i)(?P<k>IDENTIFIED\s+BY|PASSWORD)\s+'(?P<v>[^']*)'`)
 	// A password hashed in SQL, as Supabase seeds create users:
 	// crypt('password123', gen_salt('bf')), also extensions.crypt(...)
 	// (ADR 0064 item 6). Only a literal first argument counts.
@@ -103,7 +115,13 @@ var (
 	reCode     = regexp.MustCompile(`(?i)\b(?P<k>` + keyRE + `)["']?\s*(?:=|:|=>|:=)\s*["'](?P<v>[^"'\n]*)["']`)
 	reURL      = regexp.MustCompile(`(?i)[a-z][a-z0-9+.\-]*://(?P<k>[^:/@\s"'<>]+):(?P<v>[^@/\s"'<>]+)@`)
 
-	confPatterns = []*regexp.Regexp{reConfLine, reConfJSON, reConfXML, reConfAttr, reConfSQL}
+	// The patterns for each kind of config file. Each format's value
+	// grammar decides which line pattern it takes (#93).
+	confPatterns     = []*regexp.Regexp{reConfLine, reConfJSON, reConfXML, reConfAttr, reConfSQL}
+	exprConfPatterns = []*regexp.Regexp{reConfQuoted, reConfJSON, reConfXML, reConfAttr, reConfSQL}
+	sqlPatterns      = []*regexp.Regexp{reConfSQLLine, reConfJSON, reConfXML, reConfSQL, reSQLCrypt}
+	// exprExts are config formats whose unquoted values are expressions.
+	exprExts = map[string]bool{".tf": true, ".tfvars": true, ".toml": true}
 
 	// A value that only points at a variable, or is a placeholder such as
 	// {password} or <your-password>, is never reported.
@@ -113,6 +131,12 @@ var (
 	reUser        = regexp.MustCompile(`(?i)(?:user(?:name)?|_user)\s*["']?\s*[=:]\s*["']?([^"'\s#,]+)`)
 	rePassToken   = regexp.MustCompile(`(?i)[_.\-]?(passw(or)?d|passwd|pwd|pass)[_.\-]?`)
 )
+
+// confLine is the key = value line pattern; unquoted is the pattern's
+// last value alternative for an unquoted value, or "" for none.
+func confLine(unquoted string) *regexp.Regexp {
+	return regexp.MustCompile(`(?im)^[ \t]*(?:-[ \t]+)?(?:export[ \t]+)?(?:ENV[ \t]+|ARG[ \t]+)?(?P<k>` + keyRE + `)[ \t]*(?::=|[=:])[ \t]*(?:"(?P<v>[^"\n]*)"|'(?P<v2>[^'\n]*)'` + unquoted + `)[ \t]*(?:#.*)?$`)
+}
 
 var notPasswords = map[string]bool{"true": true, "false": true, "null": true, "none": true, "nil": true, "yes": true, "no": true}
 
@@ -233,12 +257,16 @@ func weakHits(rel string, data []byte) []weakHit {
 		}
 	}
 	if isConf {
-		for _, re := range confPatterns {
+		pats := confPatterns
+		switch {
+		case ext == ".sql":
+			pats = sqlPatterns
+		case exprExts[ext]:
+			pats = exprConfPatterns
+		}
+		for _, re := range pats {
 			add(re, true)
 		}
-	}
-	if ext == ".sql" {
-		add(reSQLCrypt, true)
 	}
 	if isCode {
 		add(reCode, false)
