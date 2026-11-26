@@ -894,11 +894,13 @@ jobs:
           case "${{ matrix.app }}" in
             juice-shop)
               # Measured on 10 local runs (ADR 0054): 14 recorded writes and
-              # 17 tried, accounts B and C, 6 high and 4 medium; A's 3
+              # 17 tried, accounts B and C, 7 high and 5 medium (with no
+              # login sent first, issue #95: a review posted and a product
+              # changed with no login, gate run 45738560116); A's 3
               # basket items sent again before each of the 3 checkout
               # replays (ADR 0049 item 2d); the browser's Socket.IO polling
               # request not replayed (ADR 0050).
-              jq -e '[.plugins[] | select(.id == "access-control-write" and (.input | startswith("a.har, 14 write(s) recorded as account A, 17 tried on A'"'"'s objects; account B from SIEGEKIT_SESSION_B; account C from SIEGEKIT_SESSION_C")) and (.result | contains(": 6 high, 4 medium, 0 low")) and (.result | contains("9 of account A'"'"'s earlier recorded writes sent again first")) and (.result | contains("1 SockJS or Socket.IO polling requests")))] | length == 1' "$r" ;;
+              jq -e '[.plugins[] | select(.id == "access-control-write" and (.input | startswith("a.har, 14 write(s) recorded as account A, 17 tried on A'"'"'s objects; account B from SIEGEKIT_SESSION_B; account C from SIEGEKIT_SESSION_C")) and (.result | contains(": 7 high, 5 medium, 0 low")) and (.result | contains("9 of account A'"'"'s earlier recorded writes sent again first")) and (.result | contains("1 SockJS or Socket.IO polling requests")))] | length == 1' "$r" ;;
             gitea)
               # Measured (ADR 0051, ADR 0054): carol refused on every write,
               # bob's 3 allowed by design (low), every CSRF write sent with

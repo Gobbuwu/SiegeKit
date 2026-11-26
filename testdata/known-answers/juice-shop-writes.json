@@ -5,7 +5,7 @@
     "access-control-write": {
       "status": "ran",
       "match": "exact",
-      "why": "all confirmed by hand on Juice Shop (ADR 0049): B or C changes or deletes A's basket item, changes A's address, checks out A's basket, posts a review in A's name, deletes A's feedback; medium: A's review edited, feedback in A's name as C and with no login, a product changed. The count is before findings at one URL and CWE are merged (PUT and DELETE of the basket item give one finding)",
+      "why": "all confirmed by hand on Juice Shop (ADR 0049): B or C changes or deletes A's basket item, changes A's address, checks out A's basket, posts a review in A's name, deletes A's feedback; medium: A's review edited, feedback in A's name as C and with no login, a product changed. With no login sent first (issue #95, CI gate run 45738560116), a review posted and a product changed with no login show too; both confirmed by hand on 2026-11-26 (PUT /rest/products/1/reviews answered 201 and the review was listed; PUT /api/Products/1 answered 200 and the description changed). The count is before findings at one URL and CWE are merged (PUT and DELETE of the basket item give one finding)",
       "findings": [
         "cross-account-write /api/Addresss/7",
         "cross-account-write /api/BasketItems/9",
@@ -15,9 +15,11 @@
         "cross-account-write /rest/basket/6/checkout",
         "cross-account-write /rest/products/1/reviews",
         "cross-account-write /rest/products/reviews",
-        "no-login-write /api/Feedbacks/"
+        "no-login-write /api/Feedbacks/",
+        "no-login-write /api/Products/1",
+        "no-login-write /rest/products/1/reviews"
       ],
-      "count": 10,
+      "count": 12,
       "minRequests": 265
     }
   }
