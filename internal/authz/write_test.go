@@ -1,9 +1,11 @@
 package authz
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
@@ -1420,5 +1422,72 @@ func TestWriteCheckServerAction(t *testing.T) {
 	want := []string{"POST /w/1 note account C", "POST /w/1/feedback  account C"}
 	if !slices.Equal(got, want) {
 		t.Errorf("accepted %q, want %q", got, want)
+	}
+}
+
+// TestWriteCheckJSONEcho: a JSON API with no owner check answers a PUT with
+// the stored object, as its GET does. B's replay of A's own value changes
+// nothing A can read, but the app took it: medium, not a method the page
+// ignored (owner's review of PR #99).
+func TestWriteCheckJSONEcho(t *testing.T) {
+	var mu sync.Mutex
+	item := `{"id":7,"name":"x"}`
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		defer mu.Unlock()
+		if r.Header.Get("Authorization") == "" {
+			http.Error(w, "log in", http.StatusUnauthorized)
+			return
+		}
+		if r.URL.Path != "/api/items/7" {
+			http.NotFound(w, r)
+			return
+		}
+		if r.Method == http.MethodPut {
+			b, _ := io.ReadAll(r.Body)
+			item = `{"id":7,"name":` + strconv.Quote(string(bytes.TrimSuffix(bytes.TrimPrefix(b, []byte(`{"name":"`)), []byte(`"}`)))) + `}`
+		}
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, item)
+	}))
+	defer srv.Close()
+	noSleep(t)
+	tu := mustTarget(t, srv.URL+"/")
+	cfg := egress.Config{Target: tu, Addrs: []netip.Addr{netip.MustParseAddr("127.0.0.1")}, Version: "test"}
+	ws := []Write{{Method: "PUT", Path: "/api/items/7", Header: http.Header{"Authorization": {"Bearer A"}, "Content-Type": {"application/json"}}, Body: []byte(`{"name":"x"}`), RecordedStatus: 200}}
+	res, err := WriteCheck(context.Background(), cfg, ws, Accounts{B: http.Header{"Authorization": {"Bearer B"}}}, "", 10, target.Local)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, f := range WriteFindings(srv.URL, res) {
+		got = append(got, f.RuleID+" "+f.Severity.String())
+	}
+	if want := []string{"cross-account-write medium"}; !slices.Equal(got, want) {
+		t.Errorf("findings %q, want %q", got, want)
+	}
+	for _, rp := range res.Replays {
+		if rp.MethodIgnored || rp.PageReads != 0 {
+			t.Errorf("%s: method ignored %v after %d reads", whoName(rp.Who), rp.MethodIgnored, rp.PageReads)
+		}
+	}
+}
+
+// TestRevalidated: Next.js 16.4.6 sends x-action-revalidated 1 or 2 when an
+// action revalidated something, and no header otherwise.
+func TestRevalidated(t *testing.T) {
+	rec := WriteReplay{Write: Write{RecordedSignals: http.Header{"X-Action-Revalidated": {"1"}}}}
+	for v, want := range map[string]bool{"1": true, "2": true, "0": false, "": false, "true": false, "[]": false} {
+		rec.Signals = http.Header{}
+		if v != "" {
+			rec.Signals.Set("X-Action-Revalidated", v)
+		}
+		if got := rec.anySignal(); got != want {
+			t.Errorf("replay %q: %v, want %v", v, got, want)
+		}
+		a := WriteReplay{Write: Write{RecordedSignals: http.Header{"X-Action-Revalidated": {v}}}}
+		if got := a.hadSignal(); got != want {
+			t.Errorf("recorded %q: %v, want %v", v, got, want)
+		}
 	}
 }

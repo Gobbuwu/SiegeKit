@@ -1187,22 +1187,21 @@ func WriteCheck(ctx context.Context, cfg egress.Config, ws []Write, acc Accounts
 					rp.unsettled = !ok
 				}
 			}
-			// A PUT, PATCH or DELETE answered with a page: the sender reads
-			// the URL, and the same page means the app ignored the method
-			// (Next.js renders a page for any method, issue #95). Not when
-			// A's read changed: that is the proof, whatever the answer.
-			if sw.Method != http.MethodPost && ok2xx(rp.Answer) && len(bytes.TrimSpace(rp.Answer.Body)) > 0 &&
+			// A PUT, PATCH or DELETE answered with an HTML page: the sender
+			// reads the URL, and the same page means the app ignored the
+			// method (Next.js renders a page for any method, issue #95). Not
+			// when A's read changed: that is the proof, whatever the answer.
+			// Not for other answers: a JSON API that answers a PUT with the
+			// stored object, as its GET does, took the write.
+			if sw.Method != http.MethodPost && ok2xx(rp.Answer) && isPage(rp.Answer.Body) &&
 				ActionReason(sw.Path) == "" && !rp.readChanged() {
 				gh := h.Clone()
 				gh.Del("Content-Type")
 				// A streamed page can come in more than one layout (Porchlet's
 				// workspace page: two, at random, for GET and DELETE alike),
-				// so the sender reads an HTML page until one lines up, at
-				// most maxPageReads times, while the status stays the same.
-				// Other answers are read once: a JSON API's answer to a PUT
-				// differs from its GET on every read (Juice Shop's
-				// /api/Products/1, gate run 45746228551).
-				for rp.PageReads < maxPageReads && !rp.MethodIgnored && (rp.PageReads == 0 || isPage(rp.Answer.Body)) {
+				// so the sender reads it until one lines up, at most
+				// maxPageReads times, while the status stays the same.
+				for rp.PageReads < maxPageReads && !rp.MethodIgnored {
 					if rp.Page, err = do(http.MethodGet, sw.Path, gh, nil); err != nil {
 						return res, err
 					}
@@ -1301,16 +1300,22 @@ func (r WriteReplay) Accepted() bool {
 	return !r.Read || r.Noisy || !ok2xx(r.Before) || r.readChanged()
 }
 
-// hadSignal: A's recorded answer had a success header ("0" for
-// x-action-revalidated says nothing was revalidated).
+// hadSignal: A's recorded answer had a success header.
 func (r WriteReplay) hadSignal() bool {
 	for k, vs := range r.RecordedSignals {
-		if len(vs) > 0 && !(k == "X-Action-Revalidated" && vs[0] == "0") {
+		if len(vs) > 0 && (k != "X-Action-Revalidated" || revalidated(vs[0])) {
 			return true
 		}
 	}
 	return false
 }
+
+// revalidated reports whether an x-action-revalidated value says the action
+// revalidated something: Next.js 16.4.6 sends 1 (static and dynamic data,
+// also when the action changed a cookie) or 2 (dynamic only), and no header
+// otherwise; its router reads any other value as nothing revalidated
+// (action-handler.js, server-action-reducer.js).
+func revalidated(v string) bool { return v == "1" || v == "2" }
 
 // anySignal: the replay carries one of the success headers A's
 // recorded answer had, not leading to a login page.
@@ -1319,7 +1324,7 @@ func (r WriteReplay) anySignal() bool {
 		v := r.Signals.Get(k)
 		switch k {
 		case "X-Action-Revalidated":
-			if v != "" && v != "0" {
+			if revalidated(v) {
 				return true
 			}
 		case "Refresh":
