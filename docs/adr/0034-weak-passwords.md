@@ -2,6 +2,7 @@
 
 - Status: Accepted
 - Date: 2026-11-20
+- Amended by: [0072](0072-weak-passwords-value-grammar.md) (SQL, Terraform and TOML values read by their own grammar; `:=` is one separator)
 
 ## Context
 
