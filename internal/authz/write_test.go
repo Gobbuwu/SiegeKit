@@ -24,6 +24,7 @@ type writeEntry struct {
 	status                  int
 	answer                  string
 	headers                 map[string]string
+	answerHeaders           map[string]string
 }
 
 func writeHAR(t *testing.T, es []writeEntry) []byte {
@@ -43,12 +44,16 @@ func writeHAR(t *testing.T, es []writeEntry) []byte {
 			hs = append(hs, hdr{k, v})
 		}
 		req := map[string]any{"method": e.method, "url": e.url, "headers": hs}
+		var ahs []hdr
+		for k, v := range e.answerHeaders {
+			ahs = append(ahs, hdr{k, v})
+		}
 		if e.body != "" || e.mime != "" {
 			req["postData"] = map[string]any{"mimeType": e.mime, "text": e.body}
 		}
 		f.Log.Entries = append(f.Log.Entries, map[string]any{
 			"request":  req,
-			"response": map[string]any{"status": e.status, "content": map[string]any{"mimeType": "application/json", "text": e.answer}},
+			"response": map[string]any{"status": e.status, "headers": ahs, "content": map[string]any{"mimeType": "application/json", "text": e.answer}},
 		})
 	}
 	b, err := json.Marshal(f)
@@ -452,10 +457,10 @@ func TestWriteCheck(t *testing.T) {
 		}
 	}
 	// B fetched its own CSRF token for the form and changed A's
-	// organisation (a redirect, as A's recorded write got), so the request
-	// with no login is not sent on that recorded object.
+	// organisation (a redirect, as A's recorded write got); the request
+	// with no login went first and was sent to the login page.
 	for _, r := range res.Replays {
-		if pathOf(r.Path) == "/orgs/3/settings" && (r.Who == AsB && (!r.CSRFSwapped || r.Answer.Status != http.StatusSeeOther || !r.Accepted()) || r.Who == AsNoLogin && r.NotSent == "") {
+		if pathOf(r.Path) == "/orgs/3/settings" && (r.Who == AsB && (!r.CSRFSwapped || r.Answer.Status != http.StatusSeeOther || !r.Accepted()) || r.Who == AsNoLogin && (r.NotSent != "" || r.Accepted())) {
 			t.Errorf("form replay %+v", r)
 		}
 	}
@@ -478,7 +483,7 @@ func TestWriteCheck(t *testing.T) {
 	for _, part := range []string{
 		"replayed 7 write(s) from the HAR file and 3 not in it (PUT, PATCH or DELETE on objects account A read or made) as account B and with no login",
 		"2 high, 1 medium",
-		"3 accepted and may have changed data: PUT /api/items/8 as account B, DELETE /api/items/10 as account B, POST /orgs/3/settings as account B",
+		"3 accepted and may have changed data: PUT /api/items/9 as account B, DELETE /api/items/11 as account B, POST /orgs/3/settings as account B",
 		"12 object(s) made for account A with POST /api/items/, POST /api/cards/, 11 of them deleted again by A",
 		"1 not replayed because they could log in, log out or lock an account out: POST /logout",
 		"1 write(s) were sent with the sender's own CSRF token, taken from a page",
@@ -495,20 +500,21 @@ func TestWriteCheckWithoutCopies(t *testing.T) {
 	noSleep(t)
 	tu := mustTarget(t, srv.URL+"/")
 	cfg := egress.Config{Target: tu, Addrs: []netip.Addr{netip.MustParseAddr("127.0.0.1")}, Version: "test"}
-	// No recorded create: B's accepted DELETE hit A's recorded item (8,
-	// made here), so the request with no login is not sent.
+	// No recorded create: the request with no login goes first and is
+	// refused, then B's accepted DELETE hits A's recorded item (8, made
+	// here).
 	if a, err := egress.SendHeader(context.Background(), cfg, "POST", "/api/items/", http.Header{"Authorization": {"Bearer A"}}, []byte(`{"Product":3}`), 1<<10); err != nil || a.Status != 201 {
 		t.Fatal(a, err)
 	}
 	ws := []Write{{Method: "DELETE", Path: "/api/items/8", Header: http.Header{"Authorization": {"Bearer A"}}}}
 	res, err := WriteCheck(context.Background(), cfg, ws, Accounts{B: http.Header{"Authorization": {"Bearer B"}}}, "", 10, target.Local)
-	if err != nil || len(res.Replays) != 2 || res.Replays[1].NotSent == "" || res.Replays[0].Recreated {
+	if err != nil || len(res.Replays) != 2 || res.Replays[0].Who != AsNoLogin || res.Replays[0].NotSent != "" || res.Replays[0].Accepted() || res.Replays[1].Who != AsB || res.Replays[1].Recreated {
 		t.Fatalf("%+v %v", res, err)
 	}
 	if fs := WriteFindings(srv.URL, res); len(fs) != 1 || fs[0].Severity != findings.High || !strings.Contains(fs[0].Message, "recorded object") {
 		t.Errorf("%+v", fs)
 	}
-	if s := res.WriteSummary(nil); !strings.Contains(s, "not tested with no login, because B's replay was accepted on A's recorded object: DELETE /api/items/8") {
+	if s := res.WriteSummary(nil); strings.Contains(s, "not sent") || strings.HasSuffix(s, "; ") {
 		t.Errorf("%q", s)
 	}
 	// With no login, the form gets the anonymous page's token and cookie;
@@ -553,9 +559,9 @@ func TestWriteCheckMedium(t *testing.T) {
 	}
 	fs := WriteFindings(srv.URL, res)
 	// Accepted, but A's read did not change (PUT) or was not checked
-	// (POST): medium, for a person to check. B's PUT was accepted on A's
-	// recorded object, so the request with no login is not sent for it.
-	if len(fs) != 3 || fs[0].RuleID != "cross-account-write" || fs[0].Severity != findings.Medium || fs[1].RuleID != "no-login-write" || fs[1].CWEs[0] != "CWE-306" || !strings.Contains(fs[0].Message, "check it by hand") {
+	// (POST): medium, for a person to check. The request with no login
+	// goes first, and its acceptance does not keep B from being sent.
+	if len(fs) != 4 || fs[0].RuleID != "no-login-write" || fs[0].CWEs[0] != "CWE-306" || fs[1].RuleID != "cross-account-write" || fs[1].Severity != findings.Medium || fs[3].RuleID != "cross-account-write" || !strings.Contains(fs[1].Message, "check it by hand") {
 		t.Errorf("%+v", fs)
 	}
 	if !slices.Equal(got[:3], []string{"POST /repos/alice/pub/issues", "POST /repos/alice/pub/issues", "GET /user/starred/alice/pub"}) {
@@ -783,7 +789,10 @@ func TestWriteCheckGraphQL(t *testing.T) {
 // B's checkout, and A's read of the basket shows the change (high), unless
 // that read differs on its own (medium).
 func TestWriteCheckTriesAndSteps(t *testing.T) {
-	for _, noisy := range []bool{false, true} {
+	// noise: none; a counter that changes on every read (lined up word by
+	// word and left out, so the checkout's change still shows, issue #95);
+	// or a layout that changes on every read (nothing can be told apart).
+	for _, noise := range []string{"none", "counter", "layout"} {
 		var mu sync.Mutex
 		notes, basket, next, reads := map[int]string{}, []int{}, 7, 0
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -823,8 +832,12 @@ func TestWriteCheckTriesAndSteps(t *testing.T) {
 				fmt.Fprint(w, `{"ok":true}`)
 			case r.Method == "GET" && r.URL.Path == "/rest/basket/5":
 				reads++
-				if noisy {
+				switch noise {
+				case "counter":
 					fmt.Fprintf(w, `{"items":%d,"at":%d}`, len(basket), reads)
+					return
+				case "layout":
+					fmt.Fprintf(w, `{"items":%d,"at":[%s]}`, len(basket), strings.TrimSuffix(strings.Repeat("1,", reads), ","))
 					return
 				}
 				fmt.Fprintf(w, `{"items":%d}`, len(basket))
@@ -869,16 +882,16 @@ func TestWriteCheckTriesAndSteps(t *testing.T) {
 			got = append(got, fmt.Sprintf("%s %s %v", f.RuleID, strings.TrimPrefix(f.Location.URI, u), f.Severity))
 		}
 		checkout := "cross-account-write /rest/basket/5/checkout high"
-		if noisy {
+		if noise == "layout" {
 			checkout = "cross-account-write /rest/basket/5/checkout medium"
 		}
 		wantF := []string{checkout, "cross-account-write /api/notes/7 high"}
 		if !slices.Equal(got, wantF) {
-			t.Errorf("noisy %v: findings %q, want %q", noisy, got, wantF)
+			t.Errorf("noise %s: findings %q, want %q", noise, got, wantF)
 		}
-		// Sent once, before B's checkout: B's was accepted on A's recorded
-		// basket, so the checkout is not sent with no login.
-		if res.StepsSent != 1 || !strings.Contains(res.WriteSummary(ws), "1 of account A's earlier recorded writes sent again first") {
+		// Sent before each sender's checkout: with no login first (refused),
+		// then B (accepted).
+		if res.StepsSent != 2 || !strings.Contains(res.WriteSummary(ws), "2 of account A's earlier recorded writes sent again first") {
 			t.Errorf("steps %d: %s", res.StepsSent, res.WriteSummary(ws))
 		}
 	}
@@ -1112,5 +1125,300 @@ func TestSameAnswerEachRun(t *testing.T) {
 				break
 			}
 		}
+	}
+}
+
+// TestWriteCheckSettle: a page value that differs on only some answers (a
+// render time, as Gitea's footer shows) matches on A's two reads before
+// B's DELETE and differs after it, though the DELETE changed nothing. The
+// settle read after shows it is noise, so the replay is medium, not high,
+// and the state rule does not accept it (issue #95, measured on Gitea).
+func TestWriteCheckSettle(t *testing.T) {
+	var mu sync.Mutex
+	// tick is the footer's render time: the same on every read until B's
+	// DELETE, then new on each read.
+	tick, ticking, deleted := 1, false, false
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		defer mu.Unlock()
+		u := map[string]string{"Bearer A": "alice", "Bearer B": "bob"}[r.Header.Get("Authorization")]
+		if u == "" {
+			http.Error(w, "log in", http.StatusUnauthorized)
+			return
+		}
+		switch {
+		case r.Method == "GET" && r.URL.Path == "/items/7":
+			if ticking {
+				tick++
+			}
+			fmt.Fprintf(w, "<p>item 7 deleted=%v</p><footer>%dms</footer>", deleted, tick)
+		case r.Method == "DELETE" && r.URL.Path == "/items/7":
+			if u == "alice" {
+				deleted = true
+			}
+			ticking = ticking || u == "bob"
+			fmt.Fprint(w, "<p>ok</p>") // B is refused with 200 and nothing changes
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+	noSleep(t)
+	a := map[string]string{"Authorization": "Bearer A"}
+	u := srv.URL
+	har := writeHAR(t, []writeEntry{
+		{method: "GET", url: u + "/items/7", headers: a, status: 200, answer: "<p>item 7 deleted=false</p><footer>1ms</footer>"},
+		{method: "DELETE", url: u + "/items/7", headers: a, status: 200, answer: "<p>ok</p>"},
+	})
+	tu := mustTarget(t, u+"/")
+	ws, err := ParseWrites(har, tu)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := egress.Config{Target: tu, Addrs: []netip.Addr{netip.MustParseAddr("127.0.0.1")}, Version: "test"}
+	res, err := WriteCheck(context.Background(), cfg, ws.Writes, Accounts{B: http.Header{"Authorization": {"Bearer B"}}}, "alice", 10, target.Local)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var b *WriteReplay
+	for i := range res.Replays {
+		if res.Replays[i].Who == AsB {
+			b = &res.Replays[i]
+		}
+	}
+	if b == nil {
+		t.Fatalf("B not sent: %+v", res.Replays)
+	}
+	if !b.changedOnce() || b.Settle.Status != 200 || b.readChanged() {
+		t.Errorf("once %v settle %d changed %v", b.changedOnce(), b.Settle.Status, b.readChanged())
+	}
+	var got []string
+	for _, f := range WriteFindings(u, res) {
+		got = append(got, fmt.Sprintf("%s %s %v", f.RuleID, strings.TrimPrefix(f.Location.URI, u), f.Severity))
+	}
+	if want := []string{"cross-account-write /items/7 medium"}; !slices.Equal(got, want) {
+		t.Errorf("findings %q, want %q", got, want)
+	}
+}
+
+// TestWriteCheckMethodIgnored: a Next.js page answers any method with the
+// page, with a fresh nonce, and streams it in one of two layouts. A PUT,
+// PATCH or DELETE that gets the page a GET gets is not accepted, though the
+// first GET after it may come in the other layout (issue #95, measured on
+// Porchlet's workspace page).
+func TestWriteCheckMethodIgnored(t *testing.T) {
+	var mu sync.Mutex
+	n, bGets := 0, 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		defer mu.Unlock()
+		if r.Header.Get("Authorization") == "" {
+			http.Error(w, "log in", http.StatusUnauthorized)
+			return
+		}
+		if r.URL.Path != "/items/7" {
+			http.NotFound(w, r)
+			return
+		}
+		n++
+		nonce := fmt.Sprintf("Kq%020dZw==", n) // base64-like, as a real nonce
+		// B's DELETE gets the one-script layout; B's first GET after it
+		// the two-script one, the next the one-script one again.
+		if r.Header.Get("Authorization") == "Bearer B" && r.Method == "GET" {
+			bGets++
+		}
+		if r.Header.Get("Authorization") != "Bearer B" || r.Method != "GET" || bGets%2 == 0 {
+			fmt.Fprintf(w, `<!DOCTYPE html><script nonce="%s">push("a")</script><p>item 7</p>`, nonce)
+			return
+		}
+		fmt.Fprintf(w, `<!DOCTYPE html><script nonce="%s">push("a");</script><script nonce="%s">push("b")</script><p>item 7</p>`, nonce, nonce)
+	}))
+	defer srv.Close()
+	noSleep(t)
+	a := map[string]string{"Authorization": "Bearer A"}
+	u := srv.URL
+	har := writeHAR(t, []writeEntry{
+		{method: "GET", url: u + "/items/7", headers: a, status: 200, answer: `<!DOCTYPE html><p>item 7</p>`},
+	})
+	tu := mustTarget(t, u+"/")
+	ws, err := ParseWrites(har, tu)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := egress.Config{Target: tu, Addrs: []netip.Addr{netip.MustParseAddr("127.0.0.1")}, Version: "test"}
+	res, err := WriteCheck(context.Background(), cfg, ws.Writes, Accounts{B: http.Header{"Authorization": {"Bearer B"}}}, "alice", 10, target.Local)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tried := 0
+	for _, r := range res.Replays {
+		if r.Who != AsB {
+			continue
+		}
+		tried++
+		if !r.MethodIgnored || r.Accepted() || r.PageReads != 2 {
+			t.Errorf("%s: ignored %v accepted %v page reads %d", r.Label(), r.MethodIgnored, r.Accepted(), r.PageReads)
+		}
+	}
+	if tried != 1 { // a DELETE: a PUT or PATCH is tried only on a JSON read
+		var l []string
+		for _, w := range ws.Writes {
+			l = append(l, w.Label())
+		}
+		t.Errorf("%d tried writes sent as B, want the DELETE: %v", tried, l)
+	}
+	if fs := WriteFindings(u, res); len(fs) != 0 {
+		t.Errorf("findings %v", fs)
+	}
+}
+
+// TestWriteCheckLayouts: a streamed page comes in one of two layouts. After
+// B's DELETE, A's first two reads come in the other layout. When the
+// DELETE changed nothing, a later read in the first layout shows no change
+// (medium); when it deleted the item, that read shows the change (high).
+// Measured on Porchlet's workspace page, issue #95.
+func TestWriteCheckLayouts(t *testing.T) {
+	for _, real := range []bool{false, true} {
+		var mu sync.Mutex
+		deleted, afterB := false, -1
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			mu.Lock()
+			defer mu.Unlock()
+			u := map[string]string{"Bearer A": "alice", "Bearer B": "bob"}[r.Header.Get("Authorization")]
+			if u == "" {
+				http.Error(w, "log in", http.StatusUnauthorized)
+				return
+			}
+			switch {
+			case r.Method == "GET" && r.URL.Path == "/items/7":
+				if afterB >= 0 {
+					afterB++
+				}
+				if afterB == 1 || afterB == 2 {
+					fmt.Fprintf(w, `<!DOCTYPE html><s>push("a");</s><s>push("deleted=%v")</s>`, deleted)
+					return
+				}
+				fmt.Fprintf(w, `<!DOCTYPE html><s>push("a deleted=%v")</s>`, deleted)
+			case r.Method == "DELETE" && r.URL.Path == "/items/7":
+				if u == "bob" {
+					afterB = 0
+					deleted = deleted || real
+				}
+				fmt.Fprint(w, `{"ok":true}`)
+			default:
+				http.NotFound(w, r)
+			}
+		}))
+		noSleep(t)
+		a := map[string]string{"Authorization": "Bearer A"}
+		u := srv.URL
+		har := writeHAR(t, []writeEntry{
+			{method: "GET", url: u + "/items/7", headers: a, status: 200, answer: `<!DOCTYPE html><s>push("a deleted=false")</s>`},
+			{method: "DELETE", url: u + "/items/7", headers: a, status: 200, answer: `{"ok":true}`},
+		})
+		tu := mustTarget(t, u+"/")
+		ws, err := ParseWrites(har, tu)
+		if err != nil {
+			t.Fatal(err)
+		}
+		cfg := egress.Config{Target: tu, Addrs: []netip.Addr{netip.MustParseAddr("127.0.0.1")}, Version: "test"}
+		res, err := WriteCheck(context.Background(), cfg, ws.Writes, Accounts{B: http.Header{"Authorization": {"Bearer B"}}}, "alice", 10, target.Local)
+		srv.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+		var got []string
+		for _, f := range WriteFindings(u, res) {
+			got = append(got, fmt.Sprintf("%s %s %v", f.RuleID, strings.TrimPrefix(f.Location.URI, u), f.Severity))
+		}
+		want := []string{"cross-account-write /items/7 medium"}
+		if real {
+			want = []string{"cross-account-write /items/7 high"}
+		}
+		if !slices.Equal(got, want) {
+			t.Errorf("deleted %v: findings %q, want %q", real, got, want)
+		}
+	}
+}
+
+// TestWriteCheckServerAction: Next.js answers a refused Server Action with
+// 200 and the form's state (issue #95). A replay is accepted when it gets
+// a success header A's recorded answer had, or, when A's answer had none,
+// when A's read of the page changed. Other writes keep the 2xx rule.
+func TestWriteCheckServerAction(t *testing.T) {
+	var mu sync.Mutex
+	title, notes := "t", 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		defer mu.Unlock()
+		who := map[string]string{"Bearer A": "alice", "Bearer B": "bob", "Bearer C": "carol"}[r.Header.Get("Authorization")]
+		if who == "" {
+			http.Redirect(w, r, "/login", http.StatusSeeOther)
+			return
+		}
+		switch {
+		case r.Method == "GET" && r.URL.Path == "/w/1":
+			fmt.Fprintf(w, "<!DOCTYPE html><h1>%s</h1><p>%d notes</p>", title, notes)
+		case r.Method == "POST" && r.URL.Path == "/w/1":
+			member := who != "carol"
+			switch r.Header.Get("Next-Action") {
+			case "rename":
+				if !member {
+					fmt.Fprint(w, `0:{"error":"not allowed"}`)
+					return
+				}
+				title = "renamed"
+				w.Header().Set("X-Action-Redirect", "/w/1?notice=renamed;push")
+				fmt.Fprint(w, `0:{}`)
+			case "note": // the flaw: anyone may add a note
+				notes++
+				fmt.Fprint(w, `0:{}`)
+			case "topic":
+				if member {
+					title += "!"
+				}
+				fmt.Fprint(w, `0:{}`)
+			}
+		case r.Method == "POST" && r.URL.Path == "/w/1/feedback": // not a Server Action
+			w.WriteHeader(http.StatusCreated)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+	noSleep(t)
+	a := map[string]string{"Authorization": "Bearer A"}
+	act := func(id string) map[string]string {
+		return map[string]string{"Authorization": "Bearer A", "Next-Action": id}
+	}
+	u := srv.URL
+	har := writeHAR(t, []writeEntry{
+		{method: "GET", url: u + "/w/1", headers: a, status: 200, answer: "<!DOCTYPE html><h1>t</h1><p>0 notes</p>"},
+		{method: "POST", url: u + "/w/1", headers: act("rename"), mime: "text/plain", body: `["x"]`, status: 200, answer: "0:{}", answerHeaders: map[string]string{"X-Action-Redirect": "/w/1?notice=renamed;push"}},
+		{method: "POST", url: u + "/w/1", headers: act("note"), mime: "text/plain", body: `["n"]`, status: 200, answer: "0:{}"},
+		{method: "POST", url: u + "/w/1", headers: act("topic"), mime: "text/plain", body: `["p"]`, status: 200, answer: "0:{}"},
+		{method: "POST", url: u + "/w/1/feedback", headers: a, mime: "application/json", body: `{"f":1}`, status: 201},
+	})
+	tu := mustTarget(t, u+"/")
+	ws, err := ParseWrites(har, tu)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := egress.Config{Target: tu, Addrs: []netip.Addr{netip.MustParseAddr("127.0.0.1")}, Version: "test"}
+	res, err := WriteCheck(context.Background(), cfg, ws.Writes, Accounts{C: http.Header{"Authorization": {"Bearer C"}}}, "alice", 10, target.Local)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, rp := range res.Replays {
+		if rp.Accepted() {
+			got = append(got, rp.Method+" "+rp.Path+" "+rp.Action+" "+whoName(rp.Who))
+		}
+	}
+	// carol's rename (200 without A's x-action-redirect) and topic (A's
+	// page unchanged) are refusals; her note changed A's page.
+	want := []string{"POST /w/1 note account C", "POST /w/1/feedback  account C"}
+	if !slices.Equal(got, want) {
+		t.Errorf("accepted %q, want %q", got, want)
 	}
 }

@@ -113,14 +113,22 @@ func TestCheckWithC(t *testing.T) {
 	noSleep(t)
 	cfg := egress.Config{Target: mustTarget(t, srv.URL+"/"), Addrs: []netip.Addr{netip.MustParseAddr("127.0.0.1")}, Version: "test", ReadOnly: true}
 	h := spaceReads(t, srv)
+	// 16, and A's /api/me again (C's and B's answers line up with A's).
 	res, err := Check(context.Background(), cfg, h.Requests, Accounts{B: sessB, C: sessC}, 10)
-	if err != nil || !res.CTested || !res.CWorks() || res.Requests != 16 {
+	if err != nil || !res.CTested || !res.CWorks() || res.Requests != 17 {
 		t.Fatalf("%+v %v", res, err)
 	}
-	// C is sent before B, for every request.
+	// C is sent before B, for every request: A, C, B, no login, and for
+	// /api/me A again (the first request).
 	for i := 0; i < len(*seen); i += 4 {
 		if who := []string{(*seen)[i+1], (*seen)[i+2]}; !strings.HasSuffix(who[0], " carol") || !strings.HasSuffix(who[1], " bob") {
 			t.Errorf("order %v", (*seen)[i:i+4])
+		}
+		if i == 0 {
+			if (*seen)[4] != "GET /api/me alice" {
+				t.Errorf("A's second read %v", (*seen)[:5])
+			}
+			i++
 		}
 	}
 	fs := Findings(srv.URL, res, "alice")
@@ -162,8 +170,11 @@ func TestCheckOnlyC(t *testing.T) {
 	noSleep(t)
 	cfg := egress.Config{Target: mustTarget(t, srv.URL+"/"), Addrs: []netip.Addr{netip.MustParseAddr("127.0.0.1")}, Version: "test", ReadOnly: true}
 	h := spaceReads(t, srv)
+	// 12, and A's /api/me again: C's answer lines up with A's word by
+	// word, so A's is read twice to tell noise from data (issue #95); the
+	// name A got both times differs from C's, so it is not reported.
 	res, err := Check(context.Background(), cfg, h.Requests, Accounts{C: sessC}, 10)
-	if err != nil || res.BTested || res.Requests != 12 {
+	if err != nil || res.BTested || res.Requests != 13 {
 		t.Fatalf("%+v %v", res, err)
 	}
 	fs := Findings(srv.URL, res, "alice")
@@ -226,27 +237,28 @@ func TestWriteCheckWithC(t *testing.T) {
 	if err != nil || !res.CTested || !res.CWorks() {
 		t.Fatalf("%+v %v", res, err)
 	}
-	// The rename: C and no login refused first, then B accepted on A's
-	// recorded project. The topic: C accepted on A's recorded project, so
-	// neither no login nor B is sent.
+	// The rename: no login and C refused first, then B accepted on A's
+	// recorded project. The topic: no login refused, then C accepted on
+	// A's recorded project, so B is not sent; no login always goes first,
+	// so C's acceptance never keeps it from being sent (issue #95).
 	var got []string
 	for _, r := range res.Replays {
 		got = append(got, fmt.Sprintf("%s %s %d %v", pathOf(r.Path), r.Who, r.Answer.Status, r.NotSent != ""))
 	}
-	want := []string{"/api/projects/5 C 403 false", "/api/projects/5 no login 401 false", "/api/projects/5 B 200 false",
-		"/api/projects/5/topic C 200 false", "/api/projects/5/topic no login 0 true", "/api/projects/5/topic B 0 true"}
+	want := []string{"/api/projects/5 no login 401 false", "/api/projects/5 C 403 false", "/api/projects/5 B 200 false",
+		"/api/projects/5/topic no login 401 false", "/api/projects/5/topic C 200 false", "/api/projects/5/topic B 0 true"}
 	if !slices.Equal(got, want) {
 		t.Errorf("replays %v, want %v", got, want)
 	}
-	if n := slices.Index(*seen, "PUT /api/projects/5/topic "); n >= 0 {
-		t.Errorf("topic sent with no login after C changed it: %v", *seen)
+	if n, c := slices.Index(*seen, "PUT /api/projects/5/topic "), slices.Index(*seen, "PUT /api/projects/5/topic carol"); n < 0 || c < n {
+		t.Errorf("topic not sent with no login before C: %v", *seen)
 	}
 	fs := WriteFindings(srv.URL, res)
 	if got := ruleList(fs, srv.URL); !slices.Equal(got, []string{"b-only-write /api/projects/5 low", "cross-account-write /api/projects/5/topic high"}) {
 		t.Errorf("findings %v", got)
 	}
 	for _, f := range fs {
-		if f.RuleID == "b-only-write" && (!strings.Contains(f.Message, "refused (status 403)") || !strings.Contains(f.Message, "Account A's read of the same URL changed")) {
+		if f.RuleID == "b-only-write" && (!strings.Contains(f.Message, "refused (status 403)") || !strings.Contains(f.Message, "Account A read the same URL twice before the replay and twice after: it changed")) {
 			t.Errorf("%s", f.Message)
 		}
 		if f.RuleID == "cross-account-write" && !strings.Contains(f.Message, "as account C (SIEGEKIT_SESSION_C") {
@@ -255,7 +267,7 @@ func TestWriteCheckWithC(t *testing.T) {
 	}
 	s := res.WriteSummary(nil)
 	for _, part := range []string{"as account C, as account B and with no login", "1 high, 0 medium, 1 low (accepted for account B only)",
-		"not sent to every account, because an earlier account's replay was accepted on A's recorded object: PUT /api/projects/5/topic"} {
+		"not sent as account B, because account C's replay was accepted on A's recorded object: PUT /api/projects/5/topic"} {
 		if !strings.Contains(s, part) {
 			t.Errorf("summary %q\nlacks %q", s, part)
 		}
@@ -271,7 +283,7 @@ func TestWriteCheckExpiredC(t *testing.T) {
 		t.Fatalf("%+v %v", res, err)
 	}
 	fs := WriteFindings(srv.URL, res)
-	if len(fs) != 1 || fs[0].RuleID != "cross-account-write" || fs[0].Severity != findings.High || !strings.Contains(fs[0].Message, "its session got the same status as a request with no login on every write") {
+	if len(fs) != 1 || fs[0].RuleID != "cross-account-write" || fs[0].Severity != findings.High || !strings.Contains(fs[0].Message, "Account C was not compared: account C got the same status as a request with no login on every write sent both ways") {
 		t.Errorf("%+v", fs)
 	}
 	if s := res.WriteSummary(nil); !strings.Contains(s, "so its session may have expired") {

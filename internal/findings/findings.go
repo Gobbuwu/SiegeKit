@@ -88,6 +88,10 @@ type Finding struct {
 	// knows them (ffuf, access-control). They are not saved: SiegeKit uses
 	// them to drop findings read from a host's block page (ADR 0071).
 	Answers []Answer `json:"-"`
+	// Variant tells apart findings of one rule at one location that are
+	// different issues, such as two Server Actions posted to one page's
+	// URL (issue #95). It is part of the key only.
+	Variant string `json:"-"`
 }
 
 // Answer is the status and body length of an answer behind a finding.
@@ -110,7 +114,11 @@ func (f *Finding) key() string {
 		sort.Strings(c)
 		what = "cwe:" + strings.Join(c, ",")
 	}
-	return fmt.Sprintf("%s|%d|%s", f.Location.URI, f.Location.StartLine, what)
+	k := fmt.Sprintf("%s|%d|%s", f.Location.URI, f.Location.StartLine, what)
+	if f.Variant != "" {
+		k += "|" + f.Variant
+	}
+	return k
 }
 
 // ComputeFingerprint sets f.Fingerprint from its key.
@@ -119,9 +127,11 @@ func (f *Finding) ComputeFingerprint() {
 	f.Fingerprint = hex.EncodeToString(sum[:16])
 }
 
-// Dedupe merges findings with the same fingerprint, keeping the highest
-// severity and listing every source. The result is sorted most severe first,
-// then by location, so output is stable.
+// Dedupe merges findings with the same fingerprint, keeping the most
+// severe one's own text and listing every source: a merged finding never
+// pairs one finding's severity with another's message (issue #95). The
+// result is sorted most severe first, then by location, so output is
+// stable.
 func Dedupe(in []Finding) []Finding {
 	byFP := map[string]int{}
 	var out []Finding
@@ -137,11 +147,15 @@ func Dedupe(in []Finding) []Finding {
 			continue
 		}
 		existing := &out[i]
-		if existing.HelpURI == "" {
-			existing.HelpURI = f.HelpURI
-		}
 		if f.Severity > existing.Severity {
-			existing.Severity = f.Severity
+			kept, help := existing.Sources, existing.HelpURI
+			*existing = f
+			existing.Sources = kept
+			if existing.HelpURI == "" {
+				existing.HelpURI = help
+			}
+		} else if existing.HelpURI == "" {
+			existing.HelpURI = f.HelpURI
 		}
 		for _, s := range f.Sources {
 			if !containsSource(existing.Sources, s) {

@@ -37,7 +37,13 @@ func blockingApp(t *testing.T, after int) (*httptest.Server, func() int) {
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprintf(w, `{"path":%q,"who":%q}`, r.URL.Path, r.Header.Get("Authorization"))
+		// Each account's answer has its own layout, so no answer lines up
+		// with A's word by word and A is never read twice (Replay.Again).
+		if r.Header.Get("Authorization") == "Bearer A" {
+			fmt.Fprintf(w, `{"path":%q}`, r.URL.Path)
+			return
+		}
+		fmt.Fprintf(w, `{"path":%q,"other":true}`, r.URL.Path)
 	}))
 	t.Cleanup(srv.Close)
 	return srv, func() int { mu.Lock(); defer mu.Unlock(); return n }

@@ -58,6 +58,19 @@ type Write struct {
 	Create *Create
 	// RecordedStatus is the answer A got in the recording.
 	RecordedStatus int
+	// RecordedSignals are the headers of A's recorded answer that say a
+	// write succeeded (successSignals), for Accepted (issue #95).
+	RecordedSignals http.Header
+	// Action is the Next.js Server Action ID of the request (its
+	// Next-Action header), empty for other requests. Every Server Action
+	// of a page posts to the page's URL, so the ID tells them apart.
+	Action string
+	// PageRead is a recorded GET of a POST's own path, when the recording
+	// has one: the page a Server Action or form posts to. A reads it before
+	// and after a Server Action whose recorded answer had no success header
+	// (Accepted).
+	PageRead       string
+	PageReadHeader http.Header
 	// CSRF: the write carries an anti-forgery token from A's session, in
 	// a header or the body. A refusal of B's or the no-login replay may
 	// come from that token, not from access control (ADR 0049).
@@ -99,7 +112,16 @@ type Step struct {
 // Label is the write as people read it: method and path, plus the
 // GraphQL mutation, since every GraphQL write shares one path.
 func (w Write) Label() string {
-	return w.Method + " " + opLabel(w.Path, w.GraphQL, w.RPC)
+	return w.Method + " " + w.op(w.Path)
+}
+
+// op is path with the write's operation: its GraphQL mutation, method
+// call or Server Action.
+func (w Write) op(path string) string {
+	if w.Action != "" {
+		return path + " (Server Action " + w.Action + ")"
+	}
+	return opLabel(path, w.GraphQL, w.RPC)
 }
 
 // Create is a recorded POST whose answer gave the ID a later write uses.
@@ -171,7 +193,8 @@ type harWriteEntry struct {
 		PostData *harPostBody `json:"postData"`
 	} `json:"request"`
 	Response struct {
-		Status  int `json:"status"`
+		Status  int         `json:"status"`
+		Headers []harHeader `json:"headers"`
 		Content struct {
 			MimeType string `json:"mimeType"`
 			Text     string `json:"text"`
@@ -284,7 +307,8 @@ func ParseWrites(data []byte, t *target.URL) (*Writes, error) {
 		if len(body) == 0 {
 			hd.Del("Content-Type")
 		}
-		wr := Write{Method: method, Path: p, Header: hd, Body: body, CSRF: carriesCSRF(hd, body), RecordedStatus: e.Response.Status}
+		wr := Write{Method: method, Path: p, Header: hd, Body: body, CSRF: carriesCSRF(hd, body), RecordedStatus: e.Response.Status,
+			RecordedSignals: successSignals(e.Response.Headers), Action: hd.Get("Next-Action")}
 		if kind, name, fields, ok := graphQLOp(body); ok {
 			if kind != "mutation" {
 				w.GraphQLReads++
@@ -375,6 +399,9 @@ func ParseWrites(data []byte, t *target.URL) (*Writes, error) {
 	for j, k := range kept {
 		k.w.Create = findCreate(k.w, k.index, creates)
 		k.w.Steps, k.w.Parent, k.w.ParentHeader = stepsFor(k.w, k.index, kept[:j], reads)
+		if k.w.Method == http.MethodPost && k.w.Parent == "" {
+			k.w.PageRead, k.w.PageReadHeader = pageRead(k.w, reads)
+		}
 		w.Writes = append(w.Writes, k.w)
 	}
 	tries, over := triesFor(w.Writes, reads, creates)
@@ -849,13 +876,35 @@ type WriteReplay struct {
 	// object. RecreateFailed: it was sent and gave no ID, so the write
 	// used A's recorded object.
 	Recreated, RecreateFailed bool
-	// Read: A read ReadPath before and after: the same URL for a PUT,
-	// PATCH or DELETE, the object's recorded read for a POST with Steps.
-	// Noisy: A's two reads of that object before the POST differed, so a
-	// change after it proves nothing.
-	Read, Noisy           bool
-	ReadPath              string
-	Before, Answer, After Answer
+	// Read: A read ReadPath twice before and once after: the same URL for
+	// a PUT, PATCH or DELETE, the object's recorded read for a POST with
+	// Steps. Noisy: A's two reads before (Before and Again) differed in a
+	// way that cannot be lined up word by word, so a change after the
+	// write proves nothing; noise marks the words that differed when they
+	// could be (pageNoise, issue #95).
+	Read, Noisy                  bool
+	ReadPath                     string
+	Before, Again, Answer, After Answer
+	noise                        []bool
+	// Settle: when After differs from Before, A reads ReadPath once more.
+	// A value that differs only on some answers (a render time, a
+	// "seconds ago") can match on the two reads before and still differ
+	// after; the words that differ between After and Settle are noise
+	// too, and After and Settle that cannot be lined up prove nothing
+	// (measured on Gitea's footer, issue #95).
+	Settle      Answer
+	settleNoise []bool
+	unsettled   bool
+	// Reads counts A's reads of ReadPath for this replay.
+	Reads int
+	// Signals are the write answer's success headers (successSignals).
+	Signals http.Header
+	// MethodIgnored: the PUT, PATCH or DELETE got the page a GET of its URL
+	// gets as the same sender (Page), so the app ignored the method
+	// (sameButNoise, issue #95).
+	MethodIgnored bool
+	Page          Answer
+	PageReads     int
 	// StepsSent counts A's earlier writes sent again before this replay.
 	StepsSent int
 	// NotSent says why this identity was not sent, or "".
@@ -969,12 +1018,15 @@ func WriteCheck(ctx context.Context, cfg egress.Config, ws []Write, acc Accounts
 		// recorded object, which it may have changed or deleted.
 		onRecorded := ""
 		plain := plainCreate(w, loginName)
-		// With C, no login goes before B, so each write that C and no
-		// login were refused on shows whether C's session works (CWorks)
-		// even when B then changes A's recorded object (ADR 0051 item 4).
-		order := []string{AsB, AsNoLogin}
+		// No login goes first, then C, then B: no login is sent on every
+		// write, so each write sent as C pairs with one sent with no login
+		// and shows whether C's session works (CWorks), and an acceptance
+		// as C, which can change A's recorded object, never keeps the
+		// request with no login from being sent (issue #95). An acceptance
+		// with no login does not stop C and B.
+		order := []string{AsNoLogin, AsB}
 		if acc.C != nil {
-			order = []string{AsC, AsNoLogin, AsB}
+			order = []string{AsNoLogin, AsC, AsB}
 		}
 		for _, who := range order {
 			if who != AsNoLogin && (sessionOf[who] == nil || plain) {
@@ -1030,6 +1082,10 @@ func WriteCheck(ctx context.Context, cfg egress.Config, ws []Write, acc Accounts
 				rp.Read, rp.ReadPath = true, w.Parent
 				readHeader = w.ParentHeader.Clone()
 				readHeader.Del("Content-Type")
+			} else if w.Method == http.MethodPost && w.PageRead != "" && w.Action != "" && !(WriteReplay{Write: w}).hadSignal() {
+				rp.Read, rp.ReadPath = true, w.PageRead
+				readHeader = w.PageReadHeader.Clone()
+				readHeader.Del("Content-Type")
 			}
 			if rp.Read && ActionReason(rp.ReadPath) != "" {
 				// A GET whose URL names an action is never sent (ADR 0048),
@@ -1038,16 +1094,33 @@ func WriteCheck(ctx context.Context, cfg egress.Config, ws []Write, acc Accounts
 			}
 			var err error
 			if rp.Read {
-				if rp.Before, err = do(http.MethodGet, rp.ReadPath, readHeader, nil); err != nil {
-					return res, err
-				}
-				if rp.ReadPath != sw.Path {
-					again, err := do(http.MethodGet, rp.ReadPath, readHeader, nil)
+				// Two reads before on every write that reads: a page can
+				// change on every answer (a nonce), and then only the words
+				// that stayed the same can show a change. A streamed page
+				// can also come in more than one layout (Porchlet's
+				// workspace page: two, at random), so A reads it until two
+				// reads line up, at most maxBaseReads times (issue #95).
+				var reads []Answer
+				for paired := false; !paired && len(reads) < maxBaseReads; {
+					a, err := do(http.MethodGet, rp.ReadPath, readHeader, nil)
 					if err != nil {
 						return res, err
 					}
-					rp.Noisy = again.Status != rp.Before.Status || !bytes.Equal(again.Body, rp.Before.Body)
+					for _, b := range reads {
+						if linedUp(b, a) {
+							rp.Before, rp.Again, paired = b, a, true
+							break
+						}
+					}
+					reads = append(reads, a)
 				}
+				if rp.Before.Status == 0 {
+					rp.Before, rp.Again = reads[0], reads[1]
+				}
+				rp.Reads = len(reads)
+				var ok bool
+				rp.noise, ok = pageNoise(rp.Before, rp.Again)
+				rp.Noisy = !ok
 			}
 			h := without(sw.Header, session)
 			for k, vs := range sessionOf[who] {
@@ -1088,9 +1161,56 @@ func WriteCheck(ctx context.Context, cfg egress.Config, ws []Write, acc Accounts
 				return res, err
 			}
 			rp.Location = lastHeader.Get("Location")
+			rp.Signals = signalsOf(lastHeader)
 			if rp.Read && ok2xx(rp.Before) {
 				if rp.After, err = do(http.MethodGet, rp.ReadPath, readHeader, nil); err != nil {
 					return res, err
+				}
+				rp.Reads++
+				// An HTML page in another layout than the reads before, with
+				// the same status: A reads again, at most maxLayoutReads more times,
+				// for one that lines up. A change of layout that stays is a
+				// change.
+				for n := 0; n < maxLayoutReads && isPage(rp.Before.Body) && rp.After.Status == rp.Before.Status && !linedUp(rp.Before, rp.After); n++ {
+					if rp.After, err = do(http.MethodGet, rp.ReadPath, readHeader, nil); err != nil {
+						return res, err
+					}
+					rp.Reads++
+				}
+				if rp.changedOnce() {
+					if rp.Settle, err = do(http.MethodGet, rp.ReadPath, readHeader, nil); err != nil {
+						return res, err
+					}
+					var ok bool
+					rp.Reads++
+					rp.settleNoise, ok = pageNoise(rp.After, rp.Settle)
+					rp.unsettled = !ok
+				}
+			}
+			// A PUT, PATCH or DELETE answered with a page: the sender reads
+			// the URL, and the same page means the app ignored the method
+			// (Next.js renders a page for any method, issue #95). Not when
+			// A's read changed: that is the proof, whatever the answer.
+			if sw.Method != http.MethodPost && ok2xx(rp.Answer) && len(bytes.TrimSpace(rp.Answer.Body)) > 0 &&
+				ActionReason(sw.Path) == "" && !rp.readChanged() {
+				gh := h.Clone()
+				gh.Del("Content-Type")
+				// A streamed page can come in more than one layout (Porchlet's
+				// workspace page: two, at random, for GET and DELETE alike),
+				// so the sender reads an HTML page until one lines up, at
+				// most maxPageReads times, while the status stays the same.
+				// Other answers are read once: a JSON API's answer to a PUT
+				// differs from its GET on every read (Juice Shop's
+				// /api/Products/1, gate run 45746228551).
+				for rp.PageReads < maxPageReads && !rp.MethodIgnored && (rp.PageReads == 0 || isPage(rp.Answer.Body)) {
+					if rp.Page, err = do(http.MethodGet, sw.Path, gh, nil); err != nil {
+						return res, err
+					}
+					rp.PageReads++
+					rp.MethodIgnored = sameButNoise(rp.Answer, rp.Page)
+					if rp.Page.Status != rp.Answer.Status {
+						break
+					}
 				}
 			}
 			// A deletes the copy it made, so A's create works again for the
@@ -1163,8 +1283,65 @@ func newID(a Answer, field []string, rpc bool) (string, bool) {
 // answer a successful write with 303 (4 of 13 Gitea web writes, measured
 // 2026-11-21, ADR 0049). A 2xx answer that reports a refusal inside is
 // not accepted: GraphQL errors, a "success" that is false, or a method
-// call's error (ADR 0050).
+// call's error (ADR 0050). A Next.js Server Action answers a refusal with
+// 200 and the form's state, so it needs more (issue #95, ADR 0074): one
+// of the success headers A's recorded answer had (x-action-redirect,
+// x-action-revalidated), or, when A's answer had none, a change in A's
+// read of the page.
 func (r WriteReplay) Accepted() bool {
+	if !r.acceptedAny() {
+		return false
+	}
+	if r.Action == "" {
+		return true
+	}
+	if r.hadSignal() {
+		return r.anySignal()
+	}
+	return !r.Read || r.Noisy || !ok2xx(r.Before) || r.readChanged()
+}
+
+// hadSignal: A's recorded answer had a success header ("0" for
+// x-action-revalidated says nothing was revalidated).
+func (r WriteReplay) hadSignal() bool {
+	for k, vs := range r.RecordedSignals {
+		if len(vs) > 0 && !(k == "X-Action-Revalidated" && vs[0] == "0") {
+			return true
+		}
+	}
+	return false
+}
+
+// anySignal: the replay carries one of the success headers A's
+// recorded answer had, not leading to a login page.
+func (r WriteReplay) anySignal() bool {
+	for k := range r.RecordedSignals {
+		v := r.Signals.Get(k)
+		switch k {
+		case "X-Action-Revalidated":
+			if v != "" && v != "0" {
+				return true
+			}
+		case "Refresh":
+			if v != "" {
+				return true
+			}
+		default:
+			if signalTo(v) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// acceptedAny is the rule before card 1: a 2xx answer that reports no
+// refusal inside, or a redirect as A got, and not a page that ignored the
+// method.
+func (r WriteReplay) acceptedAny() bool {
+	if r.MethodIgnored {
+		return false
+	}
 	if ok2xx(r.Answer) {
 		if r.GraphQL != "" && graphQLRefused(r.Answer.Body) {
 			return false
@@ -1173,6 +1350,96 @@ func (r WriteReplay) Accepted() bool {
 	}
 	return r.Answer.Err == "" && r.Answer.Status >= 300 && r.Answer.Status < 400 &&
 		r.RecordedStatus >= 300 && r.RecordedStatus < 400 && !toLogin(r.Location) && !echoed(r.Location, r.Sent, r.Body)
+}
+
+// maxPageReads is how many times the sender reads a PUT, PATCH or DELETE's
+// URL to see whether the app ignored the method.
+const maxPageReads = 4
+
+// maxBaseReads is how many times A reads a page before a replay for two
+// reads that line up; maxLayoutReads how many more times after it for a
+// read in the layout of those (a streamed page with two layouts that come
+// at random misses with odds 1 in 2^(maxLayoutReads+1)).
+const (
+	maxBaseReads   = 3
+	maxLayoutReads = 7
+)
+
+// signalNames are answer headers that say a write succeeded and where the
+// app sends the browser next.
+var signalNames = []string{"Location", "X-Action-Redirect", "X-Action-Revalidated", "Hx-Redirect", "Hx-Location", "Refresh"}
+
+// successSignals keeps a recorded answer's signal headers.
+func successSignals(hs []harHeader) http.Header {
+	h := http.Header{}
+	for _, kv := range hs {
+		k := http.CanonicalHeaderKey(kv.Name)
+		if slices.Contains(signalNames, k) && kv.Value != "" {
+			h.Set(k, kv.Value)
+		}
+	}
+	return h
+}
+
+// signalsOf keeps an answer's signal headers.
+func signalsOf(in http.Header) http.Header {
+	h := http.Header{}
+	for _, k := range signalNames {
+		if v := in.Get(k); v != "" {
+			h.Set(k, v)
+		}
+	}
+	return h
+}
+
+// signalTo reports whether a redirect-type header leads somewhere other
+// than a login page. x-action-redirect is "URL;type".
+func signalTo(v string) bool {
+	if v == "" {
+		return false
+	}
+	u, _, _ := strings.Cut(v, ";")
+	return !toLogin(u)
+}
+
+// readChanged reports whether A's read after the write differs from the
+// reads before it, outside their noise.
+func (r WriteReplay) readChanged() bool {
+	return r.changedOnce() && !r.unsettled && changedFrom(r.Before, orNoise(r.noise, r.settleNoise), r.After)
+}
+
+// changedOnce reports whether After differs from Before outside the words
+// that differed between the two reads before.
+func (r WriteReplay) changedOnce() bool {
+	return r.Read && !r.Noisy && ok2xx(r.Before) && r.After.Err == "" && r.After.Status != 0 && changedFrom(r.Before, r.noise, r.After)
+}
+
+// orNoise marks a word as noise when either a or b does; nil is no noise.
+func orNoise(a, b []bool) []bool {
+	if a == nil {
+		return b
+	}
+	if b == nil || len(a) != len(b) {
+		return a
+	}
+	out := make([]bool, len(a))
+	for i := range a {
+		out[i] = a[i] || b[i]
+	}
+	return out
+}
+
+// pageRead is the first recorded GET of the POST's own path (without its
+// query), for the state rule.
+func pageRead(w Write, reads []recordedRead) (string, http.Header) {
+	for _, rd := range reads {
+		// A page, not an RSC request of it (a Next.js prefetch is the
+		// route's skeleton and never changes).
+		if rd.path == pathOf(w.Path) && ActionReason(rd.path) == "" && rd.header.Get("Rsc") == "" {
+			return rd.path, rd.header
+		}
+	}
+	return "", nil
 }
 
 // echoed reports whether a redirect only goes where the request asked: its
@@ -1225,14 +1492,15 @@ func toLogin(loc string) bool {
 }
 
 // Severity is the replay's tier (ADR 0049 item 1), and false when it is
-// not reported: high when a PUT, PATCH or DELETE was accepted and A's read
-// of the same URL changed, medium for any other accepted (2xx) replay.
+// not reported: high when the write was accepted and A's read changed
+// outside its noise (a PUT, PATCH or DELETE's own URL, or a POST's object
+// that A's earlier writes prepared, ADR 0054), medium for any other
+// accepted replay.
 func (r WriteReplay) Severity() (findings.Severity, bool) {
 	if r.NotSent != "" || !r.Accepted() {
 		return 0, false
 	}
-	if r.Read && !r.Noisy && ok2xx(r.Before) && r.After.Err == "" && r.After.Status != 0 &&
-		(r.After.Status != r.Before.Status || !bytes.Equal(r.After.Body, r.Before.Body)) {
+	if r.readChanged() {
 		return findings.High, true
 	}
 	return findings.Medium, true
@@ -1265,6 +1533,32 @@ func (r WriteResult) CWorks() bool {
 		}
 	}
 	return false
+}
+
+// cCompared reports whether any write was sent both as C and with no
+// login, so that CWorks had a pair to compare.
+func (r WriteResult) cCompared() bool {
+	c := map[int]bool{}
+	for _, rp := range r.Replays {
+		if rp.Who == AsC && rp.NotSent == "" {
+			c[rp.Index] = true
+		}
+	}
+	for _, rp := range r.Replays {
+		if c[rp.Index] && rp.Who == AsNoLogin && rp.NotSent == "" {
+			return true
+		}
+	}
+	return false
+}
+
+// cNote says why C's session was not seen to work: no write was sent both
+// as C and with no login, or every pair got the same status (issue #95).
+func (r WriteResult) cNote() string {
+	if !r.cCompared() {
+		return "account C was not compared with a request with no login: no write was sent both ways"
+	}
+	return "account C got the same status as a request with no login on every write sent both ways, so its session may have expired (check " + SessionEnvC + ")"
 }
 
 // WriteFindings turns the accepted replays into findings at the recorded
@@ -1306,14 +1600,21 @@ func WriteFindings(origin string, res WriteResult) []findings.Finding {
 			}
 		}
 		pathOnly, _, _ := strings.Cut(r.Path, "?")
-		f := findings.Finding{Severity: sev, Location: findings.Location{URI: origin + pathOnly}, Family: Family, Answers: answered(r.Answer, r.Before, r.After)}
+		label := r.op(pathOnly)
+		// Each operation is its own finding: every Server Action of a page
+		// posts to the page's URL (issue #95).
+		f := findings.Finding{Severity: sev, Location: findings.Location{URI: origin + pathOnly}, Family: Family, Variant: r.Method + " " + label,
+			Answers: answered(r.Answer, r.Before, r.Again, r.After, r.Settle)}
 		readOf := "the same URL"
-		if pathOf(r.ReadPath) != pathOf(r.Sent) {
-			readOf = pathOf(r.ReadPath) + ", which A's earlier recorded writes prepared and A read twice, the same both times, before the replay"
+		switch {
+		case r.Parent != "" && r.ReadPath == r.Parent:
+			readOf = pathOf(r.ReadPath) + ", which A's earlier recorded writes prepared"
+		case pathOf(r.ReadPath) != pathOf(r.Sent):
+			readOf = pathOf(r.ReadPath)
 		}
-		proof := fmt.Sprintf("Account A's read of %s changed (status %d, %d bytes before; status %d, %d bytes after).", readOf, r.Before.Status, len(r.Before.Body), r.After.Status, len(r.After.Body))
+		proof := fmt.Sprintf("Account A read %s twice before the replay and twice after: it changed (status %d, %d bytes before; status %d, %d bytes after), outside any part that differed between the two reads before or the two after.", readOf, r.Before.Status, len(r.Before.Body), r.After.Status, len(r.After.Body))
 		if sev != findings.High {
-			proof = "SiegeKit could not see account A's data change (only a PUT, PATCH or DELETE whose URL A can read is checked, or a POST on an object A's earlier writes prepared), and some apps allow this by design, such as a comment on a public item: check it by hand."
+			proof = "SiegeKit could not see account A's data change (only a write whose URL or object A can read is checked, and a page that differs on every read in more than a few values shows nothing), and some apps allow this by design, such as a comment on a public item: check it by hand."
 		}
 		how := "recorded as account A and sent"
 		if r.Tried {
@@ -1327,7 +1628,6 @@ func WriteFindings(origin string, res WriteResult) []findings.Finding {
 		if hasID(r.Path) {
 			cwe = "CWE-639"
 		}
-		label := opLabel(pathOnly, r.GraphQL, r.RPC)
 		switch {
 		case alsoB != "" || r.Who == AsC:
 			f.RuleID, f.Title, f.CWEs = "cross-account-write", "Another account can change this data", []string{cwe}
@@ -1340,7 +1640,7 @@ func WriteFindings(origin string, res WriteResult) []findings.Finding {
 			if res.CTested {
 				switch {
 				case !cWorks:
-					note = " Account C was not compared: its session got the same status as a request with no login on every write, so it may have expired (check " + SessionEnvC + ")."
+					note = " Account C was not compared: " + res.cNote() + "."
 				case !hasC:
 					note = " Account C was not compared: this write was not sent as account C."
 				case rc.NotSent != "":
@@ -1383,12 +1683,12 @@ func (r WriteResult) WriteSummary(w *Writes) string {
 	var accepted, recreatedAt, notSent, recreateFailed []string
 	for _, rp := range r.Replays {
 		if rp.NotSent != "" {
-			notSent = appendOnce(notSent, rp.Method+" "+pathOf(rp.Path))
+			notSent = appendOnce(notSent, rp.Method+" "+rp.op(pathOf(rp.Path)))
 			continue
 		}
 		sent++
 		if rp.Accepted() {
-			accepted = appendOnce(accepted, fmt.Sprintf("%s as %s", Write{Method: rp.Method, Path: pathOf(rp.Sent), GraphQL: rp.GraphQL, RPC: rp.RPC}.Label(), whoName(rp.Who)))
+			accepted = appendOnce(accepted, fmt.Sprintf("%s as %s", Write{Method: rp.Method, Path: pathOf(rp.Sent), GraphQL: rp.GraphQL, RPC: rp.RPC, Action: rp.Action}.Label(), whoName(rp.Who)))
 		}
 		if rp.Recreated && rp.Create != nil {
 			recreatedAt = appendOnce(recreatedAt, "POST "+pathOf(rp.Create.Path))
@@ -1442,14 +1742,11 @@ func (r WriteResult) WriteSummary(w *Writes) string {
 		notes = append(notes, "not sent as "+accountsName(r)+" because they make a new object that names no ID or login: "+strings.Join(r.PlainCreates, ", "))
 	}
 	if len(notSent) > 0 {
-		if r.CTested {
-			notes = append(notes, "not sent to every account, because an earlier account's replay was accepted on A's recorded object: "+strings.Join(notSent, ", "))
-		} else {
-			notes = append(notes, "not tested with no login, because B's replay was accepted on A's recorded object: "+strings.Join(notSent, ", "))
-		}
+		// Only B can be left out: no login goes first and C second.
+		notes = append(notes, "not sent as account B, because account C's replay was accepted on A's recorded object: "+strings.Join(notSent, ", "))
 	}
 	if r.CTested && !r.CWorks() && slices.ContainsFunc(r.Replays, func(rp WriteReplay) bool { return rp.Who == AsC && rp.NotSent == "" }) {
-		notes = append(notes, "account C got the same status as a request with no login on every write, so its session may have expired (check "+SessionEnvC+"); no finding of account B's was lowered")
+		notes = append(notes, r.cNote()+"; no finding of account B's was lowered")
 	}
 	if w != nil {
 		if w.Lockout > 0 {
@@ -1473,6 +1770,9 @@ func (r WriteResult) WriteSummary(w *Writes) string {
 	}
 	if stale > 0 {
 		notes = append(notes, fmt.Sprintf("%d write(s) were sent with account A's CSRF token because no page gave the sender one, so a refusal of them says nothing about access control", stale))
+	}
+	if len(notes) == 0 {
+		return s
 	}
 	return s + "; " + strings.Join(notes, "; ")
 }

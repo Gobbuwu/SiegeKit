@@ -306,9 +306,10 @@ jobs:
         # it links (9 requests, measured 2026-11-20; ADR 0032), plus a
         # <file>.map for each of the 8, none of them a source map (17
         # requests, measured 2026-11-21; ADR 0046).
-        # access-control must replay the 12 GET requests (48 sent: A, C, B
-        # and no login), report exactly 4 reads by C, which B gets too: A's
-        # basket and user record, the user list and the complaints, and the
+        # access-control must replay the 12 GET requests (49 sent: A, C, B
+        # and no login, plus A's second read of /rest/user/whoami, whose
+        # answer to B and C lines up with A's word by word), report exactly
+        # 4 reads by C, which B gets too: A's basket and user record, the user list and the complaints, and the
         # password hashes /rest/memories/ gives anyone (measured 2026-11-20,
         # ADR 0035; with C 2026-11-22, ADR 0051).
         # Juice Shop's product search has no rate limit (20 requests all
@@ -359,7 +360,7 @@ jobs:
           jq -e '[.plugins[] | select(.id == "login-throttle" and .requests == 21 and .result == "no limit seen in 20 attempts, all answered 401; the right password answered 200")] | length == 1' "$r"
           jq -e '[.plugins[] | select(.id == "served-secrets" and .requests >= 9 and (.result | startswith("scanned ")) and (.result | contains("tried <file>.map for 8 file(s) naming no source map, 8 not one")))] | length == 1' "$r"
           jq -e '[.findings[] | select(.ruleId == "login-not-limited" and .location.uri == "http://127.0.0.1:3000/rest/user/login")] | length == 1' "$r"
-          jq -e '[.plugins[] | select(.id == "access-control" and .requests == 48 and (.result | contains(": 4 readable by account C or B, 0 only by account B (low),")))] | length == 1' "$r"
+          jq -e '[.plugins[] | select(.id == "access-control" and .requests == 49 and (.result | contains(": 4 readable by account C or B, 0 only by account B (low),")))] | length == 1' "$r"
           jq -e '[.plugins[] | select(.id == "zap-active" and .input == "13 recorded request(s) from a.har")] | length == 1' "$r"
           for u in /rest/products/search /rest/user/login; do
             jq -e --arg u "http://127.0.0.1:3000$u" '[.findings[] | select(.ruleId == "40018" and .severity == "high" and (.location.uri | startswith($u)))] | length > 0' "$r" > /dev/null || { echo "zap-active: no 40018 on $u"; exit 1; }
@@ -505,7 +506,7 @@ jobs:
           jq '.plugins[] | {id, status, cause, reason, input, result, requests, refused, findings}' "$r"
           jq -e '[.plugins[] | select(.status == "ran" and .requests > 0) | .id] | sort == ["access-control", "ffuf", "login-throttle", "nuclei", "nuclei-default-login", "nuclei-intrusive", "public-maps", "rate-limit", "schemathesis", "served-secrets", "zap", "zap-active"]' "$r"
           jq -e '[.plugins[] | select(.id == "login-throttle" and .requests == 21 and .result == "no limit seen in 20 attempts, all answered 401; the right password answered 200")] | length == 1' "$r"
-          jq -e '[.plugins[] | select(.id == "access-control" and .requests == 48 and (.result | contains(": 4 readable by account C or B, 0 only by account B (low),")))] | length == 1' "$r"
+          jq -e '[.plugins[] | select(.id == "access-control" and .requests == 49 and (.result | contains(": 4 readable by account C or B, 0 only by account B (low),")))] | length == 1' "$r"
           jq -e '[.plugins[] | select(.id == "zap-active" and .input == "13 recorded request(s) from a.har")] | length == 1' "$r"
       - name: Every request carried the header
         # Each check's requests, the reachability GET and the spec probes
@@ -691,12 +692,14 @@ jobs:
       - name: C. Block in access-control's last 6 requests
         # SiegeKit's own requests are counted (User-Agent "SiegeKit/<version>"
         # alone): the reachability GET, the 11 spec paths, then
-        # access-control's 48, so the 55th is its 43rd. A's replays that get
-        # the block page are not sent as the other accounts, so 3 requests
-        # get it (measured locally).
+        # access-control's 49 (4 per replay, plus A's second read of
+        # /rest/user/whoami, whose answer to B and C lines up with A's word
+        # by word), so the 56th is its 44th: /rest/memories/ as B. A's
+        # replays that get the block page are not sent as the other
+        # accounts, so 3 requests get it (measured locally).
         run: |
           set -euo pipefail
-          nohup "$RUNNER_TEMP/block-gate" -addr 127.0.0.1:3000 -app http://127.0.0.1:3001 -ua '^SiegeKit/[^ ]+$' -after 55 -log "$RUNNER_TEMP/c.log" > "$RUNNER_TEMP/c.out" 2>&1 &
+          nohup "$RUNNER_TEMP/block-gate" -addr 127.0.0.1:3000 -app http://127.0.0.1:3001 -ua '^SiegeKit/[^ ]+$' -after 56 -log "$RUNNER_TEMP/c.log" > "$RUNNER_TEMP/c.out" 2>&1 &
           echo $! > "$RUNNER_TEMP/gate.pid"
           sleep 1
           cat > "$RUNNER_TEMP/gate-scan.sh" <<'SH'
@@ -720,7 +723,7 @@ jobs:
           blocked=$(grep -c 'page=no blocked=yes' "$RUNNER_TEMP/c.log" || true)
           echo "block pages answered to the check: $blocked"
           test "$blocked" -eq 3
-          jq -e '[.plugins[] | select(.id == "access-control" and .status == "failed" and .stop == "host-blocked" and .requests == 45 and .findings == 4 and (.reason | contains("during this check: after it, the start page answered 403")) and (.reason | contains("; 1 finding(s) read from answers like the block page dropped; the 4 finding(s) reported before the stop are kept")))] | length == 1' "$r"
+          jq -e '[.plugins[] | select(.id == "access-control" and .status == "failed" and .stop == "host-blocked" and .requests == 46 and .findings == 4 and (.reason | contains("during this check: after it, the start page answered 403")) and (.reason | contains("; 1 finding(s) read from answers like the block page dropped; the 4 finding(s) reported before the stop are kept")))] | length == 1' "$r"
           jq -e --arg b "/rest/basket/$A_BASKET" --arg u "/api/Users/$A_USER" '[.findings[] | .ruleId + " " + (.location.uri | ltrimstr("http://127.0.0.1:3000"))] | sort == (["cross-account-read " + $b, "cross-account-read " + $u, "cross-account-read /api/Users", "cross-account-read /api/Complaints"] | sort)' "$r"
       - name: D. Block from ffuf's 1,000th request, on a host that gzips
         run: |
@@ -882,11 +885,13 @@ jobs:
           case "${{ matrix.app }}" in
             juice-shop)
               # Measured on 10 local runs (ADR 0054): 14 recorded writes and
-              # 17 tried, accounts B and C, 6 high and 4 medium; A's 3
+              # 17 tried, accounts B and C, 7 high and 5 medium (with no
+              # login sent first, issue #95: a review posted and a product
+              # changed with no login, gate run 45738560116); A's 3
               # basket items sent again before each of the 3 checkout
               # replays (ADR 0049 item 2d); the browser's Socket.IO polling
               # request not replayed (ADR 0050).
-              jq -e '[.plugins[] | select(.id == "access-control-write" and (.input | startswith("a.har, 14 write(s) recorded as account A, 17 tried on A'"'"'s objects; account B from SIEGEKIT_SESSION_B; account C from SIEGEKIT_SESSION_C")) and (.result | contains(": 6 high, 4 medium, 0 low")) and (.result | contains("9 of account A'"'"'s earlier recorded writes sent again first")) and (.result | contains("1 SockJS or Socket.IO polling requests")))] | length == 1' "$r" ;;
+              jq -e '[.plugins[] | select(.id == "access-control-write" and (.input | startswith("a.har, 14 write(s) recorded as account A, 17 tried on A'"'"'s objects; account B from SIEGEKIT_SESSION_B; account C from SIEGEKIT_SESSION_C")) and (.result | contains(": 7 high, 5 medium, 0 low")) and (.result | contains("9 of account A'"'"'s earlier recorded writes sent again first")) and (.result | contains("1 SockJS or Socket.IO polling requests")))] | length == 1' "$r" ;;
             gitea)
               # Measured (ADR 0051, ADR 0054): carol refused on every write,
               # bob's 3 allowed by design (low), every CSRF write sent with
@@ -907,6 +912,52 @@ jobs:
       - name: App log
         if: failure()
         run: $APP_ENGINE logs app 2>&1 | tail -50
+
+  nextjs:
+    # Issues #95 and #96: access-control and access-control-write on the
+    # login gate's Next.js 16 app (ADR 0062), whose workspace pages are a
+    # Porchlet-like owner's space: writes are Server Actions posted to the
+    # page's URL, refusals answer 200 with the form's state, every answer
+    # carries a fresh CSP nonce, and the browser prefetches routes (RSC).
+    # Three writes and two reads are flawed on purpose.
+    name: Access checks on Next.js Server Actions (auth on ${{ matrix.engine }}${{ matrix.os == 'ubuntu-24.04-arm' && ', arm64' || '' }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        engine: [podman, docker]
+        os: [ubuntu-latest, ubuntu-24.04-arm]
+    env:
+      APP_ENGINE: ${{ matrix.engine }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Platform
+        run: test "$(uname -m)" = "${{ matrix.os == 'ubuntu-24.04-arm' && 'aarch64' || 'x86_64' }}"
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: false
+      - name: Build
+        run: CGO_ENABLED=0 go build -o "$RUNNER_TEMP/siegekit" ./cmd/siegekit
+      - name: App dependencies
+        working-directory: .github/gate/logins
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Recorder
+        # As in the writes job: Playwright 1.63.0 and its own Chromium.
+        working-directory: .github/gate
+        run: |
+          npm ci --ignore-scripts --no-audit --no-fund
+          npx --no-install playwright install chromium
+      - name: Start Supabase Auth and the app
+        run: SK="$RUNNER_TEMP/siegekit" W="$RUNNER_TEMP/logins" REPO="$GITHUB_WORKSPACE" .github/gate/logins/gate.sh start
+      - name: Record and scan the workspace pages
+        run: SK="$RUNNER_TEMP/siegekit" W="$RUNNER_TEMP/logins" REPO="$GITHUB_WORKSPACE" .github/gate/logins/gate.sh writes
+      - name: Logs
+        if: failure()
+        run: SK="$RUNNER_TEMP/siegekit" W="$RUNNER_TEMP/logins" REPO="$GITHUB_WORKSPACE" .github/gate/logins/gate.sh logs
 
   mail:
     # ADR 0056: reset-limit and signup-limit count the emails the app sends

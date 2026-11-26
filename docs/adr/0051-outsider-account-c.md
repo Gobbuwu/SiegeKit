@@ -3,7 +3,7 @@
 - Status: Accepted (owner 2026-11-22 06:29 UTC, decision card "Spec + server code (E2), with B": this ADR is option B, the first of three pull requests; build-time items 3, 4 and 5 are Claude's, measured below and brought to the owner with the pull request)
 - Date: 2026-11-22
 - Amends: [0035](0035-access-control-replay.md) (items 3, 4, 5, 9 and 11: who sends, what is reported, the typed question) and [0049](0049-write-replay.md) (item 3: who sends, and in what order)
-- Amended by: [0052](0052-route-sweep.md) (C is also sent the routes swept from the API spec)
+- Amended by: [0052](0052-route-sweep.md) (C is also sent the routes swept from the API spec), [0074](0074-server-actions-and-rsc-prefetch.md) (item 2: writes are sent with no login first, then C, then B)
 
 ## Context
 

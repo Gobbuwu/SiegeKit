@@ -2,7 +2,7 @@
 
 - Status: Accepted
 - Date: 2026-11-18
-- Amended by: [0013](0013-run-storage.md) (runs stored as JSON files, not SQLite)
+- Amended by: [0013](0013-run-storage.md) (runs stored as JSON files, not SQLite), [0074](0074-server-actions-and-rsc-prefetch.md) (a finding's key can hold a variant; a merged finding keeps the most severe one's own text)
 
 ## Context
 

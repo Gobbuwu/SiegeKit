@@ -421,9 +421,16 @@ type Answer struct {
 }
 
 // Replay is one request replayed as A, as B, as C and with no login.
+// Again is A's second answer, sent when another answer lines up with A's
+// word by word but is not the same: the words that differ between A's two
+// answers are page noise, such as a nonce, and are left out of the
+// comparison (noise, issue #95).
 type Replay struct {
 	Request
 	A, B, C, None    Answer
+	Again            Answer
+	noise            []bool
+	noiseOK          bool
 	BTested, CTested bool
 }
 
@@ -549,6 +556,12 @@ func Check(ctx context.Context, cfg egress.Config, reqs []Request, acc Accounts,
 		if rp.None, err = do(r, none); err != nil {
 			return res, err
 		}
+		if rp.needsAgain() {
+			if rp.Again, err = do(r, r.Header); err != nil {
+				return res, err
+			}
+			rp.noise, rp.noiseOK = pageNoise(rp.A, rp.Again)
+		}
 		res.Replays = append(res.Replays, rp)
 	}
 	return res, nil
@@ -608,16 +621,44 @@ func same(x, y Answer) bool {
 	return ok2xx(x) && ok2xx(y) && x.Status == y.Status && bytes.Equal(x.Body, y.Body)
 }
 
+// lineUp reports whether y is a 2xx answer with A's status that differs
+// from A's only in words (pageWords): then A's request is sent again to
+// see which words are noise.
+func lineUp(a, y Answer) bool {
+	if !ok2xx(a) || !ok2xx(y) || a.Status != y.Status || bytes.Equal(a.Body, y.Body) {
+		return false
+	}
+	r1, w1 := pageWords(a.Body)
+	r2, w2 := pageWords(y.Body)
+	return bytes.Equal(r1, r2) && len(w1) == len(w2)
+}
+
+// needsAgain reports whether an answer of C, B or no login lines up with
+// A's word by word without being the same.
+func (r Replay) needsAgain() bool {
+	return lineUp(r.A, r.C) || lineUp(r.A, r.B) || lineUp(r.A, r.None)
+}
+
+// sameAsA reports whether y is A's answer: the same bytes, or the same
+// outside the words that differed between A's own two answers. A word
+// that A got the same both times, such as the viewer's name, must match.
+func (r Replay) sameAsA(y Answer) bool {
+	if same(r.A, y) {
+		return true
+	}
+	return r.noiseOK && r.noise != nil && ok2xx(r.A) && ok2xx(y) && r.A.Status == y.Status && !changedFrom(r.A, r.noise, y)
+}
+
 // CrossAccount reports whether B got A's data (answer 4a): the same status
 // and body as A, a request with no login refused, and data in the answer.
 func (r Replay) CrossAccount() bool {
-	return r.BTested && same(r.A, r.B) && refused(r.None) && HoldsData(r.A.Body)
+	return r.BTested && r.sameAsA(r.B) && refused(r.None) && r.holds()
 }
 
 // Outsider reports whether C got A's data, by the rule CrossAccount uses
 // for B (ADR 0051).
 func (r Replay) Outsider() bool {
-	return r.CTested && same(r.A, r.C) && refused(r.None) && HoldsData(r.A.Body)
+	return r.CTested && r.sameAsA(r.C) && refused(r.None) && r.holds()
 }
 
 // clearAnswer: the target answered with a status that says what it
@@ -674,13 +715,29 @@ func seenLoggedIn(c, none Answer) bool {
 // NoLogin reports whether a request with no login got A's data (answer 6a):
 // the same status and body as A, with data and A's login name in it.
 func (r Replay) NoLogin(loginName string) bool {
-	return same(r.A, r.None) && HoldsData(r.A.Body) && namesA(r.A.Body, loginName)
+	return r.sameAsA(r.None) && r.holds() && namesA(r.A.Body, loginName)
 }
 
 // namesA reports whether an answer holds A's login name, in any case.
 func namesA(body []byte, loginName string) bool {
 	return loginName != "" && bytes.Contains(bytes.ToLower(body), []byte(strings.ToLower(loginName)))
 }
+
+// holds reports whether A's answer holds data to compare (HoldsData). A
+// Next.js router prefetch of a route's loading boundary or segment tree
+// (Next-Router-Prefetch: 1) is not compared: every account gets the same
+// layout skeleton, and the route's data comes in the page's own request,
+// which is compared (issue #96, ADR 0074). A full prefetch carries no such
+// header in Next.js 16.4.6, and the runtime prefetches (2 and 3) are
+// compared.
+func (r Replay) holds() bool { return HoldsData(r.A.Body) && !skeleton(r.Header) }
+
+// isRSC and isPrefetch report whether a request is a Next.js React Server
+// Components request and a router prefetch; skeleton whether it is a
+// prefetch of a route's loading boundary or segment tree (holds).
+func isRSC(h http.Header) bool      { return h.Get("Rsc") == "1" }
+func isPrefetch(h http.Header) bool { return h.Get("Next-Router-Prefetch") != "" }
+func skeleton(h http.Header) bool   { return isRSC(h) && h.Get("Next-Router-Prefetch") == "1" }
 
 // statusKeys hold an answer's status, not its data.
 var statusKeys = map[string]bool{"status": true, "message": true, "msg": true, "result": true, "error": true, "code": true, "ok": true, "success": true}
@@ -770,6 +827,15 @@ func (r Result) Summary(h *HAR, loginName string, c Counts) string {
 	if r.cSent() && !r.CWorks() {
 		notes = append(notes, "account C got the same status as a request with no login on every request, so its session may have expired (check "+SessionEnvC+"); no finding of account B's was lowered")
 	}
+	skeletons := 0
+	for _, rp := range r.Replays {
+		if ok2xx(rp.A) && skeleton(rp.Header) {
+			skeletons++
+		}
+	}
+	if skeletons > 0 {
+		notes = append(notes, fmt.Sprintf("%d Next.js router prefetch(es) (Next-Router-Prefetch: 1) not compared: every account gets the route's layout, and the page's own request is compared (issue #96)", skeletons))
+	}
 	if h != nil {
 		for _, x := range []struct {
 			n    int
@@ -829,14 +895,41 @@ func hasID(p string) bool {
 	return false
 }
 
+// shownPath is the request's path with its query's names (the values are
+// left out: a query can hold a token), and what kind of request it is when
+// that matters for reading the finding: a Next.js RSC request or prefetch
+// (issue #96).
+func shownPath(r Request) string {
+	pathOnly, query, _ := strings.Cut(r.Path, "?")
+	s := pathOnly
+	if q, err := url.ParseQuery(query); err == nil && len(q) > 0 {
+		names := make([]string, 0, len(q))
+		for k := range q {
+			names = append(names, k+"=…")
+		}
+		sort.Strings(names)
+		s += "?" + strings.Join(names, "&")
+	} else if query != "" {
+		s += "?…"
+	}
+	switch {
+	case isRSC(r.Header) && isPrefetch(r.Header):
+		s += " (a Next.js RSC prefetch: RSC: 1, Next-Router-Prefetch: " + r.Header.Get("Next-Router-Prefetch") + ")"
+	case isRSC(r.Header):
+		s += " (a Next.js RSC request: RSC: 1)"
+	}
+	return s
+}
+
 // Findings turns the replays into findings at the request's URL, without
-// the query. Answers are described by status and size; their content is
+// the query; the message shows the query's names and the request's kind. Answers are described by status and size; their content is
 // not copied into the report.
 func Findings(origin string, res Result, loginName string) []findings.Finding {
 	var out []findings.Finding
 	cWorks := res.CWorks()
 	for _, r := range res.Replays {
 		pathOnly, _, _ := strings.Cut(r.Path, "?")
+		shown := shownPath(r.Request)
 		loc := findings.Location{URI: origin + pathOnly}
 		cwe := "CWE-862"
 		if hasID(r.Path) {
@@ -859,23 +952,25 @@ func Findings(origin string, res Result, loginName string) []findings.Finding {
 			out = append(out, findings.Finding{
 				RuleID:   "cross-account-read",
 				Title:    "Another account can read this data",
-				Message:  fmt.Sprintf("%s %s answered account C (%s, an account outside every space account A shares) exactly as it answered account A (status %d, %d bytes), while a request with no login was refused (status %d). Any logged-in account can likely read account A's data here: broken access control (OWASP API1 and API5).%s This is a heuristic, not proof: compare both answers yourself.%s", r.Method, pathOnly, SessionEnvC, r.A.Status, len(r.A.Body), r.None.Status, also, note),
+				Message:  fmt.Sprintf("%s %s answered account C (%s, an account outside every space account A shares) exactly as it answered account A (status %d, %d bytes), while a request with no login was refused (status %d). Any logged-in account can likely read account A's data here: broken access control (OWASP API1 and API5).%s This is a heuristic, not proof: compare both answers yourself.%s", r.Method, shown, SessionEnvC, r.A.Status, len(r.A.Body), r.None.Status, also, note),
 				Severity: sev,
 				CWEs:     []string{cwe},
 				Location: loc,
+				Variant:  r.Method + " " + shown,
 				Family:   Family,
-				Answers:  answered(r.A, r.B, r.C, r.None),
+				Answers:  answered(r.A, r.B, r.C, r.None, r.Again),
 			})
 		case r.BOnly(cWorks):
 			out = append(out, findings.Finding{
 				RuleID:   "b-only-read",
 				Title:    "Only account B can read this data",
-				Message:  fmt.Sprintf("%s %s answered account B exactly as it answered account A (status %d, %d bytes), while account C (%s, an account outside every space account A shares) did not get it (status %d, %d bytes) and a request with no login was refused (status %d). B has access C lacks: expected if B is a member of a space A shares with it, such as a group, team, project or conversation; a flaw if B should not have it, such as a role or group the app trusts wrongly. Check it by hand.", r.Method, pathOnly, r.A.Status, len(r.A.Body), SessionEnvC, r.C.Status, len(r.C.Body), r.None.Status),
+				Message:  fmt.Sprintf("%s %s answered account B exactly as it answered account A (status %d, %d bytes), while account C (%s, an account outside every space account A shares) did not get it (status %d, %d bytes) and a request with no login was refused (status %d). B has access C lacks: expected if B is a member of a space A shares with it, such as a group, team, project or conversation; a flaw if B should not have it, such as a role or group the app trusts wrongly. Check it by hand.", r.Method, shown, r.A.Status, len(r.A.Body), SessionEnvC, r.C.Status, len(r.C.Body), r.None.Status),
 				Severity: findings.Low,
 				CWEs:     []string{cwe},
 				Location: loc,
+				Variant:  r.Method + " " + shown,
 				Family:   Family,
-				Answers:  answered(r.A, r.B, r.C, r.None),
+				Answers:  answered(r.A, r.B, r.C, r.None, r.Again),
 			})
 		case r.CrossAccount():
 			if r.CTested {
@@ -889,33 +984,36 @@ func Findings(origin string, res Result, loginName string) []findings.Finding {
 			out = append(out, findings.Finding{
 				RuleID:   "cross-account-read",
 				Title:    "Another account can read this data",
-				Message:  fmt.Sprintf("%s %s answered account B exactly as it answered account A (status %d, %d bytes), while a request with no login was refused (status %d). Account B can likely read account A's data here: broken access control (OWASP API1 and API5). This is a heuristic, not proof: compare both answers yourself.%s", r.Method, pathOnly, r.A.Status, len(r.A.Body), r.None.Status, note),
+				Message:  fmt.Sprintf("%s %s answered account B exactly as it answered account A (status %d, %d bytes), while a request with no login was refused (status %d). Account B can likely read account A's data here: broken access control (OWASP API1 and API5). This is a heuristic, not proof: compare both answers yourself.%s", r.Method, shown, r.A.Status, len(r.A.Body), r.None.Status, note),
 				Severity: sev,
 				CWEs:     []string{cwe},
 				Location: loc,
+				Variant:  r.Method + " " + shown,
 				Family:   Family,
-				Answers:  answered(r.A, r.B, r.None),
+				Answers:  answered(r.A, r.B, r.None, r.Again),
 			})
 		case r.NoLogin(loginName):
 			out = append(out, findings.Finding{
 				RuleID:   "no-login-read",
 				Title:    "Account data is readable with no login",
-				Message:  fmt.Sprintf("%s %s answered a request with no login exactly as it answered account A (status %d, %d bytes), and the answer holds A's login name. Anyone may be able to read this account's data: missing authentication (OWASP API2). Public pages such as profiles or commit lists also name their author by design, so check it by hand.", r.Method, pathOnly, r.A.Status, len(r.A.Body)),
+				Message:  fmt.Sprintf("%s %s answered a request with no login exactly as it answered account A (status %d, %d bytes), and the answer holds A's login name. Anyone may be able to read this account's data: missing authentication (OWASP API2). Public pages such as profiles or commit lists also name their author by design, so check it by hand.", r.Method, shown, r.A.Status, len(r.A.Body)),
 				Severity: findings.Medium,
 				CWEs:     []string{"CWE-306"},
 				Location: loc,
+				Variant:  r.Method + " " + shown,
 				Family:   Family,
-				Answers:  answered(r.A, r.None),
+				Answers:  answered(r.A, r.None, r.Again),
 			})
 		}
 		if fields := r.NoLoginSecrets(); len(fields) > 0 {
 			out = append(out, findings.Finding{
 				RuleID:   "no-login-secret",
 				Title:    "Secrets are readable with no login",
-				Message:  fmt.Sprintf("%s %s answered a request with no login (status %d, %d bytes) with fields named like secrets that hold a value: %s. Anyone can likely read them, such as password hashes, tokens or keys: excessive data exposure (OWASP API3). The values are not copied into this report; check the answer yourself.", r.Method, pathOnly, r.None.Status, len(r.None.Body), strings.Join(fields, ", ")),
+				Message:  fmt.Sprintf("%s %s answered a request with no login (status %d, %d bytes) with fields named like secrets that hold a value: %s. Anyone can likely read them, such as password hashes, tokens or keys: excessive data exposure (OWASP API3). The values are not copied into this report; check the answer yourself.", r.Method, shown, r.None.Status, len(r.None.Body), strings.Join(fields, ", ")),
 				Severity: findings.High,
 				CWEs:     []string{"CWE-200"},
 				Location: loc,
+				Variant:  r.Method + " " + shown,
 				Family:   Family,
 				Answers:  answered(r.None),
 			})

@@ -58,7 +58,9 @@ func TestAuthzFindsPlantedIssues(t *testing.T) {
 	}
 	cfg := egress.Config{Target: tu, Addrs: []netip.Addr{netip.MustParseAddr("127.0.0.1")}, Version: "test", ReadOnly: true}
 	res, err := authz.Check(context.Background(), cfg, h.Requests, authz.Accounts{B: http.Header{"Authorization": {"Bearer token-b"}}}, 100)
-	if err != nil || res.Requests != 21 {
+	// 21, and A's /api/my/orders again: B's answer lines up with A's word
+	// by word (another owner), so A's is read twice (issue #95).
+	if err != nil || res.Requests != 22 {
 		t.Fatalf("%+v %v", res, err)
 	}
 	found := map[string]bool{}
