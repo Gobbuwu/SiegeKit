@@ -886,6 +886,15 @@ type WriteReplay struct {
 	ReadPath                     string
 	Before, Again, Answer, After Answer
 	noise                        []bool
+	// Settle: when After differs from Before, A reads ReadPath once more.
+	// A value that differs only on some answers (a render time, a
+	// "seconds ago") can match on the two reads before and still differ
+	// after; the words that differ between After and Settle are noise
+	// too, and After and Settle that cannot be lined up prove nothing
+	// (measured on Gitea's footer, issue #95).
+	Settle      Answer
+	settleNoise []bool
+	unsettled   bool
 	// Signals are the write answer's success headers (successSignals).
 	Signals http.Header
 	// MethodIgnored: the PUT, PATCH or DELETE got the page a GET of its URL
@@ -1139,6 +1148,14 @@ func WriteCheck(ctx context.Context, cfg egress.Config, ws []Write, acc Accounts
 				if rp.After, err = do(http.MethodGet, rp.ReadPath, readHeader, nil); err != nil {
 					return res, err
 				}
+				if rp.changedOnce() {
+					if rp.Settle, err = do(http.MethodGet, rp.ReadPath, readHeader, nil); err != nil {
+						return res, err
+					}
+					var ok bool
+					rp.settleNoise, ok = pageNoise(rp.After, rp.Settle)
+					rp.unsettled = !ok
+				}
 			}
 			// A PUT, PATCH or DELETE answered with a page: the sender reads
 			// the URL, and the same page means the app ignored the method
@@ -1386,7 +1403,28 @@ func (r WriteReplay) redirectSignals() bool {
 // readChanged reports whether A's read after the write differs from the
 // reads before it, outside their noise.
 func (r WriteReplay) readChanged() bool {
+	return r.changedOnce() && !r.unsettled && changedFrom(r.Before, orNoise(r.noise, r.settleNoise), r.After)
+}
+
+// changedOnce reports whether After differs from Before outside the words
+// that differed between the two reads before.
+func (r WriteReplay) changedOnce() bool {
 	return r.Read && !r.Noisy && ok2xx(r.Before) && r.After.Err == "" && r.After.Status != 0 && changedFrom(r.Before, r.noise, r.After)
+}
+
+// orNoise marks a word as noise when either a or b does; nil is no noise.
+func orNoise(a, b []bool) []bool {
+	if a == nil {
+		return b
+	}
+	if b == nil || len(a) != len(b) {
+		return a
+	}
+	out := make([]bool, len(a))
+	for i := range a {
+		out[i] = a[i] || b[i]
+	}
+	return out
 }
 
 // pageRead is the first recorded GET of the POST's own path (without its
@@ -1564,7 +1602,7 @@ func WriteFindings(origin string, res WriteResult) []findings.Finding {
 		// Each operation is its own finding: every Server Action of a page
 		// posts to the page's URL (issue #95).
 		f := findings.Finding{Severity: sev, Location: findings.Location{URI: origin + pathOnly}, Family: Family, Variant: r.Method + " " + label,
-			Answers: answered(r.Answer, r.Before, r.Again, r.After)}
+			Answers: answered(r.Answer, r.Before, r.Again, r.After, r.Settle)}
 		readOf := "the same URL"
 		switch {
 		case r.Parent != "" && r.ReadPath == r.Parent:
@@ -1572,7 +1610,7 @@ func WriteFindings(origin string, res WriteResult) []findings.Finding {
 		case pathOf(r.ReadPath) != pathOf(r.Sent):
 			readOf = pathOf(r.ReadPath)
 		}
-		proof := fmt.Sprintf("Account A read %s twice before the replay and once after: it changed (status %d, %d bytes before; status %d, %d bytes after), outside any part that differed between the two reads before.", readOf, r.Before.Status, len(r.Before.Body), r.After.Status, len(r.After.Body))
+		proof := fmt.Sprintf("Account A read %s twice before the replay and twice after: it changed (status %d, %d bytes before; status %d, %d bytes after), outside any part that differed between the two reads before or the two after.", readOf, r.Before.Status, len(r.Before.Body), r.After.Status, len(r.After.Body))
 		if sev != findings.High {
 			proof = "SiegeKit could not see account A's data change (only a write whose URL or object A can read is checked, and a page that differs on every read in more than a few values shows nothing), and some apps allow this by design, such as a comment on a public item: check it by hand."
 		}

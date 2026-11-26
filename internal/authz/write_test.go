@@ -1122,3 +1122,76 @@ func TestSameAnswerEachRun(t *testing.T) {
 		}
 	}
 }
+
+// TestWriteCheckSettle: a page value that differs on only some answers (a
+// render time, as Gitea's footer shows) matches on A's two reads before
+// B's DELETE and differs after it, though the DELETE changed nothing. The
+// settle read after shows it is noise, so the replay is medium, not high,
+// and the state rule does not accept it (issue #95, measured on Gitea).
+func TestWriteCheckSettle(t *testing.T) {
+	var mu sync.Mutex
+	// tick is the footer's render time: the same on every read until B's
+	// DELETE, then new on each read.
+	tick, ticking, deleted := 1, false, false
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		defer mu.Unlock()
+		u := map[string]string{"Bearer A": "alice", "Bearer B": "bob"}[r.Header.Get("Authorization")]
+		if u == "" {
+			http.Error(w, "log in", http.StatusUnauthorized)
+			return
+		}
+		switch {
+		case r.Method == "GET" && r.URL.Path == "/items/7":
+			if ticking {
+				tick++
+			}
+			fmt.Fprintf(w, "<p>item 7 deleted=%v</p><footer>%dms</footer>", deleted, tick)
+		case r.Method == "DELETE" && r.URL.Path == "/items/7":
+			if u == "alice" {
+				deleted = true
+			}
+			ticking = ticking || u == "bob"
+			fmt.Fprint(w, "<p>ok</p>") // B is refused with 200 and nothing changes
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+	noSleep(t)
+	a := map[string]string{"Authorization": "Bearer A"}
+	u := srv.URL
+	har := writeHAR(t, []writeEntry{
+		{method: "GET", url: u + "/items/7", headers: a, status: 200, answer: "<p>item 7 deleted=false</p><footer>1ms</footer>"},
+		{method: "DELETE", url: u + "/items/7", headers: a, status: 200, answer: "<p>ok</p>"},
+	})
+	tu := mustTarget(t, u+"/")
+	ws, err := ParseWrites(har, tu)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := egress.Config{Target: tu, Addrs: []netip.Addr{netip.MustParseAddr("127.0.0.1")}, Version: "test"}
+	res, err := WriteCheck(context.Background(), cfg, ws.Writes, Accounts{B: http.Header{"Authorization": {"Bearer B"}}}, "alice", 10, target.Local)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var b *WriteReplay
+	for i := range res.Replays {
+		if res.Replays[i].Who == AsB {
+			b = &res.Replays[i]
+		}
+	}
+	if b == nil {
+		t.Fatalf("B not sent: %+v", res.Replays)
+	}
+	if !b.changedOnce() || b.Settle.Status != 200 || b.readChanged() || b.acceptedBy(acceptState) {
+		t.Errorf("once %v settle %d changed %v state %v", b.changedOnce(), b.Settle.Status, b.readChanged(), b.acceptedBy(acceptState))
+	}
+	var got []string
+	for _, f := range WriteFindings(u, res) {
+		got = append(got, fmt.Sprintf("%s %s %v", f.RuleID, strings.TrimPrefix(f.Location.URI, u), f.Severity))
+	}
+	if want := []string{"cross-account-write /items/7 medium"}; !slices.Equal(got, want) {
+		t.Errorf("findings %q, want %q", got, want)
+	}
+}

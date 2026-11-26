@@ -269,10 +269,33 @@ func measureWrites(res WriteResult) {
 	defer out.Close()
 	fmt.Fprintf(out, "MEASURE write active=%s requests=%d\n", acceptRule, res.Requests)
 	for _, r := range res.Replays {
-		line := fmt.Sprintf("MEASURE write %s who=%s notsent=%v status=%d sig=%v rec=%v read=%v noisy=%v changed=%v ignored=%v", r.Label(), whoName(r.Who), r.NotSent != "", r.Answer.Status, r.Signals, r.RecordedSignals, r.Read, r.Noisy, r.readChanged(), r.MethodIgnored)
+		line := fmt.Sprintf("MEASURE write %s who=%s notsent=%v status=%d sig=%v rec=%v read=%v noisy=%v once=%v changed=%v ignored=%v", r.Label(), whoName(r.Who), r.NotSent != "", r.Answer.Status, r.Signals, r.RecordedSignals, r.Read, r.Noisy, r.changedOnce(), r.readChanged(), r.MethodIgnored)
 		for _, rule := range []string{acceptAny, acceptNext, acceptSignal, acceptState, acceptHybrid} {
 			line += fmt.Sprintf(" %s=%v", rule, r.NotSent == "" && r.acceptedBy(rule))
 		}
 		fmt.Fprintln(out, line)
+		if os.Getenv("SIEGEKIT_PROTO_DIFF") != "" && r.changedOnce() {
+			r1, w1 := pageWords(r.Before.Body)
+			r2, w2 := pageWords(r.After.Body)
+			fmt.Fprintf(out, "DIFF rest-equal=%v words=%d/%d\n", bytes.Equal(r1, r2), len(w1), len(w2))
+			if len(w1) == len(w2) {
+				for i := range w1 {
+					if !bytes.Equal(w1[i], w2[i]) {
+						fmt.Fprintf(out, "DIFF word %d: %q -> %q\n", i, w1[i], w2[i])
+					}
+				}
+			}
+			if _, w3 := pageWords(r.Settle.Body); len(w3) == len(w2) {
+				for i := range w2 {
+					if !bytes.Equal(w2[i], w3[i]) {
+						fmt.Fprintf(out, "DIFF settle word %d: %q -> %q\n", i, w2[i], w3[i])
+					}
+				}
+			} else {
+				fmt.Fprintf(out, "DIFF settle words=%d unsettled=%v\n", len(w3), r.unsettled)
+			}
+			_ = os.WriteFile(f+"."+r.Method+".before", r.Before.Body, 0o600)
+			_ = os.WriteFile(f+"."+r.Method+".after", r.After.Body, 0o600)
+		}
 	}
 }

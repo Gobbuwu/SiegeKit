@@ -258,7 +258,7 @@ func TestWriteCheckWithC(t *testing.T) {
 		t.Errorf("findings %v", got)
 	}
 	for _, f := range fs {
-		if f.RuleID == "b-only-write" && (!strings.Contains(f.Message, "refused (status 403)") || !strings.Contains(f.Message, "Account A read the same URL twice before the replay and once after: it changed")) {
+		if f.RuleID == "b-only-write" && (!strings.Contains(f.Message, "refused (status 403)") || !strings.Contains(f.Message, "Account A read the same URL twice before the replay and twice after: it changed")) {
 			t.Errorf("%s", f.Message)
 		}
 		if f.RuleID == "cross-account-write" && !strings.Contains(f.Message, "as account C (SIEGEKIT_SESSION_C") {
