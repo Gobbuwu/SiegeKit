@@ -29,3 +29,19 @@ func TestSameButNoise(t *testing.T) {
 		t.Error("different status: same")
 	}
 }
+
+// TestIsPage: only an HTML page is read again for a layout that lines up.
+func TestIsPage(t *testing.T) {
+	for b, want := range map[string]bool{
+		"<!DOCTYPE html><html>":   true,
+		"\n  <!doctype HTML>":     true,
+		"<html lang=\"en\">":      true,
+		`{"data":{"id":1}}`:       false,
+		"<?xml version=\"1.0\"?>": false,
+		"":                        false,
+	} {
+		if got := isPage([]byte(b)); got != want {
+			t.Errorf("isPage(%q) = %v, want %v", b, got, want)
+		}
+	}
+}

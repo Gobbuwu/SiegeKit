@@ -250,6 +250,17 @@ SH
   if [ "$code" -ne 0 ] && [ "$code" -ne 3 ]; then tail -30 "$W/ws-scan.log"; return 1; fi
   jq -r '.plugins[] | "  \(.id): \(.status), \(.requests // 0) requests, \(.findings // 0) findings: \(.result // .reason)"' "$W/report-ws/report.json"
   jq -r '.findings[] | "  \(.severity) \(.ruleId) \(.message[0:220])"' "$W/report-ws/report.json"
+  # The known answers (gate runs 45738560116 and 45746228551, all 4
+  # platforms; ADR 0074): C adds a note, sets the webhook and sends
+  # feedback, which anyone may send with no login too; C reads the notes
+  # page and /latest's RSC answer. The prefetches of /w, /w/id, /w/id/notes
+  # and /latest are layout skeletons every account gets, and C's refused
+  # Server Actions (rename, archive, topic, add member) answer 200 with the
+  # form's state: none of them is a finding (issues #95 and #96).
+  jq -e '[.findings[] | "\(.severity) \(.ruleId) \(.location.uri | sub("^https?://[^/]+"; "") | gsub("[0-9a-f]{8}-[0-9a-f-]{27}"; "ID"))"] | sort ==
+    ["high cross-account-read /w/ID/notes", "medium cross-account-read /latest",
+     "medium cross-account-write /p/ID", "medium cross-account-write /w/ID", "medium cross-account-write /w/ID", "medium no-login-write /p/ID"]' "$W/report-ws/report.json"
+  jq -e '[.plugins[] | select(.id == "access-control" and (.result | test("; [0-9]+ Next.js router prefetch\\(es\\) \\(Next-Router-Prefetch: 1\\) not compared")))] | length == 1' "$W/report-ws/report.json"
 }
 
 case ${1:-} in

@@ -147,3 +147,15 @@ func linedUp(x, y Answer) bool {
 	r2, w2 := pageWords(y.Body)
 	return bytes.Equal(r1, r2) && len(w1) == len(w2)
 }
+
+// isPage reports whether a body is an HTML page. Only a page is read again
+// for a layout that lines up: a streamed page can come in more than one
+// layout (Porchlet's workspace page, issue #95), and a JSON API's changed
+// answer never lines up, so reading it again costs requests for nothing
+// (Juice Shop: 46 more in gate run 45746228551).
+func isPage(b []byte) bool {
+	b = bytes.TrimLeft(b, " \t\r\n")
+	n := min(len(b), 14)
+	h := bytes.ToLower(b[:n])
+	return bytes.HasPrefix(h, []byte("<!doctype html")) || bytes.HasPrefix(h, []byte("<html"))
+}

@@ -24,6 +24,7 @@ type writeEntry struct {
 	status                  int
 	answer                  string
 	headers                 map[string]string
+	answerHeaders           map[string]string
 }
 
 func writeHAR(t *testing.T, es []writeEntry) []byte {
@@ -43,12 +44,16 @@ func writeHAR(t *testing.T, es []writeEntry) []byte {
 			hs = append(hs, hdr{k, v})
 		}
 		req := map[string]any{"method": e.method, "url": e.url, "headers": hs}
+		var ahs []hdr
+		for k, v := range e.answerHeaders {
+			ahs = append(ahs, hdr{k, v})
+		}
 		if e.body != "" || e.mime != "" {
 			req["postData"] = map[string]any{"mimeType": e.mime, "text": e.body}
 		}
 		f.Log.Entries = append(f.Log.Entries, map[string]any{
 			"request":  req,
-			"response": map[string]any{"status": e.status, "content": map[string]any{"mimeType": "application/json", "text": e.answer}},
+			"response": map[string]any{"status": e.status, "headers": ahs, "content": map[string]any{"mimeType": "application/json", "text": e.answer}},
 		})
 	}
 	b, err := json.Marshal(f)
@@ -1184,8 +1189,8 @@ func TestWriteCheckSettle(t *testing.T) {
 	if b == nil {
 		t.Fatalf("B not sent: %+v", res.Replays)
 	}
-	if !b.changedOnce() || b.Settle.Status != 200 || b.readChanged() || b.acceptedBy(acceptState) {
-		t.Errorf("once %v settle %d changed %v state %v", b.changedOnce(), b.Settle.Status, b.readChanged(), b.acceptedBy(acceptState))
+	if !b.changedOnce() || b.Settle.Status != 200 || b.readChanged() {
+		t.Errorf("once %v settle %d changed %v", b.changedOnce(), b.Settle.Status, b.readChanged())
 	}
 	var got []string
 	for _, f := range WriteFindings(u, res) {
@@ -1223,17 +1228,17 @@ func TestWriteCheckMethodIgnored(t *testing.T) {
 			bGets++
 		}
 		if r.Header.Get("Authorization") != "Bearer B" || r.Method != "GET" || bGets%2 == 0 {
-			fmt.Fprintf(w, `<script nonce="%s">push("a")</script><p>item 7</p>`, nonce)
+			fmt.Fprintf(w, `<!DOCTYPE html><script nonce="%s">push("a")</script><p>item 7</p>`, nonce)
 			return
 		}
-		fmt.Fprintf(w, `<script nonce="%s">push("a");</script><script nonce="%s">push("b")</script><p>item 7</p>`, nonce, nonce)
+		fmt.Fprintf(w, `<!DOCTYPE html><script nonce="%s">push("a");</script><script nonce="%s">push("b")</script><p>item 7</p>`, nonce, nonce)
 	}))
 	defer srv.Close()
 	noSleep(t)
 	a := map[string]string{"Authorization": "Bearer A"}
 	u := srv.URL
 	har := writeHAR(t, []writeEntry{
-		{method: "GET", url: u + "/items/7", headers: a, status: 200, answer: `<p>item 7</p>`},
+		{method: "GET", url: u + "/items/7", headers: a, status: 200, answer: `<!DOCTYPE html><p>item 7</p>`},
 	})
 	tu := mustTarget(t, u+"/")
 	ws, err := ParseWrites(har, tu)
@@ -1290,10 +1295,10 @@ func TestWriteCheckLayouts(t *testing.T) {
 					afterB++
 				}
 				if afterB == 1 || afterB == 2 {
-					fmt.Fprintf(w, `<s>push("a");</s><s>push("deleted=%v")</s>`, deleted)
+					fmt.Fprintf(w, `<!DOCTYPE html><s>push("a");</s><s>push("deleted=%v")</s>`, deleted)
 					return
 				}
-				fmt.Fprintf(w, `<s>push("a deleted=%v")</s>`, deleted)
+				fmt.Fprintf(w, `<!DOCTYPE html><s>push("a deleted=%v")</s>`, deleted)
 			case r.Method == "DELETE" && r.URL.Path == "/items/7":
 				if u == "bob" {
 					afterB = 0
@@ -1308,7 +1313,7 @@ func TestWriteCheckLayouts(t *testing.T) {
 		a := map[string]string{"Authorization": "Bearer A"}
 		u := srv.URL
 		har := writeHAR(t, []writeEntry{
-			{method: "GET", url: u + "/items/7", headers: a, status: 200, answer: `<s>push("a deleted=false")</s>`},
+			{method: "GET", url: u + "/items/7", headers: a, status: 200, answer: `<!DOCTYPE html><s>push("a deleted=false")</s>`},
 			{method: "DELETE", url: u + "/items/7", headers: a, status: 200, answer: `{"ok":true}`},
 		})
 		tu := mustTarget(t, u+"/")
@@ -1333,5 +1338,87 @@ func TestWriteCheckLayouts(t *testing.T) {
 		if !slices.Equal(got, want) {
 			t.Errorf("deleted %v: findings %q, want %q", real, got, want)
 		}
+	}
+}
+
+// TestWriteCheckServerAction: Next.js answers a refused Server Action with
+// 200 and the form's state (issue #95). A replay is accepted when it gets
+// a success header A's recorded answer had, or, when A's answer had none,
+// when A's read of the page changed. Other writes keep the 2xx rule.
+func TestWriteCheckServerAction(t *testing.T) {
+	var mu sync.Mutex
+	title, notes := "t", 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		defer mu.Unlock()
+		who := map[string]string{"Bearer A": "alice", "Bearer B": "bob", "Bearer C": "carol"}[r.Header.Get("Authorization")]
+		if who == "" {
+			http.Redirect(w, r, "/login", http.StatusSeeOther)
+			return
+		}
+		switch {
+		case r.Method == "GET" && r.URL.Path == "/w/1":
+			fmt.Fprintf(w, "<!DOCTYPE html><h1>%s</h1><p>%d notes</p>", title, notes)
+		case r.Method == "POST" && r.URL.Path == "/w/1":
+			member := who != "carol"
+			switch r.Header.Get("Next-Action") {
+			case "rename":
+				if !member {
+					fmt.Fprint(w, `0:{"error":"not allowed"}`)
+					return
+				}
+				title = "renamed"
+				w.Header().Set("X-Action-Redirect", "/w/1?notice=renamed;push")
+				fmt.Fprint(w, `0:{}`)
+			case "note": // the flaw: anyone may add a note
+				notes++
+				fmt.Fprint(w, `0:{}`)
+			case "topic":
+				if member {
+					title += "!"
+				}
+				fmt.Fprint(w, `0:{}`)
+			}
+		case r.Method == "POST" && r.URL.Path == "/w/1/feedback": // not a Server Action
+			w.WriteHeader(http.StatusCreated)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+	noSleep(t)
+	a := map[string]string{"Authorization": "Bearer A"}
+	act := func(id string) map[string]string {
+		return map[string]string{"Authorization": "Bearer A", "Next-Action": id}
+	}
+	u := srv.URL
+	har := writeHAR(t, []writeEntry{
+		{method: "GET", url: u + "/w/1", headers: a, status: 200, answer: "<!DOCTYPE html><h1>t</h1><p>0 notes</p>"},
+		{method: "POST", url: u + "/w/1", headers: act("rename"), mime: "text/plain", body: `["x"]`, status: 200, answer: "0:{}", answerHeaders: map[string]string{"X-Action-Redirect": "/w/1?notice=renamed;push"}},
+		{method: "POST", url: u + "/w/1", headers: act("note"), mime: "text/plain", body: `["n"]`, status: 200, answer: "0:{}"},
+		{method: "POST", url: u + "/w/1", headers: act("topic"), mime: "text/plain", body: `["p"]`, status: 200, answer: "0:{}"},
+		{method: "POST", url: u + "/w/1/feedback", headers: a, mime: "application/json", body: `{"f":1}`, status: 201},
+	})
+	tu := mustTarget(t, u+"/")
+	ws, err := ParseWrites(har, tu)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := egress.Config{Target: tu, Addrs: []netip.Addr{netip.MustParseAddr("127.0.0.1")}, Version: "test"}
+	res, err := WriteCheck(context.Background(), cfg, ws.Writes, Accounts{C: http.Header{"Authorization": {"Bearer C"}}}, "alice", 10, target.Local)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, rp := range res.Replays {
+		if rp.Accepted() {
+			got = append(got, rp.Method+" "+rp.Path+" "+rp.Action+" "+whoName(rp.Who))
+		}
+	}
+	// carol's rename (200 without A's x-action-redirect) and topic (A's
+	// page unchanged) are refusals; her note changed A's page.
+	want := []string{"POST /w/1 note account C", "POST /w/1/feedback  account C"}
+	if !slices.Equal(got, want) {
+		t.Errorf("accepted %q, want %q", got, want)
 	}
 }

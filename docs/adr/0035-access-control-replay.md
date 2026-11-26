@@ -4,7 +4,7 @@
 - Date: 2026-11-20
 - Amends: [0011](0011-app-logic-and-ai-checks.md) item 1 (how requests are found, what is replayed, what counts as a finding)
 - Amended: 2026-11-21, item 11 (typed confirmation that the accounts are test accounts; owner decision on Q5)
-- Amended by: [0044](0044-typed-confirmations-limit.md) (what the typed confirmation can stop), [0047](0047-recorded-requests-to-zap.md) (the recording also goes to `zap-active`, and the typed question covers it), [0051](0051-outsider-account-c.md) (account C outside A's shared spaces; what only B gets is low), [0052](0052-route-sweep.md) (spec routes carry every header of A's request; on local targets every GET route of the spec, filled with IDs from the recording)
+- Amended by: [0044](0044-typed-confirmations-limit.md) (what the typed confirmation can stop), [0047](0047-recorded-requests-to-zap.md) (the recording also goes to `zap-active`, and the typed question covers it), [0051](0051-outsider-account-c.md) (account C outside A's shared spaces; what only B gets is low), [0052](0052-route-sweep.md) (spec routes carry every header of A's request; on local targets every GET route of the spec, filled with IDs from the recording), [0074](0074-server-actions-and-rsc-prefetch.md) (answers compared outside page noise; Next.js router prefetches not compared)
 
 ## Context
 

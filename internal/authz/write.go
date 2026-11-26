@@ -20,7 +20,6 @@ import (
 	"math"
 	"net/http"
 	"net/url"
-	"os"
 	"regexp"
 	"slices"
 	"sort"
@@ -67,8 +66,9 @@ type Write struct {
 	// of a page posts to the page's URL, so the ID tells them apart.
 	Action string
 	// PageRead is a recorded GET of a POST's own path, when the recording
-	// has one: the page a Server Action or form posts to. With the state
-	// rule (acceptState), A reads it before and after the POST.
+	// has one: the page a Server Action or form posts to. A reads it before
+	// and after a Server Action whose recorded answer had no success header
+	// (Accepted).
 	PageRead       string
 	PageReadHeader http.Header
 	// CSRF: the write carries an anti-forgery token from A's session, in
@@ -1082,7 +1082,7 @@ func WriteCheck(ctx context.Context, cfg egress.Config, ws []Write, acc Accounts
 				rp.Read, rp.ReadPath = true, w.Parent
 				readHeader = w.ParentHeader.Clone()
 				readHeader.Del("Content-Type")
-			} else if w.Method == http.MethodPost && w.PageRead != "" && (acceptRule == acceptState || (acceptRule == acceptHybrid || acceptRule == acceptAction && w.Action != "") && !(WriteReplay{Write: w}).hadSignal()) {
+			} else if w.Method == http.MethodPost && w.PageRead != "" && w.Action != "" && !(WriteReplay{Write: w}).hadSignal() {
 				rp.Read, rp.ReadPath = true, w.PageRead
 				readHeader = w.PageReadHeader.Clone()
 				readHeader.Del("Content-Type")
@@ -1167,11 +1167,11 @@ func WriteCheck(ctx context.Context, cfg egress.Config, ws []Write, acc Accounts
 					return res, err
 				}
 				rp.Reads++
-				// In another layout than the reads before, with the same
-				// status: A reads again, at most maxLayoutReads more times,
+				// An HTML page in another layout than the reads before, with
+				// the same status: A reads again, at most maxLayoutReads more times,
 				// for one that lines up. A change of layout that stays is a
 				// change.
-				for n := 0; n < maxLayoutReads && rp.After.Status == rp.Before.Status && !linedUp(rp.Before, rp.After); n++ {
+				for n := 0; n < maxLayoutReads && isPage(rp.Before.Body) && rp.After.Status == rp.Before.Status && !linedUp(rp.Before, rp.After); n++ {
 					if rp.After, err = do(http.MethodGet, rp.ReadPath, readHeader, nil); err != nil {
 						return res, err
 					}
@@ -1197,9 +1197,12 @@ func WriteCheck(ctx context.Context, cfg egress.Config, ws []Write, acc Accounts
 				gh.Del("Content-Type")
 				// A streamed page can come in more than one layout (Porchlet's
 				// workspace page: two, at random, for GET and DELETE alike),
-				// so the sender reads it until one lines up, at most
-				// maxPageReads times, while the status stays the same.
-				for rp.PageReads < maxPageReads && !rp.MethodIgnored {
+				// so the sender reads an HTML page until one lines up, at
+				// most maxPageReads times, while the status stays the same.
+				// Other answers are read once: a JSON API's answer to a PUT
+				// differs from its GET on every read (Juice Shop's
+				// /api/Products/1, gate run 45746228551).
+				for rp.PageReads < maxPageReads && !rp.MethodIgnored && (rp.PageReads == 0 || isPage(rp.Answer.Body)) {
 					if rp.Page, err = do(http.MethodGet, sw.Path, gh, nil); err != nil {
 						return res, err
 					}
@@ -1232,7 +1235,6 @@ func WriteCheck(ctx context.Context, cfg egress.Config, ws []Write, acc Accounts
 			res.Replays = append(res.Replays, rp)
 		}
 	}
-	measureWrites(res)
 	return res, nil
 }
 
@@ -1281,33 +1283,22 @@ func newID(a Answer, field []string, rpc bool) (string, bool) {
 // answer a successful write with 303 (4 of 13 Gitea web writes, measured
 // 2026-11-21, ADR 0049). A 2xx answer that reports a refusal inside is
 // not accepted: GraphQL errors, a "success" that is false, or a method
-// call's error (ADR 0050).
-func (r WriteReplay) Accepted() bool { return r.acceptedBy(acceptRule) }
-
-// acceptedBy is Accepted under one rule of card 1 (prototype).
-func (r WriteReplay) acceptedBy(rule string) bool {
+// call's error (ADR 0050). A Next.js Server Action answers a refusal with
+// 200 and the form's state, so it needs more (issue #95, ADR 0074): one
+// of the success headers A's recorded answer had (x-action-redirect,
+// x-action-revalidated), or, when A's answer had none, a change in A's
+// read of the page.
+func (r WriteReplay) Accepted() bool {
 	if !r.acceptedAny() {
 		return false
 	}
-	switch rule {
-	case acceptNext:
-		return r.Action == "" || r.nextSignals()
-	case acceptSignal:
-		return r.redirectSignals()
-	case acceptState:
-		return r.readChanged()
-	case acceptAction:
-		if r.Action == "" {
-			return true
-		}
-		return r.acceptedBy(acceptHybrid)
-	case acceptHybrid:
-		if r.hadSignal() {
-			return r.anySignal()
-		}
-		return !r.Read || r.Noisy || !ok2xx(r.Before) || r.readChanged()
+	if r.Action == "" {
+		return true
 	}
-	return true
+	if r.hadSignal() {
+		return r.anySignal()
+	}
+	return !r.Read || r.Noisy || !ok2xx(r.Before) || r.readChanged()
 }
 
 // hadSignal: A's recorded answer had a success header ("0" for
@@ -1321,7 +1312,7 @@ func (r WriteReplay) hadSignal() bool {
 	return false
 }
 
-// anySignal (A4): the replay carries one of the success headers A's
+// anySignal: the replay carries one of the success headers A's
 // recorded answer had, not leading to a login page.
 func (r WriteReplay) anySignal() bool {
 	for k := range r.RecordedSignals {
@@ -1374,23 +1365,6 @@ const (
 	maxLayoutReads = 7
 )
 
-// Card 1's rules (prototype, issue #95).
-const (
-	acceptAny    = "A0" // today: any 2xx
-	acceptNext   = "A1" // a Server Action needs A's x-action-redirect or x-action-revalidated
-	acceptSignal = "A2" // any write needs the redirect-type header A's answer had
-	acceptState  = "A3" // A's read changed
-	acceptHybrid = "A4" // A's success header if it had one, else A's read changed when it was read
-	acceptAction = "A5" // A4 for a Server Action (a Next-Action header), A0 for every other write
-)
-
-var acceptRule = func() string {
-	if v := os.Getenv("SIEGEKIT_PROTO_ACCEPT"); v != "" {
-		return v
-	}
-	return acceptAny
-}()
-
 // signalNames are answer headers that say a write succeeded and where the
 // app sends the browser next.
 var signalNames = []string{"Location", "X-Action-Redirect", "X-Action-Revalidated", "Hx-Redirect", "Hx-Location", "Refresh"}
@@ -1426,37 +1400,6 @@ func signalTo(v string) bool {
 	}
 	u, _, _ := strings.Cut(v, ";")
 	return !toLogin(u)
-}
-
-// nextSignals (A1): a Server Action's replay carries each of A's recorded
-// x-action-redirect (not to a login page) and x-action-revalidated
-// (not "0").
-func (r WriteReplay) nextSignals() bool {
-	if r.RecordedSignals.Get("X-Action-Redirect") != "" && !signalTo(r.Signals.Get("X-Action-Redirect")) {
-		return false
-	}
-	if v := r.RecordedSignals.Get("X-Action-Revalidated"); v != "" && v != "0" {
-		if w := r.Signals.Get("X-Action-Revalidated"); w == "" || w == "0" {
-			return false
-		}
-	}
-	return true
-}
-
-// redirectSignals (A2): when A's recorded answer had a redirect-type
-// header (Location, x-action-redirect, HX-Redirect, HX-Location, Refresh),
-// the replay has one of them too, not leading to a login page.
-func (r WriteReplay) redirectSignals() bool {
-	had := false
-	for _, k := range []string{"Location", "X-Action-Redirect", "Hx-Redirect", "Hx-Location", "Refresh"} {
-		if r.RecordedSignals.Get(k) != "" {
-			had = true
-			if signalTo(r.Signals.Get(k)) || k == "Refresh" && r.Signals.Get(k) != "" {
-				return true
-			}
-		}
-	}
-	return !had
 }
 
 // readChanged reports whether A's read after the write differs from the

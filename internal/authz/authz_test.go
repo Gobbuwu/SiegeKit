@@ -540,3 +540,55 @@ func TestParseHARRecorded(t *testing.T) {
 		t.Errorf("limit: %d %d %v", len(h.Recorded), h.RecordedOverLimit, err)
 	}
 }
+
+// TestCheckPrefetch: a Next.js router prefetch of a route's loading
+// boundary (Next-Router-Prefetch: 1) is the same for every account and is
+// not compared; a runtime prefetch (2) and an RSC request are (issue #96).
+func TestCheckPrefetch(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") == "" {
+			http.Redirect(w, r, "/login", http.StatusTemporaryRedirect)
+			return
+		}
+		fmt.Fprintf(w, `0:{"b":"build","tree":["w",{"children":["__PAGE__",{}]}],"q":%q}`, r.URL.RawQuery)
+	}))
+	defer srv.Close()
+	noSleep(t)
+	tu := mustTarget(t, srv.URL+"/")
+	cfg := egress.Config{Target: tu, Addrs: []netip.Addr{netip.MustParseAddr("127.0.0.1")}, Version: "test", ReadOnly: true}
+	var f harFile
+	for q, pf := range map[string]string{"_rsc=a": "1", "_rsc=b": "2", "_rsc=c": ""} {
+		var x harEntry
+		x.Request.Method, x.Request.URL = "GET", srv.URL+"/w?"+q
+		x.Request.Headers = []harHeader{{"Authorization", "Bearer A"}, {"RSC", "1"}}
+		if pf != "" {
+			x.Request.Headers = append(x.Request.Headers, harHeader{"Next-Router-Prefetch", pf})
+		}
+		f.Log.Entries = append(f.Log.Entries, x)
+	}
+	b, err := json.Marshal(f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h, err := ParseHAR(b, tu)
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err := Check(context.Background(), cfg, h.Requests, Accounts{C: http.Header{"Authorization": {"Bearer C"}}}, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, r := range res.Replays {
+		if r.Outsider() {
+			got = append(got, r.Path)
+		}
+	}
+	slices.Sort(got)
+	if want := []string{"/w?_rsc=b", "/w?_rsc=c"}; !slices.Equal(got, want) {
+		t.Errorf("read by C: %q, want %q", got, want)
+	}
+	if s := res.Summary(h, "", Count(res, "")); !strings.Contains(s, "; 1 Next.js router prefetch(es) (Next-Router-Prefetch: 1) not compared") {
+		t.Errorf("summary %q", s)
+	}
+}

@@ -198,7 +198,6 @@ func ParseHAR(data []byte, t *target.URL) (*HAR, error) {
 		return nil, errors.New("the HAR file holds no requests")
 	}
 	h := &HAR{ids: newIDSet()}
-	readMarkers = nil
 	seen, seenRec := map[string]bool{}, map[string]bool{}
 	for _, e := range f.Log.Entries {
 		r := e.Request
@@ -226,7 +225,6 @@ func ParseHAR(data []byte, t *target.URL) (*HAR, error) {
 		// answer is where a room or object ID A never put in a URL
 		// appears (Rocket.Chat reads rooms over method calls).
 		h.ids.harvest(u.RawQuery, r.PostData, e.Response.Content.Text)
-		addMarkers(nil, method, r.PostData)
 		p := u.EscapedPath()
 		if p == "" {
 			p = "/"
@@ -260,11 +258,6 @@ func ParseHAR(data []byte, t *target.URL) (*HAR, error) {
 	}
 	if len(h.Requests) == 0 && len(h.Recorded) == 0 {
 		return nil, fmt.Errorf("the HAR file has no request to %s other than static files", t.Origin())
-	}
-	for _, v := range h.ids.all {
-		if reLongID.MatchString(v) {
-			readMarkers = appendOnce(readMarkers, v)
-		}
 	}
 	return h, nil
 }
@@ -730,6 +723,22 @@ func namesA(body []byte, loginName string) bool {
 	return loginName != "" && bytes.Contains(bytes.ToLower(body), []byte(strings.ToLower(loginName)))
 }
 
+// holds reports whether A's answer holds data to compare (HoldsData). A
+// Next.js router prefetch of a route's loading boundary or segment tree
+// (Next-Router-Prefetch: 1) is not compared: every account gets the same
+// layout skeleton, and the route's data comes in the page's own request,
+// which is compared (issue #96, ADR 0074). A full prefetch carries no such
+// header in Next.js 16.4.6, and the runtime prefetches (2 and 3) are
+// compared.
+func (r Replay) holds() bool { return HoldsData(r.A.Body) && !skeleton(r.Header) }
+
+// isRSC and isPrefetch report whether a request is a Next.js React Server
+// Components request and a router prefetch; skeleton whether it is a
+// prefetch of a route's loading boundary or segment tree (holds).
+func isRSC(h http.Header) bool      { return h.Get("Rsc") == "1" }
+func isPrefetch(h http.Header) bool { return h.Get("Next-Router-Prefetch") != "" }
+func skeleton(h http.Header) bool   { return isRSC(h) && h.Get("Next-Router-Prefetch") == "1" }
+
 // statusKeys hold an answer's status, not its data.
 var statusKeys = map[string]bool{"status": true, "message": true, "msg": true, "result": true, "error": true, "code": true, "ok": true, "success": true}
 
@@ -817,6 +826,15 @@ func (r Result) Summary(h *HAR, loginName string, c Counts) string {
 	}
 	if r.cSent() && !r.CWorks() {
 		notes = append(notes, "account C got the same status as a request with no login on every request, so its session may have expired (check "+SessionEnvC+"); no finding of account B's was lowered")
+	}
+	skeletons := 0
+	for _, rp := range r.Replays {
+		if ok2xx(rp.A) && skeleton(rp.Header) {
+			skeletons++
+		}
+	}
+	if skeletons > 0 {
+		notes = append(notes, fmt.Sprintf("%d Next.js router prefetch(es) (Next-Router-Prefetch: 1) not compared: every account gets the route's layout, and the page's own request is compared (issue #96)", skeletons))
 	}
 	if h != nil {
 		for _, x := range []struct {
@@ -907,7 +925,6 @@ func shownPath(r Request) string {
 // the query; the message shows the query's names and the request's kind. Answers are described by status and size; their content is
 // not copied into the report.
 func Findings(origin string, res Result, loginName string) []findings.Finding {
-	measureReads(res, loginName)
 	var out []findings.Finding
 	cWorks := res.CWorks()
 	for _, r := range res.Replays {
