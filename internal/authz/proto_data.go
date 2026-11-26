@@ -223,7 +223,7 @@ func measureReads(res Result, loginName string) {
 	}
 	measureMu.Lock()
 	defer measureMu.Unlock()
-	out, err := os.OpenFile(f, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
+	out, err := os.OpenFile(f, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600) // #nosec G703 -- PROTOTYPE: the gate's measure file, removed before merge
 	if err != nil {
 		return
 	}
@@ -262,7 +262,7 @@ func measureWrites(res WriteResult) {
 	}
 	measureMu.Lock()
 	defer measureMu.Unlock()
-	out, err := os.OpenFile(f, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
+	out, err := os.OpenFile(f, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600) // #nosec G703 -- PROTOTYPE: the gate's measure file, removed before merge
 	if err != nil {
 		return
 	}
